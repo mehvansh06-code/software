@@ -1,0 +1,7 @@
+{
+  "name": "Gujarat Flotex Import Management System",
+  "description": "A comprehensive ERP system for managing suppliers, product approvals, and shipment logistics with role-based access control and detailed document tracking.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
