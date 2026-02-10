@@ -914,39 +914,51 @@ async function start() {
         return openFolderResponse(res, false, 'Documents folder path is missing or could not be resolved. Save the shipment with valid partner and invoice details.', 400, { pathMissing: true });
       }
       const cleanPath = path.normalize(folderPath);
+      console.log('[Open Folder] Shipment id:', id, '| Resolved path:', cleanPath);
+
       if (!fs.existsSync(cleanPath)) {
+        console.log('[Open Folder] Folder does not exist — creating:', cleanPath);
         try {
           fs.mkdirSync(cleanPath, { recursive: true });
+          console.log('[Open Folder] Folder created successfully.');
         } catch (e) {
           return openFolderResponse(res, false, 'Folder could not be created: ' + e.message, 200, { path: cleanPath.substring(0, 100) });
         }
+      } else {
+        console.log('[Open Folder] Folder already exists.');
       }
-      console.log('Opening path:', cleanPath);
+
       const isWin = process.platform === 'win32';
       try {
         if (isWin) {
-          const safePath = '"' + cleanPath.replace(/"/g, '\\"') + '"';
-          const cmd = 'start "" ' + safePath;
-          _log('open-docs-folder exec win', { pathLen: cleanPath.length, hasSpaces: cleanPath.indexOf(' ') !== -1 });
+          // Windows: start "" "path" — empty title in first "", path in second (handles spaces).
+          const quotedPath = '"' + cleanPath.replace(/"/g, '""') + '"';
+          const cmd = 'start "" ' + quotedPath;
+          console.log('[Open Folder] Executing (Windows):', cmd);
           exec(cmd, { windowsHide: true }, (err) => {
-            _log('open-docs-folder exec callback', { err: err ? err.message : null, headersSent: res.headersSent });
             if (!res.headersSent) {
-              if (err) openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message });
-              else openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 80) });
+              if (err) {
+                console.warn('[Open Folder] exec error:', err.message);
+                openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message });
+              } else {
+                console.log('[Open Folder] Success.');
+                openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 80) });
+              }
             }
           });
         } else {
           const quotedPath = '"' + cleanPath.replace(/"/g, '\\"') + '"';
           const cmd = process.platform === 'darwin' ? 'open ' + quotedPath : 'xdg-open ' + quotedPath;
+          console.log('[Open Folder] Executing:', cmd);
           exec(cmd, (err) => {
             if (!res.headersSent) {
               if (err) openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message });
-              else openFolderResponse(res, true, 'OK', 200);
+              else openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 80) });
             }
           });
         }
       } catch (execErr) {
-        console.error('exec error:', execErr);
+        console.error('[Open Folder] exec throw:', execErr);
         if (!res.headersSent) openFolderResponse(res, false, execErr.message || 'Failed to open folder', 200, { execError: execErr.message });
       }
     } catch (err) {
@@ -958,53 +970,6 @@ async function start() {
           : (err.message || 'Internal server error');
         openFolderResponse(res, false, safeMessage, 200, { error: err.message });
       }
-    }
-  });
-
-  app.get('/api/shipments/:id/open-documents-folder', (req, res) => {
-    try {
-      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
-      if (!idCheck.valid) return openFolderResponse(res, false, idCheck.message, 400);
-      const id = idCheck.value;
-      let row;
-      try {
-        row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
-      } catch (e) {
-        return openFolderResponse(res, false, 'Database error. Try again.', 200);
-      }
-      if (!row) return openFolderResponse(res, false, 'Shipment not found', 404);
-      let folderPath = getValidDocumentsFolderPath(row);
-      if (!folderPath || typeof folderPath !== 'string') {
-        return openFolderResponse(res, false, 'Documents folder path is missing or could not be resolved.', 400, { pathMissing: true });
-      }
-      const cleanPath = path.normalize(folderPath);
-      if (!fs.existsSync(cleanPath)) {
-        try { fs.mkdirSync(cleanPath, { recursive: true }); } catch (e) {
-          return openFolderResponse(res, false, 'Folder could not be created: ' + e.message, 200);
-        }
-      }
-      console.log('Opening path:', cleanPath);
-      const isWin = process.platform === 'win32';
-      if (isWin) {
-        const safePath = '"' + cleanPath.replace(/"/g, '\\"') + '"';
-        exec('start "" ' + safePath, { windowsHide: true }, (err) => {
-          if (!res.headersSent) {
-            if (err) openFolderResponse(res, false, err.message || 'Failed to open folder', 200);
-            else openFolderResponse(res, true, 'OK', 200);
-          }
-        });
-      } else {
-        const quotedPath = '"' + cleanPath.replace(/"/g, '\\"') + '"';
-        exec(process.platform === 'darwin' ? 'open ' + quotedPath : 'xdg-open ' + quotedPath, (err) => {
-          if (!res.headersSent) {
-            if (err) openFolderResponse(res, false, err.message || 'Failed to open folder', 200);
-            else openFolderResponse(res, true, 'OK', 200);
-          }
-        });
-      }
-    } catch (err) {
-      console.error('GET /open-documents-folder error:', err);
-      if (!res.headersSent) openFolderResponse(res, false, err.message || 'Internal server error', 200);
     }
   });
 

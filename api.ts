@@ -193,9 +193,15 @@ export const api = {
       if (!id || String(id) === 'undefined') return Promise.resolve({ files: [] });
       return fetchApi(`shipments/${id}/documents-folder-files`).catch(() => ({ files: [] }));
     },
-    openDocumentsFolder: (id: string, shipment?: any) => {
+    openDocumentsFolder: (id: string, shipment?: any): Promise<{ success: boolean; message: string; [k: string]: unknown }> => {
       if (!id || String(id) === 'undefined') {
         return Promise.resolve({ success: false, message: 'Invalid shipment ID' });
+      }
+      if (forceSimulated) {
+        if (typeof window !== 'undefined') {
+          alert('Open Folder is not available in offline / browser-only mode. Switch to SQL mode (backend running) to open document folders on this machine.');
+        }
+        return Promise.resolve({ success: false, message: 'Offline mode: folders cannot be opened.' });
       }
       const url = `${API_BASE}/shipments/${id}/open-documents-folder`;
       const body = shipment != null ? JSON.stringify({ shipment }) : '{}';
@@ -218,7 +224,11 @@ export const api = {
         return { success: r.ok && (data.success !== false), message, ...data };
       }).catch((err) => {
         clearTimeout(timeoutId);
-        const message = err?.name === 'AbortError' ? 'Request timed out. Check the backend and try again.' : (err?.message || 'Could not open folder');
+        const isTimeout = err?.name === 'AbortError';
+        const message = isTimeout ? 'Request timed out. Check the backend and try again.' : (err?.message || 'Could not open folder.');
+        if (typeof window !== 'undefined') {
+          alert('Server is unreachable. Start the backend (node server.js) and try again.');
+        }
         return { success: false, message };
       });
     },
