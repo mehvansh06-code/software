@@ -47,6 +47,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const shipment = shipments.find(s => s.id === id);
   const historyArray = useMemo(() => (shipment && Array.isArray(shipment.history) ? shipment.history : []), [shipment?.history]);
 
+  // Redirect to list when shipment was deleted (no longer in list)
+  useEffect(() => {
+    if (id && shipments.length >= 0 && !shipment) {
+      navigate('/shipments', { replace: true });
+    }
+  }, [id, shipment, shipments.length, navigate]);
+
   const [editAll, setEditAll] = useState(false);
   const [editLogistics, setEditLogistics] = useState(false);
   const [editDuties, setEditDuties] = useState(false);
@@ -114,16 +121,17 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   });
 
   useEffect(() => {
-    if (shipment?.documentsFolderPath) {
+    if (!shipment) return;
+    if (shipment.documentsFolderPath) {
       setDocumentsFolderPath(shipment.documentsFolderPath);
       setFolderError(null);
-    } else if (shipment?.id) {
+    } else {
       api.shipments.getDocumentsFolder(shipment.id).then((r: { path?: string | null; exists?: boolean }) => {
         if (r?.path) {
           setDocumentsFolderPath(r.path);
           setFolderError(null);
         }
-      });
+      }).catch(() => {});
     }
   }, [shipment?.id, shipment?.documentsFolderPath]);
 
@@ -135,7 +143,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setLoadingDocFiles(true);
     api.shipments.getDocumentsFolderFiles(shipment.id).then((r: { files?: string[] }) => {
       setFolderFiles(Array.isArray(r?.files) ? r.files : []);
-    }).finally(() => setLoadingDocFiles(false));
+    }).catch(() => setFolderFiles([])).finally(() => setLoadingDocFiles(false));
   }, [shipment?.id]);
 
   useEffect(() => {

@@ -179,32 +179,43 @@ function createRouter(broadcast) {
   const router = express.Router();
 
   router.get('/', (req, res) => {
-    const rows = db.prepare('SELECT * FROM shipments').all();
-    res.json(rows.map(r => {
-      const folderPath = isValidDocumentsFolderPath(r.documentsFolderPath) ? r.documentsFolderPath : null;
-      const itemsFallback = r.productId ? [{ productId: r.productId, productName: '', quantity: r.quantity, rate: r.rate, amount: (r.quantity || 0) * (r.rate || 0) }] : [];
-      const items = getShipmentItems(r.id) || (r.items_json ? safeParseJson(r.items_json, itemsFallback) : itemsFallback);
-      const history = getShipmentHistory(r.id) || safeParseJson(r.history_json, []);
-      return {
-        ...r,
-        isUnderLC: !!r.isUnderLC,
-        isUnderLicence: !!r.isUnderLicence,
-        documents: safeParseJson(r.documents_json, {}),
-        history,
-        payments: safeParseJson(r.payments_json, []),
-        items,
-        documentsFolderPath: folderPath
-      };
-    }));
+    try {
+      const rows = db.prepare('SELECT * FROM shipments').all();
+      const result = [];
+      for (const r of rows) {
+        try {
+          const folderPath = isValidDocumentsFolderPath(r.documentsFolderPath) ? r.documentsFolderPath : null;
+          const itemsFallback = r.productId ? [{ productId: r.productId, productName: '', quantity: r.quantity, rate: r.rate, amount: (r.quantity || 0) * (r.rate || 0) }] : [];
+          const items = getShipmentItems(r.id) || (r.items_json ? safeParseJson(r.items_json, itemsFallback) : itemsFallback);
+          const history = getShipmentHistory(r.id) || safeParseJson(r.history_json, []);
+          result.push({
+            ...r,
+            isUnderLC: !!r.isUnderLC,
+            isUnderLicence: !!r.isUnderLicence,
+            documents: safeParseJson(r.documents_json, {}),
+            history,
+            payments: safeParseJson(r.payments_json, []),
+            items,
+            documentsFolderPath: folderPath
+          });
+        } catch (rowErr) {
+          console.warn('Shipment list row error:', r?.id, rowErr.message);
+        }
+      }
+      res.json(result);
+    } catch (err) {
+      console.error('GET /shipments list error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to load shipments' });
+    }
   });
 
   router.get('/:id/documents-folder', (req, res) => {
     const send = (pathVal, exists) => { if (!res.headersSent) res.status(200).json({ path: pathVal ?? null, exists: !!exists }); };
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
-      if (!idCheck.valid) { if (!res.headersSent) res.status(400).json({ error: idCheck.message, path: null, exists: false }); return; }
+      if (!idCheck.valid) { send(null, false); return; }
       const id = idCheck.value;
-      let row;
+      let row = null;
       try {
         row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
       } catch (e) {
@@ -243,7 +254,7 @@ function createRouter(broadcast) {
     const sendFiles = (files) => { if (!res.headersSent) res.status(200).json({ files: Array.isArray(files) ? files : [] }); };
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
-      if (!idCheck.valid) { if (!res.headersSent) res.status(400).json({ error: idCheck.message, files: [] }); return; }
+      if (!idCheck.valid) { sendFiles([]); return; }
       const id = idCheck.value;
       let row;
       try {
@@ -424,8 +435,19 @@ function createRouter(broadcast) {
     const id = idCheck.value;
     const s = req.body;
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
-    const existing = db.prepare('SELECT exchangeRate, remarks, isUnderLC, lcNumber, fileStatus FROM shipments WHERE id = ?').get(id);
-    const stmt = db.prepare(`
+
+    const insertStmt = db.prepare(`
+      INSERT OR REPLACE INTO shipments (
+        id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
+        status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
+        isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
+        licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+        portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
+        incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
+        documents_json, history_json, payments_json, items_json, documentsFolderPath
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `);
+    const updateStmt = db.prepare(`
       UPDATE shipments SET
         status=?, containerNumber=?, blNumber=?, blDate=?, beNumber=?, beDate=?,
         shippingLine=?, portCode=?, portOfLoading=?, portOfDischarge=?,
@@ -436,24 +458,35 @@ function createRouter(broadcast) {
         isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?
       WHERE id=?
     `);
-    const allowedFileStatus = ['pending', 'clearing', 'ok'].includes(s.fileStatus) ? s.fileStatus : (existing?.fileStatus ?? null);
+
     try {
       const runTx = db.transaction(() => {
-        stmt.run(
-          s.status, s.containerNumber, s.blNumber, s.blDate, s.beNumber, s.beDate,
-          s.shippingLine, s.portCode, s.portOfLoading, s.portOfDischarge,
-          s.assessedValue, s.dutyBCD, s.dutySWS, s.dutyINT, s.gst, s.trackingUrl,
-          JSON.stringify(s.documents || {}), JSON.stringify(s.history || []), JSON.stringify(s.payments || []), JSON.stringify(s.items || []),
-          s.licenceObligationAmount, s.incoTerm, s.paymentDueDate, s.expectedArrivalDate || null,
-          s.invoiceDate || null, s.freightCharges ?? null, s.otherCharges ?? null,
-          s.exchangeRate !== undefined && s.exchangeRate !== null ? s.exchangeRate : (existing?.exchangeRate ?? null),
-          s.remarks !== undefined ? s.remarks : (existing?.remarks ?? null),
-          s.isUnderLC ? 1 : 0, s.lcNumber || null, s.lcAmount ?? null, s.lcDate || null,
-          allowedFileStatus,
-          id
-        );
-        setShipmentItems(id, s.items);
-        setShipmentHistory(id, s.history);
+        const exists = db.prepare('SELECT 1 FROM shipments WHERE id = ?').get(id);
+        if (!exists) {
+          const sNorm = { ...s, id };
+          const documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
+          insertStmt.run(...getShipmentValues(sNorm, documentsFolderPath));
+          setShipmentItems(id, sNorm.items);
+          setShipmentHistory(id, sNorm.history);
+        } else {
+          const existing = db.prepare('SELECT exchangeRate, remarks, isUnderLC, lcNumber, fileStatus FROM shipments WHERE id = ?').get(id);
+          const allowedFileStatus = ['pending', 'clearing', 'ok'].includes(s.fileStatus) ? s.fileStatus : (existing?.fileStatus ?? null);
+          updateStmt.run(
+            s.status, s.containerNumber, s.blNumber, s.blDate, s.beNumber, s.beDate,
+            s.shippingLine, s.portCode, s.portOfLoading, s.portOfDischarge,
+            s.assessedValue, s.dutyBCD, s.dutySWS, s.dutyINT, s.gst, s.trackingUrl,
+            JSON.stringify(s.documents || {}), JSON.stringify(s.history || []), JSON.stringify(s.payments || []), JSON.stringify(s.items || []),
+            s.licenceObligationAmount, s.incoTerm, s.paymentDueDate, s.expectedArrivalDate || null,
+            s.invoiceDate || null, s.freightCharges ?? null, s.otherCharges ?? null,
+            s.exchangeRate !== undefined && s.exchangeRate !== null ? s.exchangeRate : (existing?.exchangeRate ?? null),
+            s.remarks !== undefined ? s.remarks : (existing?.remarks ?? null),
+            s.isUnderLC ? 1 : 0, s.lcNumber || null, s.lcAmount ?? null, s.lcDate || null,
+            allowedFileStatus,
+            id
+          );
+          setShipmentItems(id, s.items);
+          setShipmentHistory(id, s.history);
+        }
       });
       runTx();
     } catch (e) {
@@ -470,11 +503,14 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const id = idCheck.value;
     try {
-      const row = db.prepare('SELECT id FROM shipments WHERE id = ?').get(id);
-      if (!row) return res.status(404).json({ success: false, error: 'Shipment not found' });
-      db.prepare('DELETE FROM shipments WHERE id = ?').run(id);
+      const runTx = db.transaction(() => {
+        db.prepare('DELETE FROM shipment_items WHERE shipmentId = ?').run(id);
+        db.prepare('DELETE FROM shipment_history WHERE shipmentId = ?').run(id);
+        db.prepare('DELETE FROM shipments WHERE id = ?').run(id);
+      });
+      runTx();
       broadcast();
-      return res.json({ success: true });
+      res.json({ success: true });
     } catch (e) {
       console.error('DELETE /api/shipments/:id error:', e);
       return res.status(500).json({ success: false, error: e.message || 'Database error' });
