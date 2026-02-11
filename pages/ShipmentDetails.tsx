@@ -20,15 +20,16 @@ import {
   Landmark,
   ShieldAlert,
   Trash2,
+  Eye,
   CreditCard,
   AlertCircle,
-  FolderOpen,
   FileCheck,
   RefreshCw,
   Loader2,
   Download
 } from 'lucide-react';
 import { api } from '../api';
+import { usePermissions } from '../hooks/usePermissions';
 import { ShipmentUpload } from '../components/ShipmentUpload';
 
 interface ShipmentDetailsProps {
@@ -128,11 +129,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [exportDocData, setExportDocData] = useState({
     sbNo: '', sbDate: '', dbk: 0, rodtep: 0, scripNo: '', epcg: '', advLic: '', lodgement: '', lodgementDate: '', ebrcNo: '', ebrcValue: 0, exchangeRate: Number(shipment?.exchangeRate) || 0, incoTerm: (shipment as any)?.incoTerm || 'FOB'
   });
-  const [openingFolder, setOpeningFolder] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [toastVariant, setToastVariant] = useState<'error' | 'info'>('error');
-
   useEffect(() => {
     if (!shipment) return;
     if (shipment.documentsFolderPath) {
@@ -159,6 +155,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   useEffect(() => {
     if (!shipment?.id) {
+      setFolderFiles([]);
+      return;
+    }
+    if (!hasPermission('documents.view')) {
       setFolderFiles([]);
       return;
     }
@@ -321,7 +321,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   if (!shipment) return <div className="p-20 text-center text-slate-400 font-bold uppercase">Record not found</div>;
 
-  const canDelete = user.role === UserRole.MANAGEMENT;
+  const { hasPermission } = usePermissions(user);
+  const canDelete = hasPermission('shipments.delete');
+  const canViewDocuments = hasPermission('documents.view');
+  const canDeleteDocuments = hasPermission('documents.delete');
+  const canUploadDocuments = hasPermission('documents.upload');
+  const isViewableInBrowser = (filename: string) => /\.(pdf|jpg|jpeg|png|gif|webp)$/i.test(filename);
   const canEdit = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
   const handleDeleteShipment = async () => {
     if (!onDelete || !shipment?.id) return;
@@ -648,55 +653,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     }
   };
 
-  const sanitizeFolderName = (str: string) => (str || '').replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'Unknown';
-  const displayFolderPath = documentsFolderPath || (shipment ? `${sanitizeFolderName(partnerName)}_${sanitizeFolderName(shipment.invoiceNumber)}` : '');
-
-  const openDocumentsFolder = async () => {
-    const shipmentId = shipment?.id ?? (shipment as { _id?: string })?._id;
-    if (!shipmentId || String(shipmentId) === 'undefined') {
-      setFolderError('Shipment ID is missing. Save the shipment and try again.');
-      setToastVariant('error');
-      setToastMessage('Shipment ID is missing. Save the shipment and try again.');
-      return;
-    }
-    setFolderError(null);
-    setToastMessage(null);
-    setOpeningFolder(true);
-    try {
-      const result = await api.shipments.openDocumentsFolder(shipmentId, shipment) as { success?: boolean; message?: string; path?: string };
-      const rawPath = result?.path != null && typeof result.path === 'string' ? result.path : '';
-      const returnedPath = rawPath.trim() || null;
-      if (result?.success && returnedPath) {
-        setFolderError(null);
-        setDocumentsFolderPath(returnedPath);
-        try {
-          await navigator.clipboard.writeText(returnedPath);
-          setToastVariant('info');
-          setToastMessage('Folder path copied to clipboard. Open File Explorer and paste (Ctrl+V) in the address bar to open the folder.');
-          setTimeout(() => setToastMessage(null), 6000);
-        } catch (_) {
-          setToastVariant('info');
-          setToastMessage(`Folder path: ${returnedPath}. Copy it and paste in File Explorer address bar.`);
-          setTimeout(() => setToastMessage(null), 8000);
-        }
-        return;
-      }
-      const msg = result?.message || result?.error || (returnedPath ? 'Could not open folder' : 'No folder path returned from server.');
-      setFolderError(msg);
-      setToastVariant('error');
-      setToastMessage(msg);
-      setTimeout(() => setToastMessage(null), 5000);
-    } catch (e) {
-      const msg = (e as Error)?.message || 'Server unavailable. Start the backend (node server.js) to open the folder.';
-      setFolderError(msg);
-      setToastVariant('error');
-      setToastMessage(msg);
-      setTimeout(() => setToastMessage(null), 5000);
-    } finally {
-      setOpeningFolder(false);
-    }
-  };
-
   return (
     <>
     <div className="space-y-6 pb-24 animate-in fade-in">
@@ -737,41 +693,19 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
       <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl shrink-0"><FolderOpen size={20} /></div>
-          <div className="min-w-0">
-            <h2 className="text-xs font-black uppercase text-slate-700 tracking-widest">Shipment documents folder</h2>
-            <p className="text-sm font-mono text-slate-500 mt-0.5 break-all">{displayFolderPath || '—'}</p>
-            {folderError && <p className="text-xs text-red-600 mt-1">{folderError}</p>}
-          </div>
-        </div>
-        <div className="flex items-center gap-3 shrink-0 flex-wrap">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest">File status</span>
-            <select
-              value={shipment?.fileStatus ?? 'pending'}
-              onChange={(e) => {
-                const v = e.target.value as 'pending' | 'clearing' | 'ok';
-                onUpdate({ ...shipment!, fileStatus: v });
-              }}
-              className="px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-white focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
-            >
-              <option value="pending">Pending</option>
-              <option value="clearing">Clearing</option>
-              <option value="ok">OK</option>
-            </select>
-          </div>
-          <button
-            type="button"
-            onClick={openDocumentsFolder}
-            disabled={openingFolder}
-            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50 shrink-0"
+          <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest">File status</span>
+          <select
+            value={shipment?.fileStatus ?? 'pending'}
+            onChange={(e) => {
+              const v = e.target.value as 'pending' | 'clearing' | 'ok';
+              onUpdate({ ...shipment!, fileStatus: v });
+            }}
+            className="px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-white focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
           >
-            {openingFolder ? (
-              <><Loader2 size={14} className="animate-spin" /> Loading...</>
-            ) : (
-              <><ExternalLink size={14} /> Open folder</>
-            )}
-          </button>
+            <option value="pending">Pending</option>
+            <option value="clearing">Clearing</option>
+            <option value="ok">OK</option>
+          </select>
         </div>
       </div>
 
@@ -1496,110 +1430,166 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </div>
            </div>
 
-           {/* Documents: upload and file list with download */}
+           {/* Documents: upload and file list — or Access Restricted */}
            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
              <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
                <FileText size={16} className="text-indigo-500" /> Documents
              </h2>
-             <div>
-               <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Upload file</h3>
-               <ShipmentUpload
-                 shipmentId={shipment.id}
-                 onUploadSuccess={refetchFolderFiles}
-               />
-             </div>
-             <div className="border-t border-slate-100 pt-6">
-               <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Existing files</h3>
-               {loadingDocFiles ? (
-                 <p className="text-sm text-slate-400 italic flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading…</p>
-               ) : folderFiles.length === 0 ? (
-                 <p className="text-sm text-slate-500">No files yet. Upload one above.</p>
-               ) : (
-                 <ul className="space-y-2">
-                   {folderFiles.map((name) => (
-                     <li key={name} className="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-slate-50 hover:bg-slate-100">
-                       <span className="flex items-center gap-2 text-sm text-slate-800 truncate min-w-0">
-                         <FileText size={14} className="text-slate-400 shrink-0" />
-                         {name}
-                       </span>
-                       <button
-                         type="button"
-                         onClick={async () => {
-                           try {
-                             const blob = await api.shipments.downloadFile(shipment.id, name);
-                             const url = URL.createObjectURL(blob);
-                             const a = document.createElement('a');
-                             a.href = url;
-                             a.download = name;
-                             document.body.appendChild(a);
-                             a.click();
-                             document.body.removeChild(a);
-                             URL.revokeObjectURL(url);
-                           } catch (e: any) {
-                             alert(e?.message || 'Download failed');
-                           }
-                         }}
-                         className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 shrink-0"
-                       >
-                         <Download size={14} /> Download
-                       </button>
-                     </li>
-                   ))}
-                 </ul>
-               )}
-             </div>
-           </div>
-
-           {/* Document Checker — auto status from folder; expected names e.g. CI_245, BOE_245, PAY_ADV_2000_USD */}
-           <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-             <div className="flex items-center justify-between gap-4 mb-2">
-               <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
-                 <FileCheck size={16} className="text-indigo-500" /> Document Checker
-               </h2>
-               <button
-                 type="button"
-                 onClick={refetchFolderFiles}
-                 disabled={loadingDocFiles}
-                 className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 disabled:opacity-50 transition-colors"
-                 title="Refresh list from folder"
-               >
-                 <RefreshCw size={16} className={loadingDocFiles ? 'animate-spin' : ''} />
-               </button>
-             </div>
-             <p className="text-[10px] text-slate-500 mb-4">Status is read from the shipment documents folder.</p>
-             {loadingDocFiles ? (
-               <p className="text-sm text-slate-400 italic">Loading folder…</p>
-             ) : (
-               <div className="space-y-2">
-                 {documentCheckerRows.map((row, idx) => {
-                   const isPending = !row.found;
-                   const showRed = allShipmentDetailsFilled && isPending;
-                   const showGreen = row.found;
-                   return (
-                     <div
-                       key={`${row.expectedName}-${idx}`}
-                       className={`flex items-center justify-between gap-4 py-2.5 px-4 rounded-xl border-2 ${
-                         showGreen
-                           ? 'border-emerald-200 bg-emerald-50'
-                           : showRed
-                             ? 'border-red-200 bg-red-50'
-                             : 'border-slate-100 bg-slate-50'
-                       }`}
-                     >
-                       <div className="flex items-center gap-2">
-                         {showGreen ? (
-                           <CheckCircle size={18} className="text-emerald-600 shrink-0" />
-                         ) : (
-                           <span className={`w-[18px] h-[18px] rounded-full border-2 shrink-0 ${showRed ? 'border-red-400' : 'border-slate-300'}`} />
-                         )}
-                         <span className={`text-sm font-bold ${showRed ? 'text-red-900' : 'text-slate-800'}`}>{row.label}</span>
-                       </div>
-                     </div>
-                   );
-                 })}
+             {!canViewDocuments ? (
+               <div className="flex flex-col items-center justify-center py-12 px-6 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                 <div className="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center mb-4">
+                   <FileText size={32} className="text-slate-500" />
+                 </div>
+                 <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Access Restricted</h3>
+                 <p className="text-slate-500 text-sm mt-1 max-w-xs">You don’t have permission to view or manage documents for this shipment.</p>
                </div>
+             ) : (
+               <>
+                 {canUploadDocuments && (
+                   <div>
+                     <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Upload file</h3>
+                     <ShipmentUpload
+                       shipmentId={shipment.id}
+                       onUploadSuccess={refetchFolderFiles}
+                     />
+                   </div>
+                 )}
+                 <div className="border-t border-slate-100 pt-6">
+                   <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Existing files</h3>
+                   {loadingDocFiles ? (
+                     <p className="text-sm text-slate-400 italic flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading…</p>
+                   ) : folderFiles.length === 0 ? (
+                     <p className="text-sm text-slate-500">No files yet.{canUploadDocuments ? ' Upload one above.' : ''}</p>
+                   ) : (
+                     <ul className="space-y-2">
+                       {folderFiles.map((name) => (
+                         <li key={name} className="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-slate-50 hover:bg-slate-100">
+                           <span className="flex items-center gap-2 text-sm text-slate-800 truncate min-w-0">
+                             <FileText size={14} className="text-slate-400 shrink-0" />
+                             {name}
+                           </span>
+                           <div className="flex items-center gap-1.5 shrink-0">
+                             {isViewableInBrowser(name) && (
+                               <button
+                                 type="button"
+                                 title="View in new tab"
+                                 onClick={async () => {
+                                   try {
+                                     const blob = await api.shipments.downloadFile(shipment.id, name);
+                                     const url = URL.createObjectURL(blob);
+                                     window.open(url, '_blank', 'noopener');
+                                     setTimeout(() => URL.revokeObjectURL(url), 60000);
+                                   } catch (e: any) {
+                                     alert(e?.message || 'View failed');
+                                   }
+                                 }}
+                                 className="inline-flex items-center gap-1 rounded-md bg-slate-100 hover:bg-slate-200 px-2 py-1.5 text-xs font-medium text-slate-700"
+                               >
+                                 <Eye size={14} /> View
+                               </button>
+                             )}
+                             <button
+                               type="button"
+                               title="Download"
+                               onClick={async () => {
+                                 try {
+                                   const blob = await api.shipments.downloadFile(shipment.id, name);
+                                   const url = URL.createObjectURL(blob);
+                                   const a = document.createElement('a');
+                                   a.href = url;
+                                   a.download = name;
+                                   document.body.appendChild(a);
+                                   a.click();
+                                   document.body.removeChild(a);
+                                   URL.revokeObjectURL(url);
+                                 } catch (e: any) {
+                                   alert(e?.message || 'Download failed');
+                                 }
+                               }}
+                               className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+                             >
+                               <Download size={14} /> Download
+                             </button>
+                             {canDeleteDocuments && (
+                               <button
+                                 type="button"
+                                 title="Delete file"
+                                 onClick={async () => {
+                                   if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+                                   try {
+                                     await api.shipments.deleteFile(shipment.id, name);
+                                     refetchFolderFiles();
+                                   } catch (e: any) {
+                                     alert(e?.message || 'Delete failed');
+                                   }
+                                 }}
+                                 className="inline-flex items-center gap-1 rounded-md bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1.5 text-xs font-medium"
+                               >
+                                 <Trash2 size={14} /> Delete
+                               </button>
+                             )}
+                           </div>
+                         </li>
+                       ))}
+                     </ul>
+                   )}
+                 </div>
+               </>
              )}
            </div>
+
+           {/* Document Checker — visible only with documents.view */}
+           {canViewDocuments && (
+             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+               <div className="flex items-center justify-between gap-4 mb-2">
+                 <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
+                   <FileCheck size={16} className="text-indigo-500" /> Document Checker
+                 </h2>
+                 <button
+                   type="button"
+                   onClick={refetchFolderFiles}
+                   disabled={loadingDocFiles}
+                   className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 disabled:opacity-50 transition-colors"
+                   title="Refresh list from folder"
+                 >
+                   <RefreshCw size={16} className={loadingDocFiles ? 'animate-spin' : ''} />
+                 </button>
+               </div>
+               <p className="text-[10px] text-slate-500 mb-4">Status is read from the shipment documents folder.</p>
+               {loadingDocFiles ? (
+                 <p className="text-sm text-slate-400 italic">Loading folder…</p>
+               ) : (
+                 <div className="space-y-2">
+                   {documentCheckerRows.map((row, idx) => {
+                     const isPending = !row.found;
+                     const showRed = allShipmentDetailsFilled && isPending;
+                     const showGreen = row.found;
+                     return (
+                       <div
+                         key={`${row.expectedName}-${idx}`}
+                         className={`flex items-center justify-between gap-4 py-2.5 px-4 rounded-xl border-2 ${
+                           showGreen
+                             ? 'border-emerald-200 bg-emerald-50'
+                             : showRed
+                               ? 'border-red-200 bg-red-50'
+                               : 'border-slate-100 bg-slate-50'
+                         }`}
+                       >
+                         <div className="flex items-center gap-2">
+                           {showGreen ? (
+                             <CheckCircle size={18} className="text-emerald-600 shrink-0" />
+                           ) : (
+                             <span className={`w-[18px] h-[18px] rounded-full border-2 shrink-0 ${showRed ? 'border-red-400' : 'border-slate-300'}`} />
+                           )}
+                           <span className={`text-sm font-bold ${showRed ? 'text-red-900' : 'text-slate-800'}`}>{row.label}</span>
+                         </div>
+                       </div>
+                     );
+                   })}
+                 </div>
+               )}
+             </div>
+           )}
         </div>
       </div>
 
@@ -1683,14 +1673,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         </div>
       )}
     </div>
-    {toastMessage && (
-      <div
-        role={toastVariant === 'error' ? 'alert' : 'status'}
-        className={`fixed bottom-6 right-6 z-50 max-w-sm px-4 py-3 rounded-xl text-white text-sm font-medium shadow-lg animate-in fade-in slide-in-from-bottom-2 ${toastVariant === 'info' ? 'bg-indigo-600 border border-indigo-700' : 'bg-red-600 border border-red-700'}`}
-      >
-        {toastMessage}
-      </div>
-    )}
     </>
   );
 };

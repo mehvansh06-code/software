@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, Consignee, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material } from '../types';
 import { UploadCloud, Award, CreditCard, Package, Zap, Trash2, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -27,6 +27,10 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [invoiceUploaded, setInvoiceUploaded] = useState(false);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrToast, setOcrToast] = useState<string | null>(null);
+  const [ocrHighConfidence, setOcrHighConfidence] = useState(false);
+  const ocrFileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState<any>({
     currency: isExport ? 'USD' : 'USD',
@@ -152,6 +156,59 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     setFormData((prev: any) => ({ ...prev, [field]: value }));
   };
 
+  type ScanMode = 'boe' | 'sb';
+  const handleSmartImportClick = (mode: ScanMode) => {
+    ocrFileInputRef.current?.click();
+    (ocrFileInputRef.current as any)._scanMode = mode;
+  };
+
+  const handleOcrFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const mode: ScanMode = (ocrFileInputRef.current as any)?._scanMode || 'boe';
+    e.target.value = '';
+    if (!file) return;
+    setOcrLoading(true);
+    setOcrToast(null);
+    setOcrHighConfidence(false);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('docType', mode === 'sb' ? 'SB' : 'BOE');
+      const result = await api.ocr.uploadAndScan(formData);
+      if (!result.success || !result.data) {
+        setOcrToast(result.error || 'Could not extract data or save document.');
+        setTimeout(() => setOcrToast(null), 5000);
+        return;
+      }
+      const d = result.data;
+      const highConfidence = d.source === 'text' || d.confidence === 100;
+      setOcrHighConfidence(!!highConfidence);
+      const updates: Partial<typeof formData> = {};
+      if (mode === 'boe') {
+        if (d.beNumber) updates.invoiceNumber = d.beNumber;
+        if (d.date) updates.invoiceDate = d.date;
+        if (d.portCode) updates.portOfDischarge = d.portCode;
+        if (d.invoiceValue) updates.fobValueFC = d.invoiceValue;
+      } else {
+        if (d.sbNumber) updates.invoiceNumber = d.sbNumber;
+        if (d.date) {
+          updates.invoiceDate = d.date;
+          updates.expectedShipmentDate = d.date;
+        }
+        if (d.portCode) updates.portOfLoading = d.portCode;
+        if (d.invoiceValue) updates.amountFC = d.invoiceValue;
+      }
+      setFormData((prev: any) => ({ ...prev, ...updates }));
+      setOcrToast('Data extracted and document saved to server.');
+      setTimeout(() => setOcrToast(null), 5000);
+    } catch (err: any) {
+      setOcrToast(err?.message || 'Scan or save failed.');
+      setTimeout(() => setOcrToast(null), 5000);
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isExport) {
@@ -240,6 +297,63 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
           {isExport ? 'Outbound shipment entry against sales orders.' : 'Inbound procurement from approved vendor list.'}
         </p>
       </header>
+
+      <input
+        ref={ocrFileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+        className="hidden"
+        onChange={handleOcrFileChange}
+      />
+
+      <div className="flex flex-wrap items-center gap-4">
+        {!isExport && (
+          <button
+            type="button"
+            onClick={() => handleSmartImportClick('boe')}
+            disabled={ocrLoading}
+            className="inline-flex items-center gap-3 px-8 py-5 rounded-2xl border-2 border-indigo-200 bg-indigo-50 text-indigo-800 font-black text-sm uppercase tracking-wide hover:border-indigo-400 hover:bg-indigo-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+          >
+            <span className="text-2xl" aria-hidden>🔍</span>
+            Scan Bill of Entry
+          </button>
+        )}
+        {isExport && (
+          <button
+            type="button"
+            onClick={() => handleSmartImportClick('sb')}
+            disabled={ocrLoading}
+            className="inline-flex items-center gap-3 px-8 py-5 rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-800 font-black text-sm uppercase tracking-wide hover:border-amber-400 hover:bg-amber-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+          >
+            <span className="text-2xl" aria-hidden>🔍</span>
+            Scan Shipping Bill
+          </button>
+        )}
+        {ocrHighConfidence && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wide border border-emerald-200">
+            <span aria-hidden>✓</span>
+            High Confidence
+          </span>
+        )}
+      </div>
+
+      {ocrLoading && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
+          <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden mb-3">
+            <div className="h-full w-2/3 bg-indigo-500 rounded-full animate-pulse" style={{ animationDuration: '1.5s' }} />
+          </div>
+          <p className="text-sm font-bold text-slate-700">Reading document and filing it to the Z: Drive...</p>
+        </div>
+      )}
+
+      {ocrToast && (
+        <div
+          role="status"
+          className="rounded-xl px-4 py-3 text-sm font-medium text-white bg-indigo-600 border border-indigo-700 shadow-lg animate-in fade-in slide-in-from-bottom-2"
+        >
+          {ocrToast}
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

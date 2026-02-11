@@ -116,6 +116,8 @@ export interface User {
   username: string;
   role: UserRole;
   name: string;
+  /** Granular permission strings (e.g. 'shipments.view'). Synced from /api/auth/me. */
+  permissions?: string[];
 }
 
 export enum SupplierStatus {

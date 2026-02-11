@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Truck,
   Users,
+  UserCog,
   LogOut,
   Package,
   Award,
@@ -20,6 +21,7 @@ import {
   Menu,
   X
 } from 'lucide-react';
+import { usePermissions } from '../hooks/usePermissions';
 
 export interface LayoutProps {
   children: React.ReactNode;
@@ -33,6 +35,7 @@ export interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLogout, connectionMode = 'SQL', onRefreshData }) => {
   const location = useLocation();
+  const { hasPermission } = usePermissions(user);
   const isImport = domain === AppDomain.IMPORT;
   const isExport = domain === AppDomain.EXPORT;
   const isLicence = domain === AppDomain.LICENCE;
@@ -62,25 +65,28 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
     }
   };
 
-  const navItems = isLicence ? [
-    { path: '/', label: 'Licence Tracker', icon: Award, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+  const baseNavItems = isLicence ? [
+    { path: '/', label: 'Licence Tracker', icon: Award, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
   ] : isSalesIndent ? [
-    { path: '/', label: 'Indent Generator', icon: FileText, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/domestic-buyers', label: 'Domestic Buyers', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/indent-buyers', label: 'Export Buyers', icon: ShoppingCart, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/indent-products', label: 'Indent Products', icon: Package, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+    { path: '/', label: 'Indent Generator', icon: FileText, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/domestic-buyers', label: 'Domestic Buyers', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/indent-buyers', label: 'Export Buyers', icon: ShoppingCart, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/indent-products', label: 'Indent Products', icon: Package, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
   ] : isImport ? [
-    { path: '/', label: 'Dashboard', icon: LayoutDashboard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/suppliers', label: 'Supplier Master', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/materials', label: 'Materials Master', icon: Package, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/shipments', label: 'Shipment Master', icon: Truck, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+    { path: '/', label: 'Dashboard', icon: LayoutDashboard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/suppliers', label: 'Supplier Master', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/materials', label: 'Materials Master', icon: Package, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/shipments', label: 'Shipment Master', icon: Truck, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
   ] : [
-    { path: '/', label: 'Export Dashboard', icon: TrendingUp, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/buyers', label: 'Buyer Master', icon: ShoppingCart, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/export-shipments', label: 'Export Shipments', icon: Truck, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/export-lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+    { path: '/', label: 'Export Dashboard', icon: TrendingUp, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/buyers', label: 'Buyer Master', icon: ShoppingCart, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/export-shipments', label: 'Export Shipments', icon: Truck, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/export-lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
   ];
+  const navItems = hasPermission('users.view')
+    ? [...baseNavItems, { path: '/users', label: 'User Management', icon: UserCog, permission: 'users.view' as const }]
+    : baseNavItems;
 
   const sidebarClass = isLicence ? 'bg-emerald-900' : isSalesIndent ? 'bg-rose-900' : isImport ? 'bg-indigo-900' : 'bg-amber-900';
   const logoIconClass = isLicence ? 'text-emerald-900' : isSalesIndent ? 'text-rose-900' : isImport ? 'text-indigo-900' : 'text-amber-900';
@@ -151,7 +157,7 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
             <Grid size={20} /> <span className="font-medium text-sm">Switch Domain</span>
           </button>
           <div className="h-px bg-white/10 my-4 mx-4" />
-          {navItems.filter(item => item.roles.includes(user.role)).map((item) => {
+          {navItems.filter((item) => ('permission' in item ? hasPermission((item as any).permission) : item.roles.includes(user.role))).map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
             return (

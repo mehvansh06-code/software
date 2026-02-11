@@ -5,7 +5,7 @@ const multer = require('multer');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
-const { validateId, requireRole } = require('../middleware');
+const { validateId, hasPermission } = require('../middleware');
 
 function safeParseJson(str, fallback) {
   if (str == null || str === '') return fallback;
@@ -265,13 +265,6 @@ function linkShipmentToLC(shipment, broadcast) {
   broadcast();
 }
 
-function openFolderResponse(res, success, message, statusCode, debug) {
-  if (res.headersSent) return res;
-  const payload = { success: !!success, message: message || (success ? 'OK' : 'Error') };
-  if (debug != null) payload.debug = debug;
-  return res.status(statusCode == null ? 200 : statusCode).json(payload);
-}
-
 /** Sanitize filename for download or upload: reject directory traversal and path separators. Returns null if invalid. */
 function sanitizeFileDownloadFilename(filename) {
   if (typeof filename !== 'string' || filename === '') return null;
@@ -317,7 +310,7 @@ function buildShipmentResponse(r) {
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', hasPermission('shipments.view'), (req, res) => {
     try {
       const rows = db.prepare('SELECT * FROM shipments').all();
       const result = [];
@@ -335,7 +328,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.get('/:id', (req, res) => {
+  router.get('/:id', hasPermission('shipments.view'), (req, res) => {
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
       if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
@@ -349,7 +342,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.get('/:id/documents-folder', (req, res) => {
+  router.get('/:id/documents-folder', hasPermission('documents.view'), (req, res) => {
     const send = (pathVal, exists) => { if (!res.headersSent) res.status(200).json({ path: pathVal ?? null, exists: !!exists }); };
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
@@ -390,7 +383,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.get('/:id/documents-folder-files', (req, res) => {
+  router.get('/:id/documents-folder-files', hasPermission('documents.view'), (req, res) => {
     const sendFiles = (files) => { if (!res.headersSent) res.status(200).json({ files: Array.isArray(files) ? files : [] }); };
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
@@ -435,7 +428,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.get('/:id/files/:filename', (req, res) => {
+  router.get('/:id/files/:filename', hasPermission('documents.view'), (req, res) => {
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
       if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
@@ -487,7 +480,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.post('/:id/files', multerMemory.single('file'), (req, res) => {
+  router.post('/:id/files', hasPermission('documents.upload'), multerMemory.single('file'), (req, res) => {
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
       if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
@@ -518,6 +511,18 @@ function createRouter(broadcast) {
         console.warn('File write error:', writeErr.message);
         return res.status(500).json({ error: 'Failed to save file' });
       }
+      const userId = req.user && req.user.id;
+      const userName = (userId && (() => { try { const r = db.prepare('SELECT name FROM users WHERE id = ?').get(userId); return r && r.name; } catch (_) { return null; } })()) || userId || 'System';
+      try {
+        db.prepare('INSERT INTO audit_logs (userId, action, targetId, details, timestamp) VALUES (?, ?, ?, ?, datetime("now"))').run(
+          userId || 'system',
+          'DOCUMENT_UPLOADED',
+          id,
+          JSON.stringify({ filename, userName, message: `User ${userName} uploaded '${filename}' for Shipment #${id}` })
+        );
+      } catch (logErr) {
+        console.warn('Audit log insert (upload):', logErr.message);
+      }
       broadcast();
       res.status(201).json({ success: true, filename });
     } catch (err) {
@@ -526,90 +531,57 @@ function createRouter(broadcast) {
     }
   });
 
-  router.post('/:id/open-documents-folder', (req, res) => {
+  router.delete('/:id/files/:filename', hasPermission('documents.delete'), (req, res) => {
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
-      if (!idCheck.valid) {
-        return openFolderResponse(res, false, idCheck.message, 400, { id: req.params && req.params.id });
-      }
+      if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
       const id = idCheck.value;
-      let row;
+      const filename = sanitizeFileDownloadFilename(req.params && req.params.filename);
+      if (!filename) return res.status(400).json({ error: 'Invalid file name' });
+      const row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
+      if (!row) return res.status(404).json({ error: 'Shipment not found' });
+      let folderPath;
       try {
-        row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
-      } catch (dbErr) {
-        console.warn('POST open-documents-folder db:', dbErr.message);
-        return openFolderResponse(res, false, 'Database error. Try again.', 200, { error: dbErr.message });
+        folderPath = getValidDocumentsFolderPath(row);
+      } catch (e) {
+        console.warn('getValidDocumentsFolderPath failed (files delete):', e.message);
+        return res.status(500).json({ error: 'Documents folder could not be resolved' });
       }
-      let pathToOpenFromBody = null;
-      if (!row && req.body && req.body.shipment) {
-        const s = req.body.shipment;
-        s.id = s.id || s._id || id;
-        const sNorm = clientToCents(s);
-        let documentsFolderPath;
-        try {
-          documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
-          pathToOpenFromBody = documentsFolderPath;
-        } catch (e) {
-          return openFolderResponse(res, false, 'Could not resolve folder path: ' + e.message, 200, { detail: e.message });
-        }
-        try {
-          const stmt50 = db.prepare(`
-            INSERT OR REPLACE INTO shipments (
-              id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
-              status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
-              isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-              licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
-              portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
-              incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-              documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-              shipperSealNumber, lineSealNumber
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-          `);
-          const runTx = db.transaction(() => {
-            stmt50.run(...getShipmentValues(sNorm, documentsFolderPath));
-            setShipmentItems(id, s.items || []);
-            setShipmentHistory(id, s.history || []);
-          });
-          runTx();
-        } catch (insertErr) {
-          console.warn('open-documents-folder insert failed:', insertErr.message);
-          throw insertErr;
-        }
-        broadcast();
-        row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
+      if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
+      const fullPath = path.join(folderPath, filename);
+      const resolvedFull = path.resolve(fullPath);
+      const resolvedBase = path.resolve(folderPath);
+      if (resolvedFull !== resolvedBase && !resolvedFull.startsWith(resolvedBase + path.sep)) {
+        return res.status(400).json({ error: 'Invalid file name' });
       }
-      if (!row && !pathToOpenFromBody) {
-        return openFolderResponse(res, false, 'Shipment not found. Send the shipment in the request body to create it and open the folder.', 404, { id });
+      if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File not found' });
+      try {
+        fs.unlinkSync(fullPath);
+      } catch (unlinkErr) {
+        console.warn('File delete error:', unlinkErr.message);
+        return res.status(500).json({ error: 'Failed to delete file' });
       }
-      let folderPath = row ? getValidDocumentsFolderPath(row) : pathToOpenFromBody;
-      if (!folderPath || typeof folderPath !== 'string') {
-        return openFolderResponse(res, false, 'Documents folder path could not be resolved. Ensure the shipment has Company, Invoice number, and (for import) a supplier or (for export) a buyer.', 400, { pathMissing: true });
+      const userId = req.user && req.user.id;
+      const userName = (userId && (() => { try { const r = db.prepare('SELECT name FROM users WHERE id = ?').get(userId); return r && r.name; } catch (_) { return null; } })()) || userId || 'System';
+      try {
+        db.prepare('INSERT INTO audit_logs (userId, action, targetId, details, timestamp) VALUES (?, ?, ?, ?, datetime("now"))').run(
+          userId || 'system',
+          'DOCUMENT_DELETED',
+          id,
+          JSON.stringify({ filename, userName, message: `User ${userName} deleted '${filename}' for Shipment #${id}` })
+        );
+      } catch (logErr) {
+        console.warn('Audit log insert (delete):', logErr.message);
       }
-      const cleanPath = path.normalize(folderPath).replace(/[/\\]+$/, '');
-      console.log('[Open Folder] Shipment id:', id, '| Resolved path:', cleanPath);
-
-      if (!fs.existsSync(cleanPath)) {
-        try {
-          fs.mkdirSync(cleanPath, { recursive: true });
-        } catch (e) {
-          return openFolderResponse(res, false, 'Folder could not be created: ' + e.message, 200, { path: cleanPath.substring(0, 100) });
-        }
-      }
-
-      const pathForClient = toWindowsPath(cleanPath);
-      if (!res.headersSent) return res.status(200).json({ success: true, message: 'OK', path: pathForClient });
+      broadcast();
+      res.json({ success: true });
     } catch (err) {
-      console.error('POST /open-documents-folder error:', err);
-      if (!res.headersSent) {
-        const safeMessage = /column count|values for.*columns|SQLITE_|syntax error/i.test(err.message)
-          ? 'Could not save shipment. Please try again.'
-          : (err.message || 'Internal server error');
-        openFolderResponse(res, false, safeMessage, 200, { error: err.message });
-      }
+      console.error('DELETE /:id/files/:filename error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'An error occurred' });
     }
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', hasPermission('shipments.create'), (req, res) => {
     const s = req.body;
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(s.id, 'Shipment ID');
@@ -653,7 +625,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.put('/:id', requireRole('MANAGEMENT', 'CHECKER'), (req, res) => {
+  router.put('/:id', hasPermission('shipments.edit'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const id = idCheck.value;
@@ -757,7 +729,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.delete('/:id', requireRole('MANAGEMENT'), (req, res) => {
+  router.delete('/:id', hasPermission('shipments.delete'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const id = idCheck.value;

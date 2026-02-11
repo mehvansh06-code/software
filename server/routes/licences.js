@@ -1,15 +1,15 @@
 const express = require('express');
 const db = require('../db');
-const { validateId } = require('../middleware');
+const { validateId, hasPermission } = require('../middleware');
 
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', hasPermission('licences.view'), (req, res) => {
     res.json(db.prepare('SELECT * FROM licences').all());
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', hasPermission('licences.create'), (req, res) => {
     const l = req.body;
     if (!l || typeof l !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(l.id, 'Licence ID');
@@ -20,7 +20,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.put('/:id', (req, res) => {
+  router.put('/:id', hasPermission('licences.edit'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'Licence ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const l = req.body;

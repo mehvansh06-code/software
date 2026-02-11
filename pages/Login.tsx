@@ -26,6 +26,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           username: result.user.username,
           name: result.user.name,
           role: result.user.role as UserRole,
+          permissions: Array.isArray(result.user.permissions) ? result.user.permissions : undefined,
         };
         onLogin(user);
       } else {

@@ -274,6 +274,20 @@ runMigration(`
 runMigration('CREATE INDEX IF NOT EXISTS idx_domestic_buyer_sites_buyerId ON domestic_buyer_sites(domesticBuyerId)', 'idx_domestic_buyer_sites');
 runMigration('CREATE INDEX IF NOT EXISTS idx_indent_products_quality ON indent_products(quality)', 'idx_indent_products_quality');
 
+runMigration(`
+  CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    invoiceNumber TEXT NOT NULL,
+    shipmentId TEXT,
+    docType TEXT NOT NULL,
+    fileName TEXT NOT NULL,
+    filePath TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  )
+`, 'documents');
+runMigration('CREATE INDEX IF NOT EXISTS idx_documents_invoiceNumber ON documents(invoiceNumber)', 'idx_documents_invoice');
+runMigration('CREATE INDEX IF NOT EXISTS idx_documents_shipmentId ON documents(shipmentId)', 'idx_documents_shipment');
+
 function migrateJsonToNormalized() {
   try {
     const rows = db.prepare('SELECT id, items_json, history_json FROM shipments').all();
@@ -560,6 +574,14 @@ function ensureMinimalShipments() {
 // seedDummyData();
 // seedAdditionalData();
 // ensureMinimalShipments();
+
+// Permission system: users table, permissions column, audit_logs, backfill
+try {
+  const { runPermissionMigration } = require('./migrations/permissionMigration');
+  runPermissionMigration(db);
+} catch (e) {
+  console.warn('Permission migration:', e.message);
+}
 
 module.exports = db;
 module.exports.getShipmentValues = getShipmentValues;

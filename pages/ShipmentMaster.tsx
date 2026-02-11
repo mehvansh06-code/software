@@ -4,6 +4,7 @@ import { Shipment, Supplier, Buyer, User, UserRole, Licence } from '../types';
 import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
+import { usePermissions } from '../hooks/usePermissions';
 import * as XLSX from 'xlsx';
 import NewShipment from './NewShipment';
 
@@ -109,7 +110,8 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   );
   const [selectedExportColumns, setSelectedExportColumns] = useState<Set<string>>(() => defaultSelectedSet);
 
-  const canDelete = user.role === UserRole.MANAGEMENT;
+  const { hasPermission } = usePermissions(user);
+  const canDelete = hasPermission('shipments.delete');
 
   const getPartnerName = (sh: Shipment) => {
     if (isExport) {

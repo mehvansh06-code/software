@@ -94,6 +94,21 @@ export function useAppData(): UseAppDataReturn {
 
     const init = async () => {
       await loadAllData();
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      if (token) {
+        try {
+          const me = await api.auth.me();
+          const updated: User = {
+            id: me.id,
+            username: me.username,
+            name: me.name,
+            role: me.role as import('../types').UserRole,
+            permissions: me.permissions,
+          };
+          setUser(updated);
+          localStorage.setItem('user', JSON.stringify(updated));
+        } catch (_) {}
+      }
       setIsLoading(false);
     };
     init();
@@ -198,6 +213,7 @@ export function useAppData(): UseAppDataReturn {
     setDomain(null);
     localStorage.removeItem('user');
     localStorage.removeItem('domain');
+    localStorage.removeItem('token');
   }, []);
 
   const selectDomain = useCallback((d: AppDomain) => {

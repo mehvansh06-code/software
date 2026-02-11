@@ -2,6 +2,11 @@ const path = require('path');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 
+/** Local folder for scanned docs (Z: Drive / shared path): documents/[InvoiceNumber]/Scanned_Docs/ */
+const DOCUMENTS_BASE = process.env.DOCUMENTS_BASE
+  ? path.resolve(process.env.DOCUMENTS_BASE)
+  : path.join(PROJECT_ROOT, 'documents');
+
 /** Use env path as-is; only trim and normalize slashes. Do not add extra backslashes. */
 function normalizeUncBase(envValue) {
   if (envValue == null || typeof envValue !== 'string') return null;
@@ -53,4 +58,5 @@ module.exports = {
   EXPORT_DOCS_BASE,
   COMPANY_FOLDER,
   INDENT_COMPANY_DB,
+  DOCUMENTS_BASE,
 };

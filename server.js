@@ -10,8 +10,9 @@ const bcrypt = require('bcrypt');
 
 require('./server/db');
 const db = require('./server/db');
-const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('./server/config');
+const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER, DOCUMENTS_BASE } = require('./server/config');
 const { verifyToken, JWT_SECRET } = require('./server/middleware');
+const { PRESETS, PERMISSION_GROUPS } = require('./server/constants/permissions');
 
 // Auth middleware for /api: protect all /api except login and status
 const authMiddleware = (req, res, next) => {
@@ -31,6 +32,8 @@ const lcRoutes = require('./server/routes/lcs');
 const domesticBuyerRoutes = require('./server/routes/domesticBuyers');
 const indentProductRoutes = require('./server/routes/indentProducts');
 const indentRoutes = require('./server/routes/indent');
+const userRoutes = require('./server/routes/users');
+const ocrRoutes = require('./server/routes/ocr');
 
 const port = 3001;
 const app = express();
@@ -60,6 +63,13 @@ function sanitizeFolderName(str) {
     console.warn('Could not create document subfolders at', base, e.message);
   }
 });
+if (DOCUMENTS_BASE) {
+  try {
+    if (!fs.existsSync(DOCUMENTS_BASE)) fs.mkdirSync(DOCUMENTS_BASE, { recursive: true });
+  } catch (e) {
+    console.warn('Could not create documents base at', DOCUMENTS_BASE, e.message);
+  }
+}
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -89,20 +99,36 @@ function handleLogin(req, res) {
   if (!username || !password) {
     return res.status(400).json({ success: false, error: 'Username and password required' });
   }
+  // 1) Env admin takes precedence when set
   if (ADMIN_USERNAME && ADMIN_PASSWORD_HASH) {
     if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
       return res.status(401).json({ success: false, error: 'Invalid username or password' });
     }
-    const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT' };
+    const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [] };
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role } });
+    return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions: user.permissions } });
   }
+  // 2) DB users (from permission migration)
+  try {
+    const row = db.prepare('SELECT id, username, name, role, permissions, passwordHash FROM users WHERE username = ?').get(username);
+    if (row && row.passwordHash && bcrypt.compareSync(password, row.passwordHash)) {
+      let permissions = [];
+      try {
+        permissions = JSON.parse(row.permissions || '[]');
+      } catch (_) {}
+      const user = { id: row.id, username: row.username, name: row.name, role: row.role, permissions };
+      const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+      return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions } });
+    }
+  } catch (_) {}
+  // 3) Legacy in-memory fallback (no users table or no matching DB user)
   const user = FALLBACK_USERS.find((u) => u.username === username);
   if (!user || !bcrypt.compareSync(password, FALLBACK_PASSWORD_HASH)) {
     return res.status(401).json({ success: false, error: 'Invalid username or password' });
   }
+  const permissions = PRESETS[user.role] || PRESETS.VIEWER || [];
   const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role } });
+  res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions } });
 }
 
 app.post('/api/auth/login', handleLogin);
@@ -114,6 +140,50 @@ app.get('/api/status', (req, res) => {
 
 app.use('/api', authMiddleware);
 
+// Permission matrix UI: groups and role presets (no auth required for read-only constants)
+app.get('/api/permission-groups', (req, res) => {
+  res.json({
+    groups: PERMISSION_GROUPS,
+    presets: {
+      VIEWER: PRESETS.VIEWER || [],
+      CHECKER: PRESETS.CHECKER || [],
+      MANAGEMENT: PRESETS.MANAGEMENT || [],
+      EXECUTIONER: PRESETS.EXECUTIONER || PRESETS.VIEWER || [],
+    },
+  });
+});
+
+// Session sync: return current user with fresh permissions from DB
+app.get('/api/auth/me', (req, res) => {
+  const id = req.user && req.user.id;
+  if (!id) return res.status(401).json({ success: false, error: 'Not authenticated' });
+  try {
+    const row = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(id);
+    if (row) {
+      let permissions = [];
+      try {
+        permissions = JSON.parse(row.permissions || '[]');
+      } catch (_) {}
+      return res.json({
+        id: row.id,
+        username: row.username,
+        name: row.name,
+        role: row.role,
+        permissions,
+      });
+    }
+  } catch (_) {}
+  // Not in DB (env admin or legacy): return from token + preset permissions
+  const name = req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id;
+  res.json({
+    id: req.user.id,
+    username: req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id,
+    name: req.user.id === 'admin' ? 'Admin' : name,
+    role: req.user.role || 'VIEWER',
+    permissions: req.user.permissions || [],
+  });
+});
+
 app.use('/api/suppliers', supplierRoutes(broadcast));
 app.use('/api/materials', materialRoutes(broadcast));
 app.use('/api/shipments', shipmentRoutes(broadcast));
@@ -123,6 +193,8 @@ app.use('/api/lcs', lcRoutes(broadcast));
 app.use('/api/domestic-buyers', domesticBuyerRoutes(broadcast));
 app.use('/api/indent-products', indentProductRoutes(broadcast));
 app.use('/api/indent', indentRoutes());
+app.use('/api/users', userRoutes());
+app.use('/api/ocr', ocrRoutes);
 
 app.get('/api/lc-transactions', (req, res) => {
   try {

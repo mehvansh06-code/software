@@ -1,11 +1,11 @@
 const express = require('express');
 const db = require('../db');
-const { validateId } = require('../middleware');
+const { validateId, hasPermission } = require('../middleware');
 
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', hasPermission('lc.view'), (req, res) => {
     const rows = db.prepare('SELECT * FROM lcs').all();
     res.json(rows.map(r => ({
       ...r,
@@ -33,7 +33,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.put('/:id', (req, res) => {
+  router.put('/:id', hasPermission('lc.edit'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'LC ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const id = idCheck.value;

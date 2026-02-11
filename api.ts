@@ -157,7 +157,7 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
 
 export const api = {
   /** Login: POST /api/auth/login (no Authorization header). Stores token in localStorage on success. */
-  login: (username: string, password: string): Promise<{ success: boolean; token?: string; user?: { id: string; username: string; name: string; role: string }; error?: string }> => {
+  login: (username: string, password: string): Promise<{ success: boolean; token?: string; user?: { id: string; username: string; name: string; role: string; permissions?: string[] }; error?: string }> => {
     const safe = sanitizeEndpoint('auth/login');
     if (!safe) return Promise.reject(new Error('Invalid endpoint'));
     return fetch(`${API_BASE}/${safe}`, {
@@ -165,6 +165,32 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }).then((r) => r.json());
+  },
+  /** Permission groups and presets for UI matrix. */
+  getPermissionGroups: (): Promise<{ groups: Array<{ id: string; label: string; permissions: string[] }>; presets: Record<string, string[]> }> =>
+    fetchApi('permission-groups'),
+  /** Current user and fresh permissions from DB. Call after login or to re-sync without logging out. */
+  auth: {
+    me: (): Promise<{ id: string; username: string; name: string; role: string; permissions: string[] }> =>
+      fetchApi('auth/me').then((data: any) => ({
+        id: data.id,
+        username: data.username,
+        name: data.name,
+        role: data.role,
+        permissions: Array.isArray(data.permissions) ? data.permissions : [],
+      })),
+  },
+  users: {
+    list: (): Promise<Array<{ id: string; username: string; name: string; role: string; permissions: string[] }>> =>
+      fetchApi('users'),
+    create: (data: { username: string; password: string; name?: string; role?: string }): Promise<any> =>
+      fetchApi('users', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; role?: string }): Promise<any> =>
+      fetchApi(`users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string): Promise<void> =>
+      fetchApi(`users/${id}`, { method: 'DELETE' }),
+    updatePermissions: (id: string, permissions: string[]): Promise<any> =>
+      fetchApi(`users/${id}/permissions`, { method: 'PATCH', body: JSON.stringify({ permissions }) }),
   },
   suppliers: {
     list: () => fetchApi('suppliers'),
@@ -261,43 +287,13 @@ export const api = {
         return r.blob();
       });
     },
-    openDocumentsFolder: (id: string, shipment?: any): Promise<{ success: boolean; message: string; [k: string]: unknown }> => {
-      if (!id || String(id) === 'undefined') {
-        return Promise.resolve({ success: false, message: 'Invalid shipment ID' });
-      }
-      if (forceSimulated) {
-        if (typeof window !== 'undefined') {
-          alert('Open Folder is not available in offline / browser-only mode. Switch to SQL mode (backend running) to open document folders on this machine.');
+    deleteFile: (id: string, filename: string): Promise<void> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/shipments/${id}/files/${encodeURIComponent(filename)}`;
+      return fetch(url, { method: 'DELETE', headers: getAuthHeaders() }).then((r) => {
+        if (!r.ok) {
+          return r.json().then((j: any) => Promise.reject(new Error(j?.error || 'Delete failed')));
         }
-        return Promise.resolve({ success: false, message: 'Offline mode: folders cannot be opened.' });
-      }
-      const url = `${API_BASE}/shipments/${id}/open-documents-folder`;
-      const body = shipment != null ? JSON.stringify({ shipment }) : '{}';
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
-      return fetch(url, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body,
-        signal: controller.signal
-      }).then(async (r) => {
-        clearTimeout(timeoutId);
-        let data: { success?: boolean; message?: string; error?: string; [k: string]: unknown };
-        try {
-          data = await r.json();
-        } catch {
-          data = { success: false, message: r.status === 500 ? 'Server error. Try again or check the backend.' : 'Invalid response from server' };
-        }
-        const message = data.message ?? data.error ?? (r.ok ? 'OK' : 'Could not open folder');
-        return { success: r.ok && (data.success !== false), message, ...data };
-      }).catch((err) => {
-        clearTimeout(timeoutId);
-        const isTimeout = err?.name === 'AbortError';
-        const message = isTimeout ? 'Request timed out. Check the backend and try again.' : (err?.message || 'Could not open folder.');
-        if (typeof window !== 'undefined') {
-          alert('Server is unreachable. Start the backend (node server.js) and try again.');
-        }
-        return { success: false, message };
       });
     },
   },
@@ -344,6 +340,69 @@ export const api = {
         if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j?.error || 'Generate failed')));
         return r.blob();
       });
+    },
+  },
+  /** OCR: extract text from BOE/Shipping Bill image; returns parsed fields + confidence. */
+  ocr: {
+    extract: (formData: FormData): Promise<{ success: boolean; data?: { beNumber?: string | null; sbNumber?: string | null; date?: string | null; invoiceValue?: string | null; portCode?: string | null; rawText?: string; confidence?: number | null }; error?: string }> => {
+      const url = `${API_BASE}/ocr/extract`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      const controller = new AbortController();
+      const timeoutMs = 60000;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      return fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      }).then(async (r) => {
+        clearTimeout(timeoutId);
+        let data: any;
+        try {
+          data = await r.json();
+        } catch {
+          data = { success: false, error: 'Invalid response' };
+        }
+        if (!r.ok) return { success: false, error: data?.error || 'OCR failed' };
+        return data;
+      }).catch((err: any) => {
+        clearTimeout(timeoutId);
+        const msg = err?.name === 'AbortError' ? 'Request timed out. Try again.' : (err?.message || 'OCR failed.');
+        return { success: false, error: msg };
+      });
+    },
+    /** Hybrid: upload file, run OCR, save to server folder (Z: Drive), record in DB. Returns parsed data + savedPath. */
+    uploadAndScan: (formData: FormData): Promise<{ success: boolean; data?: { beNumber?: string | null; sbNumber?: string | null; date?: string | null; portCode?: string | null; invoiceValue?: string | null; savedPath?: string; filePath?: string; fileName?: string; confidence?: number | null }; error?: string }> => {
+      const url = `${API_BASE}/ocr/upload-and-scan`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      const controller = new AbortController();
+      const timeoutMs = 60000;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      return fetch(url, { method: 'POST', headers, body: formData, signal: controller.signal })
+        .then(async (r) => {
+          clearTimeout(timeoutId);
+          let data: any;
+          try {
+            data = await r.json();
+          } catch {
+            data = { success: false, error: 'Invalid response' };
+          }
+          if (!r.ok) return { success: false, error: data?.error || 'Upload and scan failed' };
+          return data;
+        })
+        .catch((err: any) => {
+          clearTimeout(timeoutId);
+          const msg = err?.name === 'AbortError' ? 'Request timed out. Try again.' : (err?.message || 'Upload and scan failed.');
+          return { success: false, error: msg };
+        });
     },
   },
   system: {

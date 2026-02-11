@@ -1,11 +1,11 @@
 const express = require('express');
 const db = require('../db');
-const { validateId } = require('../middleware');
+const { validateId, hasPermission } = require('../middleware');
 
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', hasPermission('buyers.view'), (req, res) => {
     res.json(db.prepare('SELECT * FROM buyers').all().map(b => {
       let consignees = [];
       if (b.consignees_json) {
@@ -15,7 +15,7 @@ function createRouter(broadcast) {
     }));
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', hasPermission('buyers.create'), (req, res) => {
     const b = req.body;
     if (!b || typeof b !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(b.id, 'Buyer ID');
@@ -27,7 +27,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.post('/import', (req, res) => {
+  router.post('/import', hasPermission('buyers.create'), (req, res) => {
     const body = req.body;
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...] } with buyer objects' });
@@ -68,7 +68,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.put('/:id', (req, res) => {
+  router.put('/:id', hasPermission('buyers.edit'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'Buyer ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const b = req.body;
