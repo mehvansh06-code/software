@@ -5,7 +5,10 @@
  * Secondary: Persistent Browser Ledger (LocalStorage)
  */
 
-const API_BASE = `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:3001/api`;
+// Use VITE_API_HOST so localhost and local IP hit the same backend (same data). Set in .env to your machine's IP (e.g. 192.168.1.70).
+const _envHost = typeof (import.meta as any).env?.VITE_API_HOST === 'string' ? (import.meta as any).env.VITE_API_HOST.trim() : '';
+const API_HOST = _envHost || (typeof window !== 'undefined' ? window.location.hostname : 'localhost');
+const API_BASE = `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${API_HOST}:3001/api`;
 const FETCH_TIMEOUT = 8000;
 const SAFE_ENDPOINT_REGEX = /^[a-zA-Z0-9\/_\-\.]+$/;
 const MAX_ENDPOINT_LENGTH = 256;
@@ -140,6 +143,7 @@ export const api = {
     list: () => fetchApi('buyers'),
     create: (data: any) => fetchApi('buyers', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`buyers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    import: (rows: any[]) => fetchApi('buyers/import', { method: 'POST', body: JSON.stringify({ rows }) }),
   },
   shipments: {
     list: () => fetchApi('shipments'),
@@ -212,6 +216,35 @@ export const api = {
     list: () => fetchApi('materials'),
     create: (data: any) => fetchApi('materials', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`materials/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  },
+  domesticBuyers: {
+    list: () => fetchApi('domestic-buyers'),
+    create: (data: any) => fetchApi('domestic-buyers', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: any) => fetchApi(`domestic-buyers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchApi(`domestic-buyers/${id}`, { method: 'DELETE' }),
+    import: (rows: any[]) => fetchApi('domestic-buyers/import', { method: 'POST', body: JSON.stringify({ rows }) }),
+  },
+  indentProducts: {
+    list: () => fetchApi('indent-products'),
+    create: (data: any) => fetchApi('indent-products', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: any) => fetchApi(`indent-products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchApi(`indent-products/${id}`, { method: 'DELETE' }),
+    import: (rows: any[]) => fetchApi('indent-products/import', { method: 'POST', body: JSON.stringify({ rows }) }),
+  },
+  indent: {
+    getCompanies: () => fetchApi('indent/companies'),
+    generate: (payload: any): Promise<Blob> => {
+      const safe = sanitizeEndpoint('indent/generate');
+      if (!safe) return Promise.reject(new Error('Invalid endpoint'));
+      return fetch(`${API_BASE}/${safe}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then((r) => {
+        if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j?.error || 'Generate failed')));
+        return r.blob();
+      });
+    },
   },
   system: {
     getStats: () => fetchApi('stats'),

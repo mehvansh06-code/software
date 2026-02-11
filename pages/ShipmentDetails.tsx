@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, LCStatus, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS } from '../types';
+import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, LCStatus, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType } from '../types';
 import { SHIPMENT_STATUS_ORDER_IMPORT, SHIPMENT_STATUS_ORDER_EXPORT, getShipmentStatusLabel, formatINR, formatDate, formatCurrency } from '../constants';
 import { 
   ArrowLeft, 
@@ -75,7 +75,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     portCode: '',
     portOfLoading: '',
     portOfDischarge: '',
-    expectedArrivalDate: ''
+    expectedArrivalDate: '',
+    shipperSealNumber: '',
+    lineSealNumber: ''
   });
 
   const [dutiesData, setDutiesData] = useState({
@@ -87,7 +89,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     beNumber: '',
     beDate: '',
     incoTerm: '',
-    portCode: ''
+    portCode: '',
+    exchangeRate: Number(shipment?.exchangeRate) || 0
+  });
+  const [licenceImportData, setLicenceImportData] = useState({
+    linkedLicenceId: '',
+    licenceObligationAmount: 0,
+    licenceObligationQuantity: 0
   });
   const [editInvoice, setEditInvoice] = useState(false);
   const [invoiceEditData, setInvoiceEditData] = useState({
@@ -95,11 +103,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     invoiceDate: shipment?.invoiceDate || '',
     freightCharges: Number(shipment?.freightCharges) || 0,
     otherCharges: Number(shipment?.otherCharges) || 0,
-    items: (shipment?.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) }))
+    items: (shipment?.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) })),
+    /** Export only: editable invoice/FOB amount in FC */
+    amountFC: Number(shipment?.amount ?? (shipment as any)?.fobValueFC) || 0
   });
-  const [editInvoiceRate, setEditInvoiceRate] = useState(false);
-  const [invoiceExchangeRate, setInvoiceExchangeRate] = useState<number>(shipment?.exchangeRate ?? 0);
-
   const [newPayment, setNewPayment] = useState<Partial<PaymentLog>>({
     amount: 0,
     date: new Date().toISOString().split('T')[0],
@@ -117,7 +124,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [lodgementValue, setLodgementValue] = useState('');
   const [lodgementDateValue, setLodgementDateValue] = useState('');
   const [exportDocData, setExportDocData] = useState({
-    sbNo: '', sbDate: '', dbk: 0, rodtep: 0, scripNo: '', epcg: '', advLic: '', lodgement: '', lodgementDate: '', ebrcNo: '', ebrcValue: 0
+    sbNo: '', sbDate: '', dbk: 0, rodtep: 0, scripNo: '', epcg: '', advLic: '', lodgement: '', lodgementDate: '', ebrcNo: '', ebrcValue: 0, exchangeRate: Number(shipment?.exchangeRate) || 0, incoTerm: (shipment as any)?.incoTerm || 'FOB'
   });
   const [openingFolder, setOpeningFolder] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -154,6 +161,15 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     if (!shipment) return;
     // Don't overwrite form state while user is editing invoice/details — prevents reverting invoice date etc. after save
     if (editAll) return;
+    setInvoiceEditData(prev => ({
+      ...prev,
+      invoiceNumber: shipment.invoiceNumber || '',
+      invoiceDate: shipment.invoiceDate || '',
+      freightCharges: Number(shipment.freightCharges) || 0,
+      otherCharges: Number(shipment.otherCharges) || 0,
+      items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) })),
+      amountFC: Number(shipment.amount ?? (shipment as any).fobValueFC) || 0
+    }));
     setLogisticsData({
       blNumber: shipment.blNumber || '',
       blDate: shipment.blDate || '',
@@ -163,7 +179,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       portCode: shipment.portCode || '',
       portOfLoading: shipment.portOfLoading || '',
       portOfDischarge: shipment.portOfDischarge || '',
-      expectedArrivalDate: shipment.expectedArrivalDate || ''
+      expectedArrivalDate: shipment.expectedArrivalDate || '',
+      shipperSealNumber: (shipment as any).shipperSealNumber || '',
+      lineSealNumber: (shipment as any).lineSealNumber || ''
     });
     setDutiesData({
       assessedValue: shipment.assessedValue || 0,
@@ -174,15 +192,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       beNumber: shipment.beNumber || '',
       beDate: shipment.beDate || '',
       incoTerm: shipment.incoTerm || 'FOB',
-      portCode: shipment.portCode || ''
+      portCode: shipment.portCode || '',
+      exchangeRate: Number(shipment.exchangeRate) || 0
     });
-    setInvoiceExchangeRate(shipment.exchangeRate ?? 0);
-    setInvoiceEditData({
-      invoiceNumber: shipment.invoiceNumber || '',
-      invoiceDate: shipment.invoiceDate || '',
-      freightCharges: Number(shipment.freightCharges) || 0,
-      otherCharges: Number(shipment.otherCharges) || 0,
-      items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) }))
+    setLicenceImportData({
+      linkedLicenceId: shipment.linkedLicenceId || '',
+      licenceObligationAmount: shipment.licenceObligationAmount ?? 0,
+      licenceObligationQuantity: shipment.licenceObligationQuantity ?? 0
     });
     setExportDocData({
       sbNo: (shipment as any).sbNo || '',
@@ -195,7 +211,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       lodgement: (shipment as any).lodgement || '',
       lodgementDate: (shipment as any).lodgementDate || '',
       ebrcNo: (shipment as any).ebrcNo || '',
-      ebrcValue: (shipment as any).ebrcValue ?? 0
+      ebrcValue: (shipment as any).ebrcValue ?? 0,
+      exchangeRate: Number(shipment.exchangeRate) || 0,
+      incoTerm: (shipment as any).incoTerm || 'FOB'
     });
     setLodgementValue((shipment as any).lodgement || '');
     setLodgementDateValue((shipment as any).lodgementDate || '');
@@ -277,6 +295,18 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     return lcs.find(lc => lc.lcNumber === shipment.lcNumber || lc.id === (shipment as any).linkedLcId) || null;
   }, [shipment?.isUnderLC, shipment?.lcNumber, (shipment as any)?.linkedLcId, lcs]);
 
+  /** Import: raw material → Advance Licence, capital goods → EPCG */
+  const importLicenceType = useMemo(() => {
+    if (isExport || !shipment?.items?.length) return null;
+    const hasCapitalGoods = (shipment.items || []).some((it: ShipmentItem) => it.productType === ProductType.CAPITAL_GOOD);
+    return hasCapitalGoods ? LicenceType.EPCG : LicenceType.ADVANCE;
+  }, [isExport, shipment?.items]);
+
+  const importLicencesFiltered = useMemo(() => {
+    if (!importLicenceType || !shipment?.company) return [];
+    return licences.filter(l => l.type === importLicenceType && l.company === shipment.company && l.status === 'ACTIVE');
+  }, [licences, importLicenceType, shipment?.company]);
+
   if (!shipment) return <div className="p-20 text-center text-slate-400 font-bold uppercase">Record not found</div>;
 
   const canDelete = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
@@ -308,7 +338,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       otherCharges: invoiceEditData.otherCharges || undefined,
       items,
       amount: totalAmount,
-      invoiceValueINR: totalAmount * (invoiceExchangeRate || 1)
+      invoiceValueINR: totalAmount * (shipment.exchangeRate ?? 1)
     };
     await onUpdate(updated);
     setEditInvoice(false);
@@ -330,17 +360,32 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     });
   };
 
+  const updateInvoiceItemMergedNameDesc = (idx: number, value: string) => {
+    const sep = value.indexOf(' — ');
+    const productName = sep >= 0 ? value.slice(0, sep) : value;
+    const description = sep >= 0 ? value.slice(sep + 3) : '';
+    setInvoiceEditData((prev) => {
+      const next = [...prev.items];
+      const item = { ...next[idx], productName, amount: next[idx].quantity * next[idx].rate };
+      (item as any).description = description;
+      next[idx] = item;
+      return { ...prev, items: next };
+    });
+  };
+
   const handleSaveDuties = async () => {
-    const updated = { ...shipment, ...dutiesData, portCode: dutiesData.portCode };
+    const updated = {
+      ...shipment,
+      ...dutiesData,
+      portCode: dutiesData.portCode,
+      isUnderLicence: !!licenceImportData.linkedLicenceId,
+      linkedLicenceId: licenceImportData.linkedLicenceId || undefined,
+      licenceObligationAmount: licenceImportData.licenceObligationAmount || undefined,
+      licenceObligationQuantity: licenceImportData.licenceObligationQuantity || undefined
+    };
     await onUpdate(updated);
     setEditDuties(false);
   };
-  const handleSaveInvoiceRate = () => {
-    const updated = { ...shipment, exchangeRate: invoiceExchangeRate };
-    onUpdate(updated);
-    setEditInvoiceRate(false);
-  };
-
   const handleSaveExportDoc = async () => {
     const updated = { ...shipment, ...exportDocData };
     await onUpdate(updated);
@@ -350,7 +395,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const handleSaveAll = async () => {
     const items = invoiceEditData.items.map((it) => ({ ...it, amount: it.quantity * it.rate }));
     const subtotal = items.reduce((s, it) => s + it.amount, 0);
-    const totalAmount = subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
+    const totalAmount = isExport
+      ? (Number(invoiceEditData.amountFC) || 0)
+      : subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
+    const exchRate = isExport ? (exportDocData.exchangeRate || 1) : (dutiesData.exchangeRate || 1);
     const updated: Shipment = {
       ...shipment,
       invoiceNumber: invoiceEditData.invoiceNumber,
@@ -359,8 +407,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       otherCharges: invoiceEditData.otherCharges || undefined,
       items,
       amount: totalAmount,
-      invoiceValueINR: totalAmount * (invoiceExchangeRate || 1),
-      exchangeRate: invoiceExchangeRate,
+      invoiceValueINR: totalAmount * exchRate,
+      exchangeRate: exchRate,
+      ...(isExport ? { fobValueFC: totalAmount, fobValueINR: totalAmount * exchRate } : {}),
       ...exportDocData,
       ...logisticsData,
       ...dutiesData
@@ -368,11 +417,15 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     if (isExport) {
       (updated as any).lodgement = lodgementValue || undefined;
       (updated as any).lodgementDate = lodgementDateValue || undefined;
+    } else {
+      updated.isUnderLicence = !!licenceImportData.linkedLicenceId;
+      updated.linkedLicenceId = licenceImportData.linkedLicenceId || undefined;
+      updated.licenceObligationAmount = licenceImportData.licenceObligationAmount || undefined;
+      updated.licenceObligationQuantity = licenceImportData.licenceObligationQuantity || undefined;
     }
     await onUpdate(updated);
     setEditAll(false);
     setEditInvoice(false);
-    setEditInvoiceRate(false);
     setEditExportDoc(false);
     setEditLogistics(false);
     setEditDuties(false);
@@ -384,9 +437,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       invoiceDate: shipment.invoiceDate || '',
       freightCharges: Number(shipment.freightCharges) || 0,
       otherCharges: Number(shipment.otherCharges) || 0,
-      items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) }))
+      items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) })),
+      amountFC: Number(shipment.amount ?? (shipment as any).fobValueFC) || 0
     });
-    setInvoiceExchangeRate(shipment.exchangeRate ?? 0);
     setExportDocData({
       sbNo: (shipment as any).sbNo || '',
       sbDate: (shipment as any).sbDate || '',
@@ -398,7 +451,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       lodgement: (shipment as any).lodgement || '',
       lodgementDate: (shipment as any).lodgementDate || '',
       ebrcNo: (shipment as any).ebrcNo || '',
-      ebrcValue: (shipment as any).ebrcValue ?? 0
+      ebrcValue: (shipment as any).ebrcValue ?? 0,
+      exchangeRate: Number(shipment.exchangeRate) || 0,
+      incoTerm: (shipment as any).incoTerm || 'FOB'
     });
     setLogisticsData({
       blNumber: shipment.blNumber || '',
@@ -409,7 +464,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       portCode: shipment.portCode || '',
       portOfLoading: shipment.portOfLoading || '',
       portOfDischarge: shipment.portOfDischarge || '',
-      expectedArrivalDate: shipment.expectedArrivalDate || ''
+      expectedArrivalDate: shipment.expectedArrivalDate || '',
+      shipperSealNumber: (shipment as any).shipperSealNumber || '',
+      lineSealNumber: (shipment as any).lineSealNumber || ''
     });
     setDutiesData({
       assessedValue: shipment.assessedValue ?? 0,
@@ -420,7 +477,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       beNumber: shipment.beNumber || '',
       beDate: shipment.beDate || '',
       incoTerm: shipment.incoTerm || '',
-      portCode: shipment.portCode || ''
+      portCode: shipment.portCode || '',
+      exchangeRate: Number(shipment.exchangeRate) || 0
+    });
+    setLicenceImportData({
+      linkedLicenceId: shipment.linkedLicenceId || '',
+      licenceObligationAmount: shipment.licenceObligationAmount ?? 0,
+      licenceObligationQuantity: shipment.licenceObligationQuantity ?? 0
     });
     setLodgementValue((shipment as any).lodgement || '');
     setLodgementDateValue((shipment as any).lodgementDate || '');
@@ -440,6 +503,39 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleAddPayment = async () => {
     if (!newPayment.amount || !newPayment.date) return;
+    const totalFC = paymentSummary.totalFC;
+    const amount = Number(newPayment.amount);
+    const toFC = (p: PaymentLog) => {
+      if (p.currency === shipment.currency) return p.amount;
+      if (p.currency === 'INR') return p.amount / (shipment.exchangeRate || 1);
+      return 0;
+    };
+    const existingTotalFC = (shipment.payments || []).reduce((sum, p) => sum + toFC(p), 0);
+    const newTotalFC = existingTotalFC + amount;
+    if (newTotalFC > totalFC) {
+      setToastVariant('error');
+      setToastMessage(`Total payments cannot exceed invoice amount (${formatCurrency(totalFC, shipment.currency)}). Current total: ${formatCurrency(existingTotalFC, shipment.currency)}. You can add up to ${formatCurrency(Math.max(0, totalFC - existingTotalFC), shipment.currency)}.`);
+      setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
+    // When shipment is under LC, further (non-LC) payments cannot exceed (shipment amount - LC amount)
+    const lcAmountFC = Number(shipment.lcAmount) || 0;
+    if (shipment.isUnderLC && lcAmountFC > 0) {
+      const maxFurtherFC = Math.max(0, totalFC - lcAmountFC);
+      const existingFurtherFC = (shipment.payments || []).filter(p => !p.linkedLcId).reduce((sum, p) => sum + toFC(p), 0);
+      if (existingFurtherFC + amount > maxFurtherFC) {
+        setToastVariant('error');
+        setToastMessage(`Shipment is under LC (${formatCurrency(lcAmountFC, shipment.currency)}). Separate payments cannot exceed ${formatCurrency(maxFurtherFC, shipment.currency)}. Current separate payments: ${formatCurrency(existingFurtherFC, shipment.currency)}. You can add up to ${formatCurrency(Math.max(0, maxFurtherFC - existingFurtherFC), shipment.currency)}.`);
+        setTimeout(() => setToastMessage(null), 5000);
+        return;
+      }
+    }
+    if (amount <= 0) {
+      setToastVariant('error');
+      setToastMessage('Payment amount must be greater than zero.');
+      setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
     const payment: PaymentLog = {
       id: Math.random().toString(36).substr(2, 9),
       date: newPayment.date!,
@@ -514,7 +610,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setOpeningFolder(true);
     try {
       const result = await api.shipments.openDocumentsFolder(shipmentId, shipment) as { success?: boolean; message?: string; path?: string };
-      const returnedPath = result?.path && typeof result.path === 'string' ? result.path : null;
+      const rawPath = result?.path != null && typeof result.path === 'string' ? result.path : '';
+      const returnedPath = rawPath.trim() || null;
       if (result?.success && returnedPath) {
         setFolderError(null);
         setDocumentsFolderPath(returnedPath);
@@ -650,8 +747,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 )}
               </div>
             </div>
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="p-8 space-y-4">
+              <div className={`grid grid-cols-1 gap-6 ${isExport ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Invoice No.</label>
                   {editAll ? (
@@ -668,88 +765,96 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     <p className="text-sm font-bold text-slate-800">{shipment.invoiceDate ? formatDate(shipment.invoiceDate) : '—'}</p>
                   )}
                 </div>
+                {isExport && (
                 <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Exchange Rate</label>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Amount</label>
                   {editAll ? (
                     <input
                       type="number"
-                      step="0.01"
+                      step="any"
                       min="0"
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold"
-                      value={invoiceExchangeRate || ''}
-                      onChange={e => setInvoiceExchangeRate(parseFloat(e.target.value) || 0)}
-                      placeholder="e.g. 84"
+                      value={invoiceEditData.amountFC ?? ''}
+                      onChange={e => setInvoiceEditData(prev => ({ ...prev, amountFC: parseFloat(e.target.value) || 0 }))}
+                      placeholder="0"
                     />
                   ) : (
-                    <p className="text-sm font-bold text-slate-800">{(shipment.exchangeRate ?? invoiceExchangeRate) ? `1 ${shipment.currency} = ₹${(shipment.exchangeRate ?? invoiceExchangeRate)}` : '—'}</p>
+                    <p className="text-sm font-bold text-slate-900">{formatCurrency(shipment.amount ?? shipment.fobValueFC, shipment.currency)}</p>
                   )}
                 </div>
+                )}
               </div>
+              {!isExport && (
               <table className="w-full">
                 <thead>
                   <tr className="text-left text-[9px] font-black uppercase text-slate-400 border-b pb-4">
-                    <th className="pb-4">Item Name</th>
-                    <th className="pb-4">Description</th>
+                    <th className="pb-4">Item / Description</th>
                     <th className="pb-4">HSN</th>
                     <th className="pb-4 text-right">Quantity</th>
-                    <th className="pb-4 text-right">Rate</th>
+                    <th className="pb-4 text-right">Unit</th>
+                    <th className="pb-4 text-right">Rate (per unit)</th>
                     <th className="pb-4 text-right">Amount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {(editAll ? invoiceEditData.items : (shipment.items || [])).map((item, idx) => (
+                  {(editAll ? invoiceEditData.items : (shipment.items || [])).map((item, idx) => {
+                    const mergedNameDesc = `${item.productName || ''}${(item as any).description ? ' — ' + (item as any).description : ''}`.trim();
+                    return (
                     <tr key={idx} className="group">
                       <td className="py-2">
                         {editAll ? (
-                          <input className="w-full px-2 py-1.5 rounded border text-sm font-bold" value={item.productName} onChange={e => updateInvoiceItem(idx, 'productName', e.target.value)} />
+                          <input
+                            className="w-full px-2 py-1.5 rounded border border-slate-200 bg-slate-50 text-sm font-bold"
+                            value={mergedNameDesc}
+                            onChange={e => updateInvoiceItemMergedNameDesc(idx, e.target.value)}
+                            placeholder="Item name — Description"
+                          />
                         ) : (
-                          <span className="text-sm font-bold text-slate-800">{String(item.productName)}</span>
+                          <span className="text-sm font-bold text-slate-800">{mergedNameDesc || '—'}</span>
                         )}
                       </td>
                       <td className="py-2">
                         {editAll ? (
-                          <input className="w-full px-2 py-1.5 rounded border text-xs" value={(item as any).description || ''} onChange={e => updateInvoiceItem(idx, 'description', e.target.value)} placeholder="—" />
-                        ) : (
-                          <span className="text-xs text-slate-600">{(item as any).description || '—'}</span>
-                        )}
-                      </td>
-                      <td className="py-2">
-                        {editAll ? (
-                          <input className="w-full px-2 py-1.5 rounded border text-[10px] font-mono" value={item.hsnCode} onChange={e => updateInvoiceItem(idx, 'hsnCode', e.target.value)} />
+                          <input className="w-full px-2 py-1.5 rounded border border-slate-200 bg-slate-50 text-[10px] font-mono" value={item.hsnCode} onChange={e => updateInvoiceItem(idx, 'hsnCode', e.target.value)} />
                         ) : (
                           <span className="text-[10px] font-mono text-slate-400">{String(item.hsnCode)}</span>
                         )}
                       </td>
                       <td className="py-2 text-right">
                         {editAll ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <input type="number" step="any" className="w-20 px-2 py-1 rounded border text-xs font-bold text-right" value={item.quantity} onChange={e => updateInvoiceItem(idx, 'quantity', e.target.value)} />
-                            <select className="px-1 py-1 rounded border text-[10px] font-bold" value={item.unit} onChange={e => updateInvoiceItem(idx, 'unit', e.target.value)}>
-                              {STANDARDISED_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
-                            </select>
-                          </div>
+                          <input type="number" step="any" className="w-20 px-2 py-1.5 rounded border border-slate-200 bg-slate-50 text-xs font-bold text-right" value={item.quantity} onChange={e => updateInvoiceItem(idx, 'quantity', e.target.value)} />
                         ) : (
-                          <span className="text-xs font-bold">{String(item.quantity)} {String(item.unit)}</span>
+                          <span className="text-xs font-bold">{String(item.quantity)}</span>
                         )}
                       </td>
                       <td className="py-2 text-right">
                         {editAll ? (
-                          <input type="number" step="any" className="w-24 px-2 py-1 rounded border text-xs font-bold text-right" value={item.rate} onChange={e => updateInvoiceItem(idx, 'rate', e.target.value)} />
+                          <select className="px-2 py-1.5 rounded border border-slate-200 bg-slate-50 text-[10px] font-bold" value={item.unit} onChange={e => updateInvoiceItem(idx, 'unit', e.target.value)}>
+                            {STANDARDISED_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                        ) : (
+                          <span className="text-xs font-bold text-slate-600">{String(item.unit)}</span>
+                        )}
+                      </td>
+                      <td className="py-2 text-right">
+                        {editAll ? (
+                          <input type="number" step="any" className="w-24 px-2 py-1.5 rounded border border-slate-200 bg-slate-50 text-xs font-bold text-right" value={item.rate} onChange={e => updateInvoiceItem(idx, 'rate', e.target.value)} />
                         ) : (
                           <span className="text-xs">{formatCurrency(item.rate, shipment.currency)}</span>
                         )}
                       </td>
                       <td className="py-2 text-right text-sm font-black text-slate-900">{formatCurrency(editAll ? (invoiceEditData.items[idx]?.amount ?? item.amount) : item.amount, shipment.currency)}</td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
+              )}
               {!isExport && (
                 <div className="flex flex-wrap justify-end gap-8 py-2 text-sm">
                   <div className="text-right">
                     <label className="block text-[9px] font-black text-slate-400 uppercase">Freight</label>
                     {editAll ? (
-                      <input type="number" step="any" className="w-32 px-2 py-1.5 rounded border text-sm font-bold" value={invoiceEditData.freightCharges || ''} onChange={e => setInvoiceEditData(prev => ({ ...prev, freightCharges: parseFloat(e.target.value) || 0 }))} />
+                      <input type="number" step="any" className="w-32 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm font-bold" value={invoiceEditData.freightCharges || ''} onChange={e => setInvoiceEditData(prev => ({ ...prev, freightCharges: parseFloat(e.target.value) || 0 }))} />
                     ) : (
                       <p className="font-bold text-slate-700">{Number(shipment.freightCharges) > 0 ? formatCurrency(shipment.freightCharges!, shipment.currency) : '—'}</p>
                     )}
@@ -757,60 +862,107 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   <div className="text-right">
                     <label className="block text-[9px] font-black text-slate-400 uppercase">Other charges</label>
                     {editAll ? (
-                      <input type="number" step="any" className="w-32 px-2 py-1.5 rounded border text-sm font-bold" value={invoiceEditData.otherCharges || ''} onChange={e => setInvoiceEditData(prev => ({ ...prev, otherCharges: parseFloat(e.target.value) || 0 }))} />
+                      <input type="number" step="any" className="w-32 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm font-bold" value={invoiceEditData.otherCharges || ''} onChange={e => setInvoiceEditData(prev => ({ ...prev, otherCharges: parseFloat(e.target.value) || 0 }))} />
                     ) : (
                       <p className="font-bold text-slate-700">{Number(shipment.otherCharges) > 0 ? formatCurrency(shipment.otherCharges!, shipment.currency) : '—'}</p>
                     )}
                   </div>
                 </div>
               )}
+              {!isExport && (
               <div className="pt-6 border-t flex flex-wrap justify-end gap-8 gap-y-4 bg-slate-50 -mx-6 -mb-6 p-6 rounded-b-2xl">
                 <div className="text-right">
                   <p className="text-[9px] font-black text-slate-400 uppercase">Value / Total (FC)</p>
                   <p className="text-xl font-black text-slate-900">{formatCurrency(editAll ? (invoiceEditData.items.reduce((s, it) => s + it.amount, 0) + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0)) : shipment.amount, shipment.currency)}</p>
                 </div>
-                <div className="text-right">
-                  <p className="text-[9px] font-black text-slate-400 uppercase">Amount (INR)</p>
-                  <p className="text-xl font-black text-indigo-600">{formatINR(editAll ? ((invoiceEditData.items.reduce((s, it) => s + it.amount, 0) + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0)) * (invoiceExchangeRate || 1)) : shipment.invoiceValueINR)}</p>
-                </div>
-                {isExport && (
-                  <>
-                    <div className="text-right">
-                      <p className="text-[9px] font-black text-amber-600 uppercase">FOB (FC)</p>
-                      <p className="text-lg font-black text-slate-900">{formatCurrency(shipment.fobValueFC, shipment.currency)}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[9px] font-black text-amber-600 uppercase">FOB (INR)</p>
-                      <p className="text-lg font-black text-amber-700">{formatINR(shipment.fobValueINR)}</p>
-                    </div>
-                  </>
-                )}
               </div>
+              )}
             </div>
           </div>
 
-          {/* Export: Shipping Bill (2nd in flow) */}
+          {/* Export: Shipping Bill — SB No., Date, Exchange Rate, FOB FC, FOB INR, Port Code, Inco Term, DBK, RODTEP, Scrip No. */}
           {isExport && (
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-amber-50/50">
-               <h2 className="text-xs font-black uppercase text-amber-700 tracking-widest flex items-center gap-2"><FileText size={16} /> Shipping Bill Details</h2>
+               <h2 className="text-xs font-black uppercase text-amber-700 tracking-widest flex items-center gap-2"><FileText size={16} /> Shipping Bill (Export)</h2>
             </div>
             <div className="p-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipping Bill No.</label>
                   {editAll ? (
-                    <input className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.sbNo} onChange={e => setExportDocData({...exportDocData, sbNo: e.target.value})} placeholder="e.g. SB/24/001" />
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.sbNo} onChange={e => setExportDocData({...exportDocData, sbNo: e.target.value})} placeholder="e.g. SB/24/001" />
                   ) : (
                     <p className="text-sm font-bold text-slate-800">{(shipment as any).sbNo || '—'}</p>
                   )}
                 </div>
                 <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">SB Date</label>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipping Bill Date</label>
                   {editAll ? (
-                    <input type="date" className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.sbDate} onChange={e => setExportDocData({...exportDocData, sbDate: e.target.value})} />
+                    <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.sbDate} onChange={e => setExportDocData({...exportDocData, sbDate: e.target.value})} />
                   ) : (
                     <p className="text-sm font-bold text-slate-800">{(shipment as any).sbDate ? formatDate((shipment as any).sbDate) : '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Exchange Rate (to INR)</label>
+                  {editAll ? (
+                    <input type="number" step="0.01" min="0" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.exchangeRate || ''} onChange={e => setExportDocData({...exportDocData, exchangeRate: parseFloat(e.target.value) || 0})} placeholder="e.g. 84" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{(shipment.exchangeRate ?? exportDocData.exchangeRate) ? `1 ${shipment.currency} = ₹${(shipment.exchangeRate ?? exportDocData.exchangeRate)}` : '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">FOB Value (FC)</label>
+                  <p className="text-sm font-bold text-slate-800">{formatCurrency(shipment.fobValueFC ?? shipment.amount, shipment.currency)}</p>
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">FOB Value (INR)</label>
+                  <p className="text-sm font-bold text-slate-800">{formatINR(shipment.fobValueINR ?? (shipment.amount * (shipment.exchangeRate || 1)))}</p>
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port Code</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.portCode} onChange={e => setLogisticsData({...logisticsData, portCode: e.target.value})} placeholder="e.g. INMUN" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.portCode || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">DBK</label>
+                  {editAll ? (
+                    <input type="number" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.dbk || ''} onChange={e => setExportDocData({...exportDocData, dbk: parseFloat(e.target.value) || 0})} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{(shipment as any).dbk != null ? formatINR((shipment as any).dbk) : '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">RODTEP</label>
+                  {editAll ? (
+                    <input type="number" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.rodtep || ''} onChange={e => setExportDocData({...exportDocData, rodtep: parseFloat(e.target.value) || 0})} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{(shipment as any).rodtep != null ? formatINR((shipment as any).rodtep) : '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Scrip No.</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.scripNo} onChange={e => setExportDocData({...exportDocData, scripNo: e.target.value})} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{(shipment as any).scripNo || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Inco Term</label>
+                  {editAll ? (
+                    <select className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.incoTerm} onChange={e => setExportDocData({...exportDocData, incoTerm: e.target.value})}>
+                      <option value="FOB">FOB</option>
+                      <option value="CIF">CIF</option>
+                      <option value="EXW">EXW</option>
+                      <option value="DDP">DDP</option>
+                    </select>
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{exportDocData.incoTerm || '—'}</p>
                   )}
                 </div>
               </div>
@@ -842,11 +994,19 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     )}
                   </div>
                   <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port Code</label>
+                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipper / Custom Seal Number</label>
                     {editAll ? (
-                      <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.portCode} onChange={e => setLogisticsData({...logisticsData, portCode: e.target.value})} placeholder="e.g. INMUN" />
+                      <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.shipperSealNumber} onChange={e => setLogisticsData({...logisticsData, shipperSealNumber: e.target.value})} placeholder="e.g. seal no." />
                     ) : (
-                      <p className="text-sm font-bold text-slate-800">{logisticsData.portCode || '---'}</p>
+                      <p className="text-sm font-bold text-slate-800">{logisticsData.shipperSealNumber || '—'}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Line Seal Number</label>
+                    {editAll ? (
+                      <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.lineSealNumber} onChange={e => setLogisticsData({...logisticsData, lineSealNumber: e.target.value})} placeholder="e.g. line seal" />
+                    ) : (
+                      <p className="text-sm font-bold text-slate-800">{logisticsData.lineSealNumber || '—'}</p>
                     )}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
@@ -863,6 +1023,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                        ) : <p className="text-sm font-bold text-slate-800">{logisticsData.portOfDischarge || '---'}</p>}
                      </div>
                   </div>
+                  {!isExport && (
                   <div>
                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Tracking URL</label>
                     {editAll ? (
@@ -875,6 +1036,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                        ) : <p className="text-sm text-slate-400 italic">Not available</p>
                     )}
                   </div>
+                  )}
                   <div>
                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Expected Arrival Date</label>
                     {editAll ? (
@@ -907,7 +1069,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
             </div>
           </div>
 
-          {/* Export: Further info (4th in flow) — e-BRC, Licences, Additionals; FOB is in Invoice details */}
+          {/* Export: Further info — EPCG & Advance Licence only; e-BRC is in Payment Ledger */}
           {isExport && (
           <>
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
@@ -915,13 +1077,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                <h2 className="text-xs font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><FileText size={16} /> Further Info</h2>
             </div>
             <div className="p-8 space-y-6">
-              <div>
-                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">e-BRC</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div><label className="block text-[9px] font-black text-slate-400 uppercase mb-1">e-BRC No.</label>{editAll ? <input className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.ebrcNo} onChange={e => setExportDocData({...exportDocData, ebrcNo: e.target.value})} /> : <p className="font-bold text-slate-800">{(shipment as any).ebrcNo || '—'}</p>}</div>
-                  <div><label className="block text-[9px] font-black text-slate-400 uppercase mb-1">e-BRC Value</label>{editAll ? <input type="number" className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.ebrcValue || ''} onChange={e => setExportDocData({...exportDocData, ebrcValue: parseFloat(e.target.value) || 0})} /> : <p className="font-bold text-slate-800">{(shipment as any).ebrcValue != null ? formatINR((shipment as any).ebrcValue) : '—'}</p>}</div>
-                </div>
-              </div>
               <div>
                 <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">EPCG & Advance Licence</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -945,31 +1100,33 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   </div>
                 </div>
               </div>
-              <div>
-                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Additionals — Scrip No., RODTEP, DBK</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div><label className="block text-[9px] font-black text-slate-400 uppercase mb-1">Scrip No.</label>{editAll ? <input className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.scripNo} onChange={e => setExportDocData({...exportDocData, scripNo: e.target.value})} /> : <p className="font-bold text-slate-800">{(shipment as any).scripNo || '—'}</p>}</div>
-                  <div><label className="block text-[9px] font-black text-slate-400 uppercase mb-1">RODTEP</label>{editAll ? <input type="number" className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.rodtep || ''} onChange={e => setExportDocData({...exportDocData, rodtep: parseFloat(e.target.value) || 0})} /> : <p className="font-bold text-slate-800">{(shipment as any).rodtep != null ? formatINR((shipment as any).rodtep) : '—'}</p>}</div>
-                  <div><label className="block text-[9px] font-black text-slate-400 uppercase mb-1">DBK</label>{editAll ? <input type="number" className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.dbk || ''} onChange={e => setExportDocData({...exportDocData, dbk: parseFloat(e.target.value) || 0})} /> : <p className="font-bold text-slate-800">{(shipment as any).dbk != null ? formatINR((shipment as any).dbk) : '—'}</p>}</div>
-                </div>
-              </div>
             </div>
           </div>
           </>
           )}
 
-          {/* Bill of Entry Details (Import only) */}
+          {/* Bill of Entry (Import only) */}
           {!isExport && (
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
-               <h2 className="text-xs font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Landmark size={16} /> Bill of Entry Details</h2>
+               <h2 className="text-xs font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Landmark size={16} /> Bill of Entry (Import)</h2>
             </div>
             <div className="p-8">
                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 pb-8 border-b border-slate-50">
                    <div>
+                       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Amount (INR)</label>
+                       <p className="text-sm font-bold text-indigo-600">{formatINR(editAll ? ((invoiceEditData.items.reduce((s, it) => s + it.amount, 0) + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0)) * (dutiesData.exchangeRate || 1)) : shipment.invoiceValueINR)}</p>
+                   </div>
+                   <div>
+                       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Exchange Rate (to INR)</label>
+                       {editAll ? (
+                           <input type="number" step="0.01" min="0" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={dutiesData.exchangeRate || ''} onChange={e => setDutiesData({...dutiesData, exchangeRate: parseFloat(e.target.value) || 0})} placeholder="e.g. 84" />
+                       ) : <p className="text-sm font-bold text-slate-800">{(shipment.exchangeRate ?? dutiesData.exchangeRate) ? `1 ${shipment.currency} = ₹${(shipment.exchangeRate ?? dutiesData.exchangeRate)}` : '—'}</p>}
+                   </div>
+                   <div>
                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port Code</label>
                        {editAll ? (
-                           <input className="w-full px-2 py-1.5 rounded-lg border font-bold" value={dutiesData.portCode} onChange={e => setDutiesData({...dutiesData, portCode: e.target.value})} placeholder="e.g. INMUN" />
+                           <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={dutiesData.portCode} onChange={e => setDutiesData({...dutiesData, portCode: e.target.value})} placeholder="e.g. INMUN" />
                        ) : <p className="text-sm font-bold text-slate-800">{dutiesData.portCode || '---'}</p>}
                    </div>
                    <div>
@@ -995,6 +1152,60 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                            <input type="date" className="w-full px-2 py-1.5 rounded-lg border font-bold" value={dutiesData.beDate} onChange={e => setDutiesData({...dutiesData, beDate: e.target.value})} />
                        ) : <p className="text-sm font-bold text-slate-800">{formatDate(dutiesData.beDate)}</p>}
                    </div>
+               </div>
+
+               {/* Licence (Import): Advance for raw material, EPCG for capital goods */}
+               <div className="mb-8 pb-8 border-b border-slate-50">
+                   <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4 flex items-center gap-2"><ShieldAlert size={14} /> Licence</h3>
+                   {importLicenceType ? (
+                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                       <div>
+                           <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{importLicenceType === LicenceType.EPCG ? 'EPCG Licence' : 'Advance Licence'}</label>
+                           {(editAll || editDuties) ? (
+                               <select
+                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                                 value={licenceImportData.linkedLicenceId}
+                                 onChange={e => setLicenceImportData(prev => ({ ...prev, linkedLicenceId: e.target.value }))}
+                               >
+                                 <option value="">— Select —</option>
+                                 {importLicencesFiltered.map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
+                               </select>
+                           ) : (
+                               <p className="text-sm font-bold text-slate-800">
+                                 {licenceImportData.linkedLicenceId ? (licences.find(l => l.id === licenceImportData.linkedLicenceId)?.number || licenceImportData.linkedLicenceId) : '—'}
+                               </p>
+                           )}
+                       </div>
+                       <div>
+                           <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Quantity</label>
+                           {(editAll || editDuties) ? (
+                               <input
+                                 type="number"
+                                 step="any"
+                                 min="0"
+                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                                 value={licenceImportData.licenceObligationQuantity || ''}
+                                 onChange={e => setLicenceImportData(prev => ({ ...prev, licenceObligationQuantity: parseFloat(e.target.value) || 0 }))}
+                               />
+                           ) : <p className="text-sm font-bold text-slate-800">{licenceImportData.licenceObligationQuantity != null && licenceImportData.licenceObligationQuantity !== 0 ? licenceImportData.licenceObligationQuantity : '—'}</p>}
+                       </div>
+                       <div>
+                           <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Amount (INR)</label>
+                           {(editAll || editDuties) ? (
+                               <input
+                                 type="number"
+                                 step="any"
+                                 min="0"
+                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                                 value={licenceImportData.licenceObligationAmount || ''}
+                                 onChange={e => setLicenceImportData(prev => ({ ...prev, licenceObligationAmount: parseFloat(e.target.value) || 0 }))}
+                               />
+                           ) : <p className="text-sm font-bold text-slate-800">{licenceImportData.licenceObligationAmount != null && licenceImportData.licenceObligationAmount !== 0 ? formatINR(licenceImportData.licenceObligationAmount) : '—'}</p>}
+                       </div>
+                   </div>
+                   ) : (
+                   <p className="text-xs text-slate-400 italic">Add line items with product type to show Advance (raw material) or EPCG (capital goods) licence selection.</p>
+                   )}
                </div>
 
                <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-50">
@@ -1061,6 +1272,21 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                <div><p className="text-[9px] font-black uppercase text-slate-400">Total ({shipment.currency})</p><p className="text-sm font-black text-slate-800">{formatCurrency(paymentSummary.totalFC, shipment.currency)}</p></div>
                <div><p className="text-[9px] font-black uppercase text-amber-600">Pending</p><p className="text-sm font-black text-amber-700">{formatCurrency(paymentSummary.pendingFC, shipment.currency)}</p></div>
              </div>
+             {isExport && (
+             <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/30">
+               <h3 className="text-[10px] font-black uppercase text-slate-500 tracking-widest mb-3">e-BRC</h3>
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div>
+                   <label className="block text-[9px] font-black text-slate-400 uppercase mb-1">e-BRC No.</label>
+                   {editAll ? <input className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.ebrcNo} onChange={e => setExportDocData({...exportDocData, ebrcNo: e.target.value})} /> : <p className="font-bold text-slate-800">{(shipment as any).ebrcNo || '—'}</p>}
+                 </div>
+                 <div>
+                   <label className="block text-[9px] font-black text-slate-400 uppercase mb-1">e-BRC Value</label>
+                   {editAll ? <input type="number" className="w-full px-3 py-2 border rounded-lg font-bold" value={exportDocData.ebrcValue || ''} onChange={e => setExportDocData({...exportDocData, ebrcValue: parseFloat(e.target.value) || 0})} /> : <p className="font-bold text-slate-800">{(shipment as any).ebrcValue != null ? formatINR((shipment as any).ebrcValue) : '—'}</p>}
+                 </div>
+               </div>
+             </div>
+             )}
              {shipment.isUnderLC && (
              <div className="px-6 py-4 border-b border-slate-100 bg-indigo-50/50">
                <h3 className="text-[10px] font-black uppercase text-indigo-700 tracking-widest mb-2 flex items-center gap-2"><CreditCard size={14} /> Payment is on LC</h3>

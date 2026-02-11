@@ -1,1 +1,19 @@
 @import "tailwindcss";
+
+/* Mobile: safe-area insets for notched devices, tap highlight */
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    padding-left: env(safe-area-inset-left, 0);
+    padding-right: env(safe-area-inset-right, 0);
+  }
+}
+
+/* Utility: ensure table containers scroll horizontally on small screens */
+@layer utilities {
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+  }
+}

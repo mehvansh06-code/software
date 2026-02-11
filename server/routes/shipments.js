@@ -174,10 +174,17 @@ function openFolderResponse(res, success, message, statusCode, debug) {
   return res.status(statusCode == null ? 200 : statusCode).json(payload);
 }
 
-/** Converts forward slashes to backslashes; ensures Windows UNC-friendly path (e.g. \\LAPTOP-RMPRPKLJ\Import Shipment Documents\...). */
+/** Converts to Windows path; ensures network (UNC) paths start with exactly \\. */
+/** Ensures Windows UNC paths (IP or network name) start with exactly two backslashes (\\), not four or one. */
 function toWindowsPath(pathStr) {
   if (!pathStr || typeof pathStr !== 'string') return pathStr;
-  return pathStr.replace(/\//g, '\\');
+  let s = pathStr.replace(/\//g, '\\').replace(/\\+$/, '');
+  if (s.startsWith('\\\\')) {
+    s = '\\\\' + s.replace(/^\\+/, '');
+    return s;
+  }
+  if (s.startsWith('\\')) return '\\' + s;
+  return s;
 }
 
 function createRouter(broadcast) {
@@ -197,6 +204,7 @@ function createRouter(broadcast) {
             ...r,
             isUnderLC: !!r.isUnderLC,
             isUnderLicence: !!r.isUnderLicence,
+            linkedLicenceId: r.linkedLicenceId != null && r.linkedLicenceId !== '' ? String(r.linkedLicenceId) : null,
             lcSettled: !!r.lcSettled,
             documents: safeParseJson(r.documents_json, {}),
             history,
@@ -332,11 +340,12 @@ function createRouter(broadcast) {
               id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
               status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
               isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-              licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+              licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
               portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
               incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-              documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
+              shipperSealNumber, lineSealNumber
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           `);
           const runTx = db.transaction(() => {
             stmt50.run(...getShipmentValues(s, documentsFolderPath));
@@ -394,11 +403,12 @@ function createRouter(broadcast) {
         id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
         status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
         isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-        licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+        licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
         portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
         incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
+        shipperSealNumber, lineSealNumber
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
     try {
       const runTx = db.transaction(() => {
@@ -428,11 +438,12 @@ function createRouter(broadcast) {
         id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
         status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
         isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-        licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+        licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
         portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
         incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
+        shipperSealNumber, lineSealNumber
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
     const updateStmt = db.prepare(`
       UPDATE shipments SET
@@ -440,9 +451,11 @@ function createRouter(broadcast) {
         shippingLine=?, portCode=?, portOfLoading=?, portOfDischarge=?,
         assessedValue=?, dutyBCD=?, dutySWS=?, dutyINT=?, gst=?, trackingUrl=?,
         documents_json=?, history_json=?, payments_json=?, items_json=?,
-        licenceObligationAmount=?, incoTerm=?, paymentDueDate=?, expectedArrivalDate=?,
+        isUnderLicence=?, linkedLicenceId=?, licenceObligationAmount=?, licenceObligationQuantity=?,
+        incoTerm=?, paymentDueDate=?, expectedArrivalDate=?,
         invoiceDate=?, freightCharges=?, otherCharges=?, exchangeRate=?, remarks=?,
-        isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?, consigneeId=?, lcSettled=?
+        isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?, consigneeId=?, lcSettled=?,
+        shipperSealNumber=?, lineSealNumber=?
       WHERE id=?
     `);
 
@@ -465,7 +478,8 @@ function createRouter(broadcast) {
             s.shippingLine, s.portCode, s.portOfLoading, s.portOfDischarge,
             s.assessedValue, s.dutyBCD, s.dutySWS, s.dutyINT, s.gst, s.trackingUrl,
             JSON.stringify(s.documents || {}), JSON.stringify(s.history || []), JSON.stringify(s.payments || []), JSON.stringify(s.items || []),
-            s.licenceObligationAmount, s.incoTerm, s.paymentDueDate, s.expectedArrivalDate || null,
+            s.isUnderLicence ? 1 : 0, s.linkedLicenceId || null, s.licenceObligationAmount ?? null, s.licenceObligationQuantity ?? null,
+            s.incoTerm, s.paymentDueDate, s.expectedArrivalDate || null,
             s.invoiceDate || null, s.freightCharges ?? null, s.otherCharges ?? null,
             s.exchangeRate !== undefined && s.exchangeRate !== null ? s.exchangeRate : (existing?.exchangeRate ?? null),
             s.remarks !== undefined ? s.remarks : (existing?.remarks ?? null),
@@ -473,6 +487,8 @@ function createRouter(broadcast) {
             allowedFileStatus,
             consigneeIdVal,
             lcSettledVal,
+            s.shipperSealNumber || null,
+            s.lineSealNumber || null,
             id
           );
           setShipmentItems(id, s.items);

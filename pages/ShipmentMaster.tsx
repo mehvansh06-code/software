@@ -1,7 +1,7 @@
 
-import React, { useState, useMemo } from 'react';
-import { Shipment, Supplier, Buyer, User, UserRole } from '../types';
-import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2 } from 'lucide-react';
+import React, { useState, useMemo, useCallback } from 'react';
+import { Shipment, Supplier, Buyer, User, UserRole, Licence } from '../types';
+import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
 import * as XLSX from 'xlsx';
@@ -11,6 +11,7 @@ interface ShipmentMasterProps {
   shipments: Shipment[];
   suppliers: Supplier[];
   buyers: Buyer[];
+  licences?: Licence[];
   user: User;
   isExport?: boolean;
   onAddShipment: (s: Shipment) => Promise<void>;
@@ -20,13 +21,94 @@ interface ShipmentMasterProps {
 
 type SortKey = 'date_new' | 'date_old' | 'value_high' | 'value_low';
 
-const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, buyers, user, isExport = false, onAddShipment, onUpdateShipment, onDeleteShipment }) => {
+/** Column key, label, and whether to include by default in Excel export. Excluded by default: tracking, file status, documents, JSON blobs. */
+const EXPORT_COLUMN_DEFS: { key: string; label: string; defaultSelected: boolean; exportOnly?: boolean }[] = [
+  { key: 'invoiceNumber', label: 'Invoice No.', defaultSelected: true },
+  { key: 'invoiceDate', label: 'Invoice Date', defaultSelected: true },
+  { key: 'company', label: 'Company', defaultSelected: true },
+  { key: 'partner', label: 'Partner (Supplier/Buyer)', defaultSelected: true },
+  { key: 'productSummary', label: 'Product', defaultSelected: true },
+  { key: 'amount', label: 'Amount', defaultSelected: true },
+  { key: 'currency', label: 'Currency', defaultSelected: true },
+  { key: 'exchangeRate', label: 'Exchange Rate', defaultSelected: true },
+  { key: 'invoiceValueINR', label: 'Amount (INR)', defaultSelected: true },
+  { key: 'expectedShipmentDate', label: 'Expected Shipment Date', defaultSelected: true },
+  { key: 'expectedArrivalDate', label: 'Expected Arrival Date', defaultSelected: true },
+  { key: 'createdAt', label: 'Created Date', defaultSelected: true },
+  { key: 'status', label: 'Status', defaultSelected: true },
+  { key: 'materialStatusLabel', label: 'Status Label', defaultSelected: true },
+  { key: 'paymentStatus', label: 'Payment Status', defaultSelected: true },
+  { key: 'incoTerm', label: 'Inco Term', defaultSelected: true },
+  { key: 'fobValueFC', label: 'FOB Value (FC)', defaultSelected: true },
+  { key: 'fobValueINR', label: 'FOB Value (INR)', defaultSelected: true },
+  { key: 'isUnderLC', label: 'Under LC', defaultSelected: true },
+  { key: 'lcNumber', label: 'LC Number', defaultSelected: true },
+  { key: 'lcAmount', label: 'LC Amount', defaultSelected: true },
+  { key: 'lcDate', label: 'LC Date', defaultSelected: true },
+  { key: 'isUnderLicence', label: 'Under Licence', defaultSelected: true },
+  { key: 'linkedLicenceId', label: 'Licence ID', defaultSelected: true },
+  { key: 'licenceObligationAmount', label: 'Licence Obligation Amount', defaultSelected: true },
+  { key: 'containerNumber', label: 'Container No.', defaultSelected: true },
+  { key: 'blNumber', label: 'BL No.', defaultSelected: true },
+  { key: 'blDate', label: 'BL Date', defaultSelected: true },
+  { key: 'beNumber', label: 'BE No.', defaultSelected: true },
+  { key: 'beDate', label: 'BE Date', defaultSelected: true },
+  { key: 'portCode', label: 'Port Code', defaultSelected: true },
+  { key: 'portOfLoading', label: 'Port of Loading', defaultSelected: true },
+  { key: 'portOfDischarge', label: 'Port of Discharge', defaultSelected: true },
+  { key: 'shippingLine', label: 'Shipping Line', defaultSelected: true },
+  { key: 'paymentDueDate', label: 'Payment Due Date', defaultSelected: true },
+  { key: 'freightCharges', label: 'Freight Charges', defaultSelected: true },
+  { key: 'otherCharges', label: 'Other Charges', defaultSelected: true },
+  { key: 'assessedValue', label: 'Assessed Value', defaultSelected: true },
+  { key: 'dutyBCD', label: 'Duty BCD', defaultSelected: true },
+  { key: 'dutySWS', label: 'Duty SWS', defaultSelected: true },
+  { key: 'dutyINT', label: 'Duty INT', defaultSelected: true },
+  { key: 'gst', label: 'GST', defaultSelected: true },
+  { key: 'lodgement', label: 'Lodgement No.', defaultSelected: true },
+  { key: 'lodgementDate', label: 'Lodgement Date', defaultSelected: true },
+  { key: 'remarks', label: 'Remarks', defaultSelected: true },
+  { key: 'ebrcNo', label: 'e-BRC No.', defaultSelected: true, exportOnly: true },
+  { key: 'ebrcValue', label: 'e-BRC Value', defaultSelected: true, exportOnly: true },
+  { key: 'trackingUrl', label: 'Tracking URL', defaultSelected: false },
+  { key: 'fileStatus', label: 'File Status', defaultSelected: false },
+  { key: 'documentsFolderPath', label: 'Documents Folder', defaultSelected: false },
+  { key: 'documents_json', label: 'Documents (JSON)', defaultSelected: false },
+  { key: 'items_json', label: 'Items (JSON)', defaultSelected: false },
+  { key: 'history_json', label: 'History (JSON)', defaultSelected: false },
+  { key: 'payments_json', label: 'Payments (JSON)', defaultSelected: false },
+  { key: 'attachments_json', label: 'Attachments (JSON)', defaultSelected: false },
+  { key: 'id', label: 'ID', defaultSelected: false },
+  { key: 'supplierId', label: 'Supplier ID', defaultSelected: false },
+  { key: 'buyerId', label: 'Buyer ID', defaultSelected: false },
+  { key: 'invoiceFile', label: 'Invoice File', defaultSelected: false },
+  { key: 'consigneeId', label: 'Consignee ID', defaultSelected: false },
+  { key: 'lcSettled', label: 'LC Settled', defaultSelected: false },
+  { key: 'linkedLcId', label: 'Linked LC ID', defaultSelected: false },
+  { key: 'productId', label: 'Product ID', defaultSelected: false },
+  { key: 'rate', label: 'Rate', defaultSelected: true },
+  { key: 'quantity', label: 'Quantity', defaultSelected: true },
+];
+
+const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, buyers, licences = [], user, isExport = false, onAddShipment, onUpdateShipment, onDeleteShipment }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [companyFilter, setCompanyFilter] = useState('ALL');
   const [sortOrder, setSortOrder] = useState<SortKey>('date_new');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showExportColumnsModal, setShowExportColumnsModal] = useState(false);
   const [editingRemarksId, setEditingRemarksId] = useState<string | null>(null);
   const [remarksDraft, setRemarksDraft] = useState('');
+
+  const exportColumnsForMode = useMemo(() =>
+    EXPORT_COLUMN_DEFS.filter(c => c.exportOnly !== true || isExport),
+    [isExport]
+  );
+  const defaultSelectedSet = useMemo(() =>
+    new Set(exportColumnsForMode.filter(c => c.defaultSelected).map(c => c.key)),
+    [exportColumnsForMode]
+  );
+  const [selectedExportColumns, setSelectedExportColumns] = useState<Set<string>>(() => defaultSelectedSet);
+
   const canDelete = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
 
   const getPartnerName = (sh: Shipment) => {
@@ -167,16 +249,39 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       documents_json: typeof sh.documents === 'string' ? sh.documents : JSON.stringify(sh.documents ?? {}),
       payments_json: typeof sh.payments === 'string' ? sh.payments : JSON.stringify(sh.payments ?? []),
       attachments_json: typeof (sh as any).attachments === 'string' ? (sh as any).attachments : JSON.stringify((sh as any).attachments ?? {}),
+      ...(isExport ? { ebrcNo: (sh as any).ebrcNo ?? '', ebrcValue: (sh as any).ebrcValue ?? 0 } : {}),
     };
   };
 
-  const handleExportExcel = () => {
-    const exportData = filteredAndSorted.map(sh => shipmentToExcelRow(sh));
+  const openExportModal = () => {
+    setSelectedExportColumns(new Set(defaultSelectedSet));
+    setShowExportColumnsModal(true);
+  };
+
+  const runExportExcel = useCallback(() => {
+    const exportData = filteredAndSorted.map(sh => {
+      const full = shipmentToExcelRow(sh);
+      const filtered: Record<string, string | number | boolean | undefined> = {};
+      selectedExportColumns.forEach(k => { if (full[k] !== undefined) filtered[k] = full[k]; });
+      return filtered;
+    });
+    if (exportData.length > 0 && selectedExportColumns.size === 0) return;
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Shipments");
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Shipments');
     XLSX.writeFile(workbook, `Shipments_${isExport ? 'Export' : 'Import'}.xlsx`);
+    setShowExportColumnsModal(false);
+  }, [filteredAndSorted, selectedExportColumns, isExport]);
+
+  const toggleExportColumn = (key: string) => {
+    setSelectedExportColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   };
+  const selectAllExportColumns = () => setSelectedExportColumns(new Set(exportColumnsForMode.map(c => c.key)));
+  const deselectAllExportColumns = () => setSelectedExportColumns(new Set());
 
   const themeClass = isExport ? 'text-amber-600 bg-amber-50' : 'text-indigo-600 bg-indigo-50';
 
@@ -194,7 +299,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           >
             <Plus size={18} /> New {isExport ? 'Export' : 'Import'}
           </button>
-          <button onClick={handleExportExcel} className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-2xl font-bold hover:bg-slate-50 transition-all shadow-sm">
+          <button onClick={openExportModal} className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-2xl font-bold hover:bg-slate-50 transition-all shadow-sm">
             <FileDown size={18} /> Excel
           </button>
         </div>
@@ -210,8 +315,48 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
               isExport={isExport}
               suppliers={suppliers}
               buyers={buyers}
+              licences={licences}
               onSubmit={async (s) => { await onAddShipment(s); setShowAddForm(false); }} 
             />
+          </div>
+        </div>
+      )}
+
+      {showExportColumnsModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-2xl max-h-[85vh] rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <h2 className="text-base font-black text-slate-900 uppercase tracking-wide">Choose columns to export</h2>
+              <button onClick={() => setShowExportColumnsModal(false)} className="p-2 hover:bg-slate-200 rounded-full transition-all">
+                <X size={20} className="text-slate-500" />
+              </button>
+            </div>
+            <div className="p-4 flex gap-2 border-b border-slate-100">
+              <button type="button" onClick={selectAllExportColumns} className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700">Select all</button>
+              <button type="button" onClick={deselectAllExportColumns} className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700">Deselect all</button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+              {exportColumnsForMode.map(col => (
+                <label key={col.key} className="flex items-center gap-2 py-1.5 cursor-pointer group">
+                  <span className="flex items-center text-slate-400 group-hover:text-indigo-500">
+                    {selectedExportColumns.has(col.key) ? <CheckSquare size={18} className="text-indigo-600" /> : <Square size={18} className="border border-slate-300 rounded" />}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={selectedExportColumns.has(col.key)}
+                    onChange={() => toggleExportColumn(col.key)}
+                    className="sr-only"
+                  />
+                  <span className="text-sm font-medium text-slate-800">{col.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="p-6 border-t border-slate-100 flex justify-end gap-3 bg-slate-50">
+              <button type="button" onClick={() => setShowExportColumnsModal(false)} className="px-5 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-200 text-sm">Cancel</button>
+              <button type="button" onClick={runExportExcel} disabled={selectedExportColumns.size === 0} className="px-6 py-2.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm flex items-center gap-2">
+                <FileDown size={16} /> Export to Excel
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -241,7 +386,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       </div>
 
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto scroll-touch">
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">

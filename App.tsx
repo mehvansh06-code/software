@@ -31,6 +31,7 @@ const App: React.FC = () => {
     handleUpdateSupplier,
     handleAddBuyer,
     handleUpdateBuyer,
+    handleAddLicence,
     handleUpdateLicence,
     handleUpdateLC,
   } = actions;
@@ -82,6 +83,7 @@ const App: React.FC = () => {
         handleUpdateSupplier={handleUpdateSupplier}
         handleAddBuyer={handleAddBuyer}
         handleUpdateBuyer={handleUpdateBuyer}
+        handleAddLicence={handleAddLicence}
         handleUpdateLicence={handleUpdateLicence}
         handleUpdateLC={handleUpdateLC}
       />

@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, Consignee, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material } from '../types';
-import { UploadCloud, Award, CreditCard, Package, Zap, Trash2, CheckCircle, Anchor } from 'lucide-react';
+import { UploadCloud, Award, CreditCard, Package, Zap, Trash2, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatCurrency, formatINR, formatDate, COMPANY_OPTIONS } from '../constants';
 import { api } from '../api';
@@ -10,13 +10,15 @@ import { MASTER_PRODUCTS } from '../sampleData';
 interface NewShipmentProps {
   suppliers?: Supplier[];
   buyers?: Buyer[];
+  licences?: Licence[];
   isExport?: boolean;
   onSubmit: (shipment: Shipment) => Promise<void>;
 }
 
-const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], isExport = false, onSubmit }) => {
+const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], licences: licencesProp, isExport = false, onSubmit }) => {
   const navigate = useNavigate();
-  const [licences, setLicences] = useState<Licence[]>([]);
+  const [licencesLocal, setLicencesLocal] = useState<Licence[]>([]);
+  const licences = (licencesProp != null && Array.isArray(licencesProp)) ? licencesProp : licencesLocal;
   const [materials, setMaterials] = useState<Material[]>([]);
   const [selectedEntityId, setSelectedEntityId] = useState('');
 
@@ -28,7 +30,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 
   const [formData, setFormData] = useState<any>({
     currency: isExport ? 'USD' : 'USD',
-    exchangeRate: 84.0,
+    exchangeRate: '',
     incoTerm: 'FOB',
     invoiceNumber: '',
     company: 'GFPL',
@@ -56,15 +58,18 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [licData, matData] = await Promise.all([api.licences.list(), api.materials.list()]);
-        setLicences(licData || []);
+        const [licData, matData] = await Promise.all([
+          licencesProp != null ? Promise.resolve(null) : api.licences.list(),
+          api.materials.list()
+        ]);
+        if (licencesProp == null) setLicencesLocal(licData || []);
         setMaterials(Array.isArray(matData) ? matData : []);
       } catch (e) {
         console.error("Data load failed", e);
       }
     };
     loadData();
-  }, []);
+  }, [licencesProp]);
 
   const approvedSuppliers = useMemo(() => suppliers.filter(s => s.status === 'APPROVED'), [suppliers]);
   const approvedBuyers = useMemo(() => buyers.filter(b => b.status === 'APPROVED'), [buyers]);
@@ -138,21 +143,13 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 
   const filteredLicences = useMemo(() => {
     const type = isExport ? (formData as any).exportLicenceType : detectedLicenceType;
-    if (!type) return [];
-    return licences.filter(l => l.company === formData.company && l.status === 'ACTIVE' && l.type === type);
+    const byCompany = licences.filter(l => l.company === formData.company && l.status === 'ACTIVE');
+    if (type) return byCompany.filter(l => l.type === type);
+    return byCompany;
   }, [licences, formData.company, detectedLicenceType, isExport, formData]);
 
   const handleChange = (field: string, value: any) => {
-    setFormData((prev: any) => {
-      const newState = { ...prev, [field]: value };
-      if (field === 'currency') {
-         if (value === 'USD') newState.exchangeRate = 84.0;
-         else if (value === 'EUR') newState.exchangeRate = 90.0;
-         else if (value === 'GBP') newState.exchangeRate = 106.5;
-         else newState.exchangeRate = 1.0;
-      }
-      return newState;
-    });
+    setFormData((prev: any) => ({ ...prev, [field]: value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -168,7 +165,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 
     setIsSubmitting(true);
     try {
-      const exchRate = parseFloat(formData.exchangeRate) || 84.0;
+      const exchRate = parseFloat(formData.exchangeRate) || 1;
       const totalOrAmountFC = isExport ? parseFloat(formData.amountFC) || 0 : totalAmount;
       const finalFobFC = parseFloat(formData.fobValueFC) || totalOrAmountFC;
       const itemsToUse = isExport
@@ -196,7 +193,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
         invoiceDate: isExport ? (formData.invoiceDate || undefined) : formData.invoiceDate,
         freightCharges: !isExport ? (parseFloat(formData.freightCharges) || 0) : undefined,
         otherCharges: !isExport ? (parseFloat(formData.otherCharges) || 0) : undefined,
-        paymentDueDate: formData.paymentDueDate,
+        paymentDueDate: isExport ? undefined : (formData.paymentDueDate || undefined),
         fobValueFC: finalFobFC,
         fobValueINR: finalFobFC * exchRate,
         isUnderLC: formData.isUnderLC,
@@ -309,27 +306,6 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                        </>
                      )}
                    </select>
-                 </div>
-                 {isExport && (
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Exchange Rate (To INR)</label>
-                      <input type="number" step="0.01" required className="w-full px-4 py-3 rounded-xl border font-bold" value={formData.exchangeRate} onChange={e => handleChange('exchangeRate', e.target.value)} />
-                   </div>
-                 )}
-               </div>
-            </div>
-
-            {/* Logistics & Ports */}
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
-               <h2 className="text-xs font-black uppercase text-slate-400 mb-6 flex items-center gap-2"><Anchor size={16} /> Logistics Route</h2>
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Port of Loading</label>
-                   <input className="w-full px-4 py-3 rounded-xl border font-bold" placeholder="e.g. Shanghai" value={formData.portOfLoading} onChange={e => handleChange('portOfLoading', e.target.value)} />
-                 </div>
-                 <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Port of Discharge</label>
-                   <input className="w-full px-4 py-3 rounded-xl border font-bold" placeholder="e.g. Mundra" value={formData.portOfDischarge} onChange={e => handleChange('portOfDischarge', e.target.value)} />
                  </div>
                </div>
             </div>
@@ -461,11 +437,12 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                 )}
               </div>
 
+            {!isExport && (
             <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 space-y-4">
               <div className="flex items-center justify-between border-b pb-4 mb-4">
                 <h3 className="font-bold flex items-center gap-2 text-slate-700 uppercase text-xs tracking-widest">
                   <Award size={18} className="text-emerald-600" /> 
-                  {isExport ? 'Licence Fulfillment (Export Credit)' : 'Licence Utilization (Duty Benefit)'}
+                  Licence Utilization (Duty Benefit)
                 </h3>
                 <input type="checkbox" className="w-6 h-6 rounded-lg accent-emerald-600" checked={formData.isUnderLicence} onChange={e => handleChange('isUnderLicence', e.target.checked)} />
               </div>
@@ -480,38 +457,25 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                        <span className="text-[10px] font-black uppercase bg-slate-100 text-slate-500 px-2 py-1 rounded">No items added</span>
                      )}
                   </div>
-                  
-                  {(detectedLicenceType || (isExport && formData.exportLicenceType)) ? (
+                  {filteredLicences.length > 0 ? (
                     <>
-                      {isExport && (
-                        <div className="mb-4">
-                          <label className="block text-[9px] font-black uppercase text-slate-500 mb-2">Licence Type</label>
-                          <select className="w-full px-4 py-3 rounded-xl border text-sm font-bold" value={formData.exportLicenceType || ''} onChange={e => handleChange('exportLicenceType', e.target.value as '' | LicenceType)}>
-                            <option value="">-- Select Type --</option>
-                            <option value={LicenceType.ADVANCE}>{LicenceType.ADVANCE}</option>
-                            <option value={LicenceType.EPCG}>{LicenceType.EPCG}</option>
-                          </select>
-                        </div>
-                      )}
-                      <label className="block text-[9px] font-black uppercase text-slate-500 mb-2">Select Active {(formData.exportLicenceType || detectedLicenceType)} Licence</label>
+                      <label className="block text-[9px] font-black uppercase text-slate-500 mb-2">
+                        {detectedLicenceType ? `Select Active ${detectedLicenceType} Licence` : 'Select Active Licence'}
+                      </label>
                       <select className="w-full px-4 py-3 rounded-xl border text-sm font-bold" value={formData.linkedLicenceId} onChange={e => handleChange('linkedLicenceId', e.target.value)}>
                         <option value="">-- Active Licences --</option>
-                        {filteredLicences.map(l => <option key={l.id} value={l.id}>{l.number} (Balance: {formatINR(l.eoRequired - l.eoFulfilled)})</option>)}
+                        {filteredLicences.map(l => <option key={l.id} value={l.id}>{l.number} ({l.type}) — Balance: {formatINR(l.eoRequired - l.eoFulfilled)}</option>)}
                       </select>
-                      {filteredLicences.length === 0 && (formData.exportLicenceType || detectedLicenceType) && <p className="text-[10px] text-red-400 mt-2 font-bold">No active {(formData.exportLicenceType || detectedLicenceType)} licences found for {formData.company}.</p>}
+                      {!detectedLicenceType && <p className="text-[10px] text-slate-500 mt-2">Add items to auto-detect licence type (Advance/EPCG). You can still link any active licence above.</p>}
                     </>
                   ) : (
-                    <p className="text-sm text-slate-400 italic">{isExport ? 'Select licence type above to link.' : 'Add items to determine applicable licence type.'}</p>
+                    <p className="text-sm text-slate-400 italic">{detectedLicenceType ? `No active ${detectedLicenceType} licences found for ${formData.company}.` : 'No active licences for this company. Add licences in Licence Tracker first.'}</p>
                   )}
-                  
-                  <p className="text-[10px] text-slate-400 mt-2 italic">
-                    {isExport 
-                      ? 'Exports fulfill the obligation for this licence.' 
-                      : 'Imports create/increase the obligation target for this licence.'}
-                  </p>
+                  <p className="text-[10px] text-slate-400 mt-2 italic">Imports create/increase the obligation target for this licence.</p>
                 </div>
               )}
             </div>
+            )}
 
             <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
@@ -550,11 +514,13 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
             </div>
             )}
 
+            {!isExport && (
             <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Payment Due Date</label>
                <input type="date" className="w-full px-4 py-3 rounded-xl border font-bold" value={formData.paymentDueDate} onChange={e => handleChange('paymentDueDate', e.target.value)} />
                <p className="text-[9px] text-slate-400 mt-2 italic">System will remind 3 days prior to due date.</p>
             </div>
+            )}
           </div>
 
           <div className="space-y-6">
@@ -600,7 +566,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                 <p className="text-3xl font-black">{formatCurrency(isExport ? (parseFloat(formData.amountFC) || 0) : totalAmount, formData.currency)}</p>
                 <div className="mt-4 pt-4 border-t border-white/10 flex justify-between">
                    <span className="text-[9px] text-slate-500 uppercase font-black">Settlement (INR)</span>
-                   <span className="text-xs font-bold text-indigo-400">{formatINR((isExport ? (parseFloat(formData.amountFC) || 0) : totalAmount) * (parseFloat(formData.exchangeRate) || 84))}</span>
+                   <span className="text-xs font-bold text-indigo-400">{formatINR((isExport ? (parseFloat(formData.amountFC) || 0) : totalAmount) * (parseFloat(formData.exchangeRate) || 0))}</span>
                 </div>
               </div>
             </div>

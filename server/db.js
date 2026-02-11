@@ -92,6 +92,7 @@ db.exec(`
     isUnderLicence INTEGER,
     linkedLicenceId TEXT,
     licenceObligationAmount REAL,
+    licenceObligationQuantity REAL,
     containerNumber TEXT,
     blNumber TEXT,
     blDate TEXT,
@@ -121,6 +122,7 @@ db.exec(`
     number TEXT UNIQUE,
     type TEXT,
     issueDate TEXT,
+    importValidityDate TEXT,
     expiryDate TEXT,
     dutySaved REAL,
     eoRequired REAL,
@@ -171,6 +173,10 @@ runMigration('ALTER TABLE shipments ADD COLUMN lcOpeningDate TEXT', 'shipments.l
 runMigration('ALTER TABLE shipments ADD COLUMN fileStatus TEXT', 'shipments.fileStatus');
 runMigration('ALTER TABLE shipments ADD COLUMN consigneeId TEXT', 'shipments.consigneeId');
 runMigration('ALTER TABLE shipments ADD COLUMN lcSettled INTEGER', 'shipments.lcSettled');
+runMigration('ALTER TABLE shipments ADD COLUMN licenceObligationQuantity REAL', 'shipments.licenceObligationQuantity');
+runMigration('ALTER TABLE shipments ADD COLUMN shipperSealNumber TEXT', 'shipments.shipperSealNumber');
+runMigration('ALTER TABLE shipments ADD COLUMN lineSealNumber TEXT', 'shipments.lineSealNumber');
+runMigration('ALTER TABLE licences ADD COLUMN importValidityDate TEXT', 'licences.importValidityDate');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_lc_reference ON shipments(lcReferenceNumber) WHERE lcReferenceNumber IS NOT NULL', 'idx_shipments_lc_reference');
 runMigration('ALTER TABLE buyers ADD COLUMN consignees_json TEXT', 'buyers.consignees_json');
 runMigration('ALTER TABLE lcs ADD COLUMN buyerId TEXT', 'lcs.buyerId');
@@ -224,6 +230,48 @@ runMigration(`
 
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_items_shipmentId ON shipment_items(shipmentId)', 'idx_shipment_items');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_history_shipmentId ON shipment_history(shipmentId)', 'idx_shipment_history');
+
+// Sales Indent domain: domestic buyers (India) and indent product master
+runMigration(`
+  CREATE TABLE IF NOT EXISTS domestic_buyers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    billingAddress TEXT,
+    state TEXT,
+    gstNo TEXT,
+    mobile TEXT,
+    salesPersonName TEXT,
+    salesPersonMobile TEXT,
+    salesPersonEmail TEXT,
+    paymentTerms TEXT,
+    createdAt TEXT
+  )
+`, 'domestic_buyers');
+runMigration(`
+  CREATE TABLE IF NOT EXISTS domestic_buyer_sites (
+    id TEXT PRIMARY KEY,
+    domesticBuyerId TEXT NOT NULL,
+    siteName TEXT,
+    shippingAddress TEXT,
+    FOREIGN KEY(domesticBuyerId) REFERENCES domestic_buyers(id) ON DELETE CASCADE
+  )
+`, 'domestic_buyer_sites');
+runMigration(`
+  CREATE TABLE IF NOT EXISTS indent_products (
+    id TEXT PRIMARY KEY,
+    quality TEXT NOT NULL,
+    description TEXT,
+    designNo TEXT,
+    shadeNo TEXT,
+    hsnCode TEXT,
+    unit TEXT DEFAULT 'MTR',
+    rateInr REAL DEFAULT 0,
+    rateUsd REAL DEFAULT 0,
+    rateGbp REAL DEFAULT 0
+  )
+`, 'indent_products');
+runMigration('CREATE INDEX IF NOT EXISTS idx_domestic_buyer_sites_buyerId ON domestic_buyer_sites(domesticBuyerId)', 'idx_domestic_buyer_sites');
+runMigration('CREATE INDEX IF NOT EXISTS idx_indent_products_quality ON indent_products(quality)', 'idx_indent_products_quality');
 
 function migrateJsonToNormalized() {
   try {
@@ -289,6 +337,7 @@ function getShipmentValues(s, folderPath) {
     s.isUnderLicence ? 1 : 0,
     s.linkedLicenceId || null,
     s.licenceObligationAmount ?? 0,
+    s.licenceObligationQuantity ?? null,
     s.containerNumber || null,
     s.blNumber || null,
     s.blDate || null,
@@ -317,7 +366,9 @@ function getShipmentValues(s, folderPath) {
     folderPath ?? null,
     s.remarks ?? null,
     s.consigneeId ?? null,
-    s.lcSettled ? 1 : 0
+    s.lcSettled ? 1 : 0,
+    s.shipperSealNumber || null,
+    s.lineSealNumber || null
   ];
 }
 
@@ -357,11 +408,11 @@ function seedDummyData() {
     ['b2', 'NY Trends Inc', '5th Avenue, New York', 'USA', 'Chase Bank', 'NY Trends Inc', 'CHASUS33XXX', 'Manhattan, NY', 'Sarah Jessica', 'sarah@nytrends.com', 'J P Tosniwal', '9988776655', 0, 'APPROVED', 'J P Tosniwal', now],
     ['b3', 'Dubai Textile Trading', 'Sheikh Zayed Road, Dubai', 'UAE', 'Emirates NBD', 'Dubai Textile Trading LLC', 'EBILAEAD', 'Dubai', 'Omar Hassan', 'omar@dubaitextile.ae', 'Sales Team', '9123456789', 0, 'APPROVED', 'Admin', now],
   ]);
-  runMany('INSERT INTO licences VALUES (?,?,?,?,?,?,?,?,?,?)', [
-    ['lic1', '0310224567', 'ADVANCE', daysAgo(200), daysFuture(90), 1000000, 6000000, 500000, 'GFPL', 'ACTIVE'],
-    ['lic2', '0310224568', 'ADVANCE', daysAgo(180), daysFuture(120), 1200000, 7000000, 2000000, 'GFPL', 'ACTIVE'],
-    ['lic3', '0310224569', 'EPCG', daysAgo(150), daysFuture(200), 800000, 5000000, 1500000, 'GTEX', 'ACTIVE'],
-    ['lic4', '0310224570', 'EPCG', daysAgo(100), daysFuture(250), 900000, 5500000, 0, 'GFPL', 'ACTIVE'],
+  runMany('INSERT INTO licences (id, number, type, issueDate, importValidityDate, expiryDate, dutySaved, eoRequired, eoFulfilled, company, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+    ['lic1', '0310224567', 'ADVANCE', daysAgo(200), daysFuture(90), daysFuture(90), 1000000, 6000000, 500000, 'GFPL', 'ACTIVE'],
+    ['lic2', '0310224568', 'ADVANCE', daysAgo(180), daysFuture(120), daysFuture(120), 1200000, 7000000, 2000000, 'GFPL', 'ACTIVE'],
+    ['lic3', '0310224569', 'EPCG', daysAgo(150), daysFuture(200), daysFuture(200), 800000, 5000000, 1500000, 'GTEX', 'ACTIVE'],
+    ['lic4', '0310224570', 'EPCG', daysAgo(100), daysFuture(250), daysFuture(250), 900000, 5500000, 0, 'GFPL', 'ACTIVE'],
   ]);
   runMany('INSERT INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [
     ['lc1', 'LC/IMP/24/0100', 'State Bank of India', 's1', 50000, 'USD', daysAgo(30), daysFuture(60), daysFuture(90), 'GFPL', 'OPEN', 'Q4 Cotton import'],
@@ -377,11 +428,12 @@ function seedDummyData() {
     id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
     status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
     isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-    licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
+    shipperSealNumber, lineSealNumber
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const shipRows = [
     { id: 'sh1', supplierId: 's1', buyerId: null, productId: 'm1', invoiceNumber: 'INV/IMP/24/001', company: 'GFPL', amount: 17500, currency: 'USD', exchangeRate: 84, rate: 3.5, quantity: 5000, status: 'IN_TRANSIT', expectedShipmentDate: daysAgo(5), createdAt: now, fobValueFC: 17500, fobValueINR: 1470000, invoiceValueINR: 1470000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0100', lcAmount: 0, lcDate: daysAgo(30), isUnderLicence: 1, linkedLicenceId: 'lic1', licenceObligationAmount: 50000, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Shanghai', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(30), expectedArrivalDate: daysFuture(25), invoiceDate: daysAgo(10), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item1 },
     { id: 'sh2', supplierId: 's2', buyerId: null, productId: 'm2', invoiceNumber: 'INV/IMP/24/002', company: 'GFPL', amount: 12000, currency: 'EUR', exchangeRate: 90, rate: 1.2, quantity: 10000, status: 'ORDERED', expectedShipmentDate: null, createdAt: now, fobValueFC: 12000, fobValueINR: 1080000, invoiceValueINR: 1080000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0101', lcAmount: 0, lcDate: daysAgo(15), isUnderLicence: 1, linkedLicenceId: 'lic2', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Hamburg', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(45), expectedArrivalDate: null, invoiceDate: daysAgo(3), freightCharges: 500, otherCharges: 200, documents: {}, history: hist, payments: [], items: item2 },
@@ -417,9 +469,9 @@ function seedAdditionalData() {
   runMany('INSERT OR IGNORE INTO buyers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
     ['b10', 'Berlin Textiles GmbH', 'Berlin', 'Germany', 'Commerzbank', 'Berlin Textiles GmbH', 'COBADEFF', 'Berlin', 'Klaus Weber', 'klaus@berlintextiles.de', 'Sales', '9111223344', 0, 'APPROVED', 'Admin', now],
   ]);
-  runMany('INSERT OR IGNORE INTO licences VALUES (?,?,?,?,?,?,?,?,?,?)', [
-    ['lic10', '0310224571', 'ADVANCE', daysAgo(90), daysFuture(180), 1100000, 6500000, 800000, 'GFPL', 'ACTIVE'],
-    ['lic11', '0310224572', 'EPCG', daysAgo(60), daysFuture(220), 850000, 5200000, 600000, 'GTEX', 'ACTIVE'],
+  runMany('INSERT OR IGNORE INTO licences (id, number, type, issueDate, importValidityDate, expiryDate, dutySaved, eoRequired, eoFulfilled, company, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+    ['lic10', '0310224571', 'ADVANCE', daysAgo(90), daysFuture(180), daysFuture(180), 1100000, 6500000, 800000, 'GFPL', 'ACTIVE'],
+    ['lic11', '0310224572', 'EPCG', daysAgo(60), daysFuture(220), daysFuture(220), 850000, 5200000, 600000, 'GTEX', 'ACTIVE'],
   ]);
   runMany('INSERT OR IGNORE INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [
     ['lc10', 'LC/IMP/24/0103', 'Axis Bank', 's10', 28000, 'USD', daysAgo(10), daysFuture(50), daysFuture(80), 'GFPL', 'OPEN', 'Vietnam cotton'],
@@ -430,11 +482,12 @@ function seedAdditionalData() {
     id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
     status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
     isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-    licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
+    shipperSealNumber, lineSealNumber
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const item5 = [{ productId: 'm10', productName: 'Combed Cotton 30s', hsnCode: '5205', quantity: 8000, unit: 'KGS', rate: 3.2, amount: 25600, productType: 'RAW_MATERIAL' }];
   const item6 = [{ productId: 'm11', productName: 'Ring Spun Yarn 40s', hsnCode: '5206', quantity: 5000, unit: 'KGS', rate: 4.0, amount: 20000, productType: 'RAW_MATERIAL' }];
   const item7 = [{ productId: 'mp2', productName: 'Polyester Staple Fiber', hsnCode: '5503', quantity: 4000, unit: 'KGS', rate: 1.5, amount: 6000, productType: 'RAW_MATERIAL' }];
@@ -465,11 +518,12 @@ function ensureMinimalShipments() {
     id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
     status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
     isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-    licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
+    shipperSealNumber, lineSealNumber
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const item1 = [{ productId: mat.id, productName: mat.name, hsnCode: mat.hsnCode || '', quantity: 1000, unit: 'KGS', rate: 5, amount: 5000, productType: 'RAW_MATERIAL' }];
   const s1 = {
     id: 'shseed1', supplierId: sup.id, buyerId: null, productId: mat.id, invoiceNumber: 'INV/IMP/SEED/001', company: 'GFPL',

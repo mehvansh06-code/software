@@ -16,6 +16,9 @@ const shipmentRoutes = require('./server/routes/shipments');
 const buyerRoutes = require('./server/routes/buyers');
 const licenceRoutes = require('./server/routes/licences');
 const lcRoutes = require('./server/routes/lcs');
+const domesticBuyerRoutes = require('./server/routes/domesticBuyers');
+const indentProductRoutes = require('./server/routes/indentProducts');
+const indentRoutes = require('./server/routes/indent');
 
 const port = 3001;
 const app = express();
@@ -64,6 +67,9 @@ app.use('/api/shipments', shipmentRoutes(broadcast));
 app.use('/api/buyers', buyerRoutes(broadcast));
 app.use('/api/licences', licenceRoutes(broadcast));
 app.use('/api/lcs', lcRoutes(broadcast));
+app.use('/api/domestic-buyers', domesticBuyerRoutes(broadcast));
+app.use('/api/indent-products', indentProductRoutes(broadcast));
+app.use('/api/indent', indentRoutes());
 
 app.get('/api/lc-transactions', (req, res) => {
   try {

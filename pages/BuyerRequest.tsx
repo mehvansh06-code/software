@@ -95,6 +95,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
           };
       await onSubmit(payload);
       if (isEdit && onCancel) onCancel();
+      else if (onCancel) onCancel();
       else navigate('/buyers');
     } catch (err) {
       console.error(err);

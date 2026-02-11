@@ -7,7 +7,108 @@ export enum UserRole {
 
 export enum AppDomain {
   IMPORT = 'IMPORT',
-  EXPORT = 'EXPORT'
+  EXPORT = 'EXPORT',
+  LICENCE = 'LICENCE',
+  SALES_INDENT = 'SALES_INDENT'
+}
+
+// ----- Sales Indent (PI) domain -----
+
+export interface DomesticBuyerSite {
+  id: string;
+  siteName: string;
+  shippingAddress: string;
+}
+
+export interface DomesticBuyer {
+  id: string;
+  name: string;
+  billingAddress: string;
+  state: string;
+  gstNo: string;
+  mobile: string;
+  salesPersonName: string;
+  salesPersonMobile: string;
+  salesPersonEmail: string;
+  paymentTerms: string;
+  sites: DomesticBuyerSite[];
+  createdAt?: string;
+}
+
+export interface IndentProduct {
+  id: string;
+  quality: string;
+  description: string;
+  designNo: string;
+  shadeNo: string;
+  hsnCode: string;
+  unit: string;
+  rateInr: number;
+  rateUsd: number;
+  rateGbp: number;
+}
+
+export interface IndentCartItem {
+  quality: string;
+  desc: string;
+  design: string;
+  shade: string;
+  hsn: string;
+  unit: string;
+  qty: number;
+  rate: number;
+  amount: number;
+  buyerRef: string;
+}
+
+export interface IndentCompanyInfo {
+  name: string;
+  address: string;
+  gstin: string;
+  iec: string;
+  phone: string;
+  bankDetails: {
+    accountHolder: string;
+    bank: string;
+    branch: string;
+    acct: string;
+    ifsc: string;
+    swift?: string;
+  };
+}
+
+/** Payload sent to POST /api/indent/generate */
+export interface IndentGeneratePayload {
+  company: string;
+  txnType: 'Domestic' | 'Export';
+  currency: string;
+  ourRef: string;
+  buyerRef: string;
+  ordRef: string;
+  date: string;
+  buyerName: string;
+  billAddr: string;
+  buyerGst: string;
+  buyerState: string;
+  shipSite: string;
+  shipAddr: string;
+  shipContact: string;
+  salesName: string;
+  salesMob: string;
+  salesMail: string;
+  incoterm?: string;
+  countryOrigin?: string;
+  countryDest?: string;
+  portLoad?: string;
+  portDis?: string;
+  shippingDate?: string;
+  validityDays?: number;
+  items: IndentCartItem[];
+  subtotal: number;
+  paymentTerms: string;
+  sampling?: string;
+  packaging?: string;
+  terms?: string;
 }
 
 export interface User {
@@ -196,6 +297,10 @@ export interface Shipment {
   portOfDischarge?: string;
   shippingLine?: string;
   trackingUrl?: string;
+  /** Shipper or custom seal number (e.g. container seal) */
+  shipperSealNumber?: string;
+  /** Line seal number */
+  lineSealNumber?: string;
   
   // Duties & Taxes
   assessedValue: number;
@@ -214,6 +319,8 @@ export interface Shipment {
   isUnderLicence: boolean;
   linkedLicenceId?: string;
   licenceObligationAmount?: number;
+  /** Quantity utilized against the linked licence (import). */
+  licenceObligationQuantity?: number;
   
   status: ShipmentStatus;
   history: ShipmentHistory[];
@@ -247,10 +354,17 @@ export interface Licence {
   id: string;
   number: string;
   type: LicenceType;
+  /** Opening date of the licence */
   issueDate: string;
+  /** Until when imports under this licence can be cleared (duty-free) */
+  importValidityDate?: string;
+  /** Export obligation must be fulfilled by this date (promise to government) */
   expiryDate: string;
+  /** Fixed duty-free import limit (INR): max value of goods you can import without duty/GST under this licence */
   dutySaved: number;
+  /** Export obligation (INR): amount you must export (finished goods, foreign exchange) by expiryDate to fulfill your promise */
   eoRequired: number;
+  /** Fulfilled so far (INR): sum of linked export shipments’ invoice value in INR */
   eoFulfilled: number;
   company: 'GFPL' | 'GTEX';
   status: 'ACTIVE' | 'CLOSED' | 'EXPIRED';

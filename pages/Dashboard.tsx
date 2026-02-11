@@ -73,9 +73,9 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
 
   return (
     <div className="space-y-8 animate-in fade-in pb-20">
-      <header className="flex justify-between items-center">
+      <header className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight italic uppercase">Management Control</h1>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight italic uppercase">Management Control</h1>
           <div className="flex items-center gap-3 mt-1">
              <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border ${
               sysStats.mode === 'BROWSER_PERSISTENT' ? 'bg-amber-50 border-amber-100 text-amber-600' : 'bg-emerald-50 border-emerald-100 text-emerald-500'
@@ -85,7 +85,7 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
             </div>
           </div>
         </div>
-        <button onClick={refreshStats} className={`p-2.5 rounded-xl border bg-white hover:bg-slate-50 transition-all ${isRefreshing ? 'animate-spin' : ''}`}>
+        <button onClick={refreshStats} className={`p-2.5 rounded-xl border bg-white hover:bg-slate-50 transition-all min-h-[44px] min-w-[44px] flex items-center justify-center sm:ml-auto ${isRefreshing ? 'animate-spin' : ''}`}>
           <RefreshCw size={18} className="text-slate-400" />
         </button>
       </header>
@@ -132,47 +132,58 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100 lg:col-span-2">
-          <div className="flex items-center justify-between mb-6">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="flex items-center justify-between">
             <h2 className="text-sm font-black text-slate-900 uppercase flex items-center gap-2">
                 <Calendar size={16} className="text-indigo-500" /> Expected Arrivals
             </h2>
             <Link to="/shipments" className="text-indigo-600 text-xs font-bold flex items-center gap-1">View Ledger <ArrowRight size={14}/></Link>
           </div>
-          <div className="overflow-x-auto mb-8">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[9px] font-black text-slate-400 uppercase border-b">
-                  <th className="pb-3 pr-4">Expected Arrival</th>
-                  <th className="pb-3 pr-4">Invoice #</th>
-                  <th className="pb-3 pr-4">Company</th>
-                  <th className="pb-3 pr-4">Supplier</th>
-                  <th className="pb-3 pr-4">Product</th>
-                  <th className="pb-3 text-right">Value</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {shipments
-                  .filter(s => !!s.supplierId && s.expectedArrivalDate)
-                  .sort((a, b) => new Date(a.expectedArrivalDate!).getTime() - new Date(b.expectedArrivalDate!).getTime())
-                  .slice(0, 10)
-                  .map(sh => (
-                    <tr key={sh.id}>
-                      <td className="py-3 pr-4 font-mono text-xs text-slate-700">{formatDate(sh.expectedArrivalDate)}</td>
-                      <td className="py-3 pr-4 font-bold text-slate-900">{sh.invoiceNumber}</td>
-                      <td className="py-3 pr-4 text-xs text-slate-600">{getCompanyName(sh.company)}</td>
-                      <td className="py-3 pr-4 text-slate-700">{suppliers.find(s => s.id === sh.supplierId)?.name || '—'}</td>
-                      <td className="py-3 pr-4 text-slate-600">{(sh.items && sh.items[0]) ? sh.items[0].productName : '—'}</td>
-                      <td className="py-3 text-right font-bold text-indigo-600">{formatCurrency(sh.amount, sh.currency)}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-            {!shipments.some(s => s.expectedArrivalDate) && (
-              <p className="py-6 text-center text-slate-400 text-xs italic">Set expected arrival dates on shipments to see them here.</p>
-            )}
-          </div>
-        </section>
+
+          {(() => {
+            const withEta = shipments.filter(s => !!s.supplierId && s.expectedArrivalDate);
+            const gfplList = withEta.filter(s => s.company === 'GFPL').sort((a, b) => new Date(a.expectedArrivalDate!).getTime() - new Date(b.expectedArrivalDate!).getTime());
+            const gtexList = withEta.filter(s => s.company === 'GTEX').sort((a, b) => new Date(a.expectedArrivalDate!).getTime() - new Date(b.expectedArrivalDate!).getTime());
+            const TableCard = ({ list, heading }: { list: typeof withEta; heading: string }) => (
+              <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100">
+                <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-6 border-b border-slate-100 pb-3">{heading}</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-[9px] font-black text-slate-400 uppercase border-b">
+                        <th className="pb-3 pr-4">Expected Arrival</th>
+                        <th className="pb-3 pr-4">Invoice #</th>
+                        <th className="pb-3 pr-4">Supplier</th>
+                        <th className="pb-3 pr-4">Product</th>
+                        <th className="pb-3 text-right">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {list.slice(0, 8).map(sh => (
+                        <tr key={sh.id}>
+                          <td className="py-3 pr-4 font-mono text-xs text-slate-700">{formatDate(sh.expectedArrivalDate)}</td>
+                          <td className="py-3 pr-4 font-bold text-slate-900">{sh.invoiceNumber}</td>
+                          <td className="py-3 pr-4 text-slate-700">{suppliers.find(s => s.id === sh.supplierId)?.name || '—'}</td>
+                          <td className="py-3 pr-4 text-slate-600">{(sh.items && sh.items[0]) ? sh.items[0].productName : '—'}</td>
+                          <td className="py-3 text-right font-bold text-indigo-600">{formatCurrency(sh.amount, sh.currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {list.length === 0 && (
+                    <p className="py-6 text-center text-slate-400 text-xs italic">No expected arrivals.</p>
+                  )}
+                </div>
+              </section>
+            );
+            return (
+              <>
+                <TableCard list={gfplList} heading="Gujarat Flotex Private Limited" />
+                <TableCard list={gtexList} heading="GTEX Fabrics and Private Limited" />
+              </>
+            );
+          })()}
+        </div>
 
         <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100 flex flex-col justify-between">
           <h2 className="text-sm font-black text-slate-900 uppercase mb-6">Database Health</h2>
@@ -186,9 +197,10 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
                <span className="text-sm font-black">{sysStats.suppliers + sysStats.shipments || '---'}</span>
              </div>
           </div>
-          <div className="mt-8">
+          <div className="mt-8 space-y-3">
+             <p className="text-[10px] text-slate-500">Clear data stored only in this browser so the app uses the same data as the server (e.g. when opening via local IP).</p>
              <button onClick={() => api.system.reset()} className="w-full py-3 bg-red-50 text-red-600 rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2">
-                <ShieldAlert size={14} /> Reset System Ledger
+                <ShieldAlert size={14} /> Clear browser data &amp; use server
              </button>
           </div>
         </section>

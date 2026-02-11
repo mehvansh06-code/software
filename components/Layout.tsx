@@ -15,7 +15,10 @@ import {
   ShoppingCart,
   Database,
   WifiOff,
-  RefreshCw
+  RefreshCw,
+  FileText,
+  Menu,
+  X
 } from 'lucide-react';
 
 export interface LayoutProps {
@@ -31,8 +34,16 @@ export interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLogout, connectionMode = 'SQL', onRefreshData }) => {
   const location = useLocation();
   const isImport = domain === AppDomain.IMPORT;
+  const isExport = domain === AppDomain.EXPORT;
+  const isLicence = domain === AppDomain.LICENCE;
+  const isSalesIndent = domain === AppDomain.SALES_INDENT;
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStats, setSyncStats] = useState<{ isDirty?: boolean }>({});
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     if (connectionMode !== 'OFFLINE') return;
@@ -51,12 +62,18 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
     }
   };
 
-  const navItems = isImport ? [
+  const navItems = isLicence ? [
+    { path: '/', label: 'Licence Tracker', icon: Award, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+  ] : isSalesIndent ? [
+    { path: '/', label: 'Indent Generator', icon: FileText, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+    { path: '/domestic-buyers', label: 'Domestic Buyers', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+    { path: '/indent-buyers', label: 'Export Buyers', icon: ShoppingCart, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+    { path: '/indent-products', label: 'Indent Products', icon: Package, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
+  ] : isImport ? [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
     { path: '/suppliers', label: 'Supplier Master', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
     { path: '/materials', label: 'Materials Master', icon: Package, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
     { path: '/shipments', label: 'Shipment Master', icon: Truck, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
-    { path: '/licences', label: 'Licence Tracker', icon: Award, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
     { path: '/lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
   ] : [
     { path: '/', label: 'Export Dashboard', icon: TrendingUp, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
@@ -65,14 +82,45 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
     { path: '/export-lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
   ];
 
+  const sidebarClass = isLicence ? 'bg-emerald-900' : isSalesIndent ? 'bg-rose-900' : isImport ? 'bg-indigo-900' : 'bg-amber-900';
+  const logoIconClass = isLicence ? 'text-emerald-900' : isSalesIndent ? 'text-rose-900' : isImport ? 'text-indigo-900' : 'text-amber-900';
+  const hubLabel = isLicence ? 'LIC' : isSalesIndent ? 'IND' : isImport ? 'IMP' : 'EXP';
+  const activeLinkClass = isLicence ? 'bg-emerald-800 text-white shadow-lg' : isSalesIndent ? 'bg-rose-800 text-white shadow-lg' : isImport ? 'bg-indigo-800 text-white shadow-lg' : 'bg-amber-800 text-white shadow-lg';
+  const userAvatarClass = isLicence ? 'bg-emerald-700' : isSalesIndent ? 'bg-rose-700' : isImport ? 'bg-indigo-700' : 'bg-amber-700';
+
   return (
     <div className="flex h-screen bg-slate-50">
-      <div className={`w-64 flex flex-col transition-colors duration-500 ${isImport ? 'bg-indigo-900' : 'bg-amber-900'}`}>
-        <div className="p-6 flex items-center gap-3">
+      {/* Mobile top bar: visible only below lg */}
+      <header className={`fixed top-0 left-0 right-0 h-14 z-50 flex items-center gap-3 px-4 ${sidebarClass} lg:hidden`}>
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen((o) => !o)}
+          className="p-2.5 rounded-xl text-white hover:bg-white/10 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+          aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+        >
+          {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
+        </button>
+        <span className="text-lg font-bold tracking-tight text-white truncate flex-1">Flotex {hubLabel}</span>
+        <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm uppercase shrink-0 ${userAvatarClass}`}>
+          {user.name.charAt(0)}
+        </div>
+      </header>
+
+      {/* Backdrop when mobile menu is open */}
+      <button
+        type="button"
+        aria-label="Close menu"
+        onClick={() => setMobileMenuOpen(false)}
+        className={`fixed inset-0 bg-black/50 z-20 transition-opacity lg:hidden ${mobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+      />
+
+      {/* Sidebar: on lg always visible; on <lg fixed overlay, slide in/out */}
+      <aside className={`w-64 flex flex-col transition-colors duration-500 ${sidebarClass} fixed lg:relative inset-y-0 left-0 z-40 transform transition-transform duration-300 ease-out lg:translate-x-0 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-6 flex items-center gap-3 pt-8 lg:pt-6">
           <div className="bg-white p-2 rounded-lg">
-            <Package className={isImport ? 'text-indigo-900' : 'text-amber-900'} size={24} />
+            {isLicence ? <Award className={logoIconClass} size={24} /> : isSalesIndent ? <FileText className={logoIconClass} size={24} /> : <Package className={logoIconClass} size={24} />}
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">Flotex {isImport ? 'IMP' : 'EXP'}</h1>
+          <h1 className="text-xl font-bold tracking-tight text-white">Flotex {hubLabel}</h1>
         </div>
 
         <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
@@ -82,10 +130,11 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
                 <WifiOff size={12} />
                 <span className="text-[10px] font-black uppercase tracking-[0.2em]">Offline (browser only)</span>
               </div>
-              <p className="text-[9px] text-white/60 mt-1">Data is saved only in this browser. It will not appear on localhost or other devices until you sync.</p>
-              <p className="text-[9px] text-white/50 mt-1">Start the backend: <code className="bg-black/20 px-1 rounded">node server.js</code></p>
+              <p className="text-[9px] text-white/60 mt-1">Data is saved only in this browser. Connect to the server to use the database.</p>
+              <p className="text-[9px] text-white/50 mt-1">If the backend is already running, <strong>refresh the page (F5)</strong> to connect.</p>
+              <p className="text-[9px] text-white/50 mt-1">Otherwise start: <code className="bg-black/20 px-1 rounded">node server.js</code></p>
               <button type="button" onClick={handleSyncToServer} disabled={isSyncing} className="mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-amber-500/30 hover:bg-amber-500/50 text-amber-200 text-[10px] font-black uppercase tracking-wider disabled:opacity-50">
-                <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} /> {isSyncing ? 'Syncing…' : 'Sync to server now'}
+                <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} /> {isSyncing ? 'Connecting…' : 'Reconnect to server'}
               </button>
             </div>
           ) : (
@@ -98,7 +147,7 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
             </div>
           )}
 
-          <button onClick={() => setDomain(null)} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-white/60 hover:bg-white/10 mb-4">
+          <button onClick={() => setDomain(null)} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-white/60 hover:bg-white/10 mb-4 min-h-[44px]">
             <Grid size={20} /> <span className="font-medium text-sm">Switch Domain</span>
           </button>
           <div className="h-px bg-white/10 my-4 mx-4" />
@@ -106,8 +155,8 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
             return (
-              <Link key={item.path} to={item.path} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-                  isActive ? (isImport ? 'bg-indigo-800 text-white shadow-lg' : 'bg-amber-800 text-white shadow-lg') : 'text-white/70 hover:bg-white/10 hover:text-white'
+              <Link key={item.path} to={item.path} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all min-h-[44px] ${
+                  isActive ? activeLinkClass : 'text-white/70 hover:bg-white/10 hover:text-white'
                 }`}>
                 <Icon size={20} /> <span className="font-medium text-sm">{item.label}</span>
               </Link>
@@ -117,7 +166,7 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
 
         <div className="p-4 border-t border-white/10">
           <div className="flex items-center gap-3 px-4 py-3 mb-4">
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white uppercase ${isImport ? 'bg-indigo-700' : 'bg-amber-700'}`}>
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white uppercase ${userAvatarClass}`}>
               {user.name.charAt(0)}
             </div>
             <div className="flex flex-col">
@@ -125,12 +174,12 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
               <span className="text-[9px] uppercase tracking-wider text-white/50 font-black">{user.role}</span>
             </div>
           </div>
-          <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-4 py-2.5 rounded-xl transition-all">
+          <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-4 py-2.5 rounded-xl transition-all min-h-[44px]">
             <LogOut size={16} /> <span className="font-bold text-xs uppercase tracking-widest">Sign Out</span>
           </button>
         </div>
-      </div>
-      <main className="flex-1 overflow-y-auto p-8">
+      </aside>
+      <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pt-14 lg:pt-0 p-4 sm:p-6 lg:p-8">
         <div className="max-w-6xl mx-auto">{children}</div>
       </main>
     </div>

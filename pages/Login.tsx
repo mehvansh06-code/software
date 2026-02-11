@@ -28,13 +28,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-indigo-900 p-6">
-      <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl overflow-hidden p-10">
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center p-4 bg-indigo-50 rounded-2xl mb-6">
+    <div className="min-h-screen flex items-center justify-center bg-indigo-900 p-4 sm:p-6">
+      <div className="max-w-md w-full bg-white rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden p-6 sm:p-10">
+        <div className="text-center mb-8 sm:mb-10">
+          <div className="inline-flex items-center justify-center p-3 sm:p-4 bg-indigo-50 rounded-2xl mb-4 sm:mb-6">
             <Package size={40} className="text-indigo-600" />
           </div>
-          <h2 className="text-3xl font-bold text-slate-900">Gujarat Flotex IMS</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900">Gujarat Flotex IMS</h2>
           <p className="text-slate-500 mt-2">Log in to your workspace</p>
         </div>
 
@@ -45,7 +45,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               type="text" 
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all min-h-[44px]"
               placeholder="e.g. director, checker, employee"
               required
             />
@@ -56,7 +56,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               type="password" 
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all min-h-[44px]"
               placeholder="••••••••"
               required
             />
@@ -66,7 +66,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
           <button 
             type="submit"
-            className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2"
+            className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 min-h-[48px]"
           >
             <ShieldCheck size={20} />
             Secure Login

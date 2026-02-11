@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
-import { Buyer, User, UserRole, SupplierStatus } from '../types';
-import { Search, CheckCircle, XCircle, Clock, CheckSquare, Square, Plus, X, Eye, Edit3 } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Buyer, User, UserRole, SupplierStatus, Consignee } from '../types';
+import { Search, CheckCircle, XCircle, Clock, CheckSquare, Square, Plus, X, Eye, Edit3, Upload } from 'lucide-react';
 import BuyerRequest from './BuyerRequest';
+import { api } from '../api';
+import * as XLSX from 'xlsx';
 
 interface BuyerMasterProps {
   buyers: Buyer[];
@@ -17,6 +19,8 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [viewingBuyer, setViewingBuyer] = useState<Buyer | null>(null);
   const [editingBuyer, setEditingBuyer] = useState<Buyer | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canApprove = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
   const canEdit = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
@@ -41,6 +45,70 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
     return matchesSearch && matchesStatus;
   });
 
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const rows = json.map((r) => {
+        const name = r.Name ?? r.name ?? r['Legal Name'] ?? r['Buyer Name'] ?? '';
+        const address = r.Address ?? r.address ?? r['Billing Address'] ?? '';
+        const country = r.Country ?? r.country ?? '';
+        const bankName = r['Bank Name'] ?? r.bankName ?? r.Bank ?? '';
+        const accountHolder = r['Account Holder'] ?? r['A/C Holder'] ?? r.accountHolderName ?? r.AccountHolder ?? '';
+        const swift = r.SWIFT ?? r.Swift ?? r.swiftCode ?? r['SWIFT Code'] ?? '';
+        const bankAddress = r['Bank Address'] ?? r.bankAddress ?? '';
+        const contactPerson = r['Contact Person'] ?? r.contactPerson ?? r['Contact Name'] ?? '';
+        const contactNumber = r['Contact Number'] ?? r['Phone'] ?? r.contactNumber ?? r.Mobile ?? '';
+        const contactEmail = r['Contact Email'] ?? r.Email ?? r.contactEmail ?? '';
+        const contactDetails = [contactNumber, contactEmail].filter(Boolean).join(' / ') || undefined;
+        const salesName = r['Sales Person Name'] ?? r.salesPersonName ?? r['Sales Person'] ?? '';
+        const salesContact = r['Sales Person Contact'] ?? r['Sales Contact'] ?? r.salesPersonContact ?? r.salesPersonMobile ?? '';
+        const consigneeName = r['Consignee Name'] ?? r.consigneeName ?? '';
+        const consigneeAddr = r['Consignee Address'] ?? r.consigneeAddress ?? r['Shipping Address'] ?? '';
+        const consignees: Consignee[] = consigneeName || consigneeAddr ? [{ id: 'c_' + Math.random().toString(36).slice(2, 11), name: consigneeName || 'Consignee', address: consigneeAddr || '' }] : [];
+        return {
+          id: 'b_' + Math.random().toString(36).slice(2, 11),
+          name,
+          address,
+          country,
+          bankName,
+          accountHolderName: accountHolder,
+          swiftCode: swift,
+          bankAddress,
+          contactPerson,
+          contactDetails,
+          contactNumber,
+          contactEmail,
+          salesPersonName: salesName,
+          salesPersonContact: salesContact,
+          hasConsignee: consignees.length > 0,
+          status: 'APPROVED',
+          requestedBy: 'Import',
+          createdAt: new Date().toISOString(),
+          consignees,
+        };
+      }).filter((r) => r.name && r.country);
+      if (rows.length === 0) {
+        alert('No rows with Name and Country found. Use columns: Name, Address, Country, Bank Name, Account Holder, SWIFT Code, Bank Address, Contact Person, Contact Number, Contact Email, Sales Person Name, Sales Person Contact, Consignee Name, Consignee Address.');
+        return;
+      }
+      const result = await api.buyers.import(rows);
+      const count = (result as any)?.imported ?? rows.length;
+      alert(`Imported ${count} export buyer(s). Refreshing the list.`);
+      window.location.reload();
+    } catch (err: any) {
+      alert(err?.message || 'Import failed.');
+    } finally {
+      setImporting(false);
+      e.target.value = '';
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-24">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -50,6 +118,15 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
         </div>
         
         <div className="flex items-center gap-4">
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50 transition-all"
+          >
+            <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
+          </button>
           <button 
             onClick={() => setShowAddForm(true)}
             className="px-6 py-3 bg-amber-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-amber-700 transition-all shadow-lg shadow-amber-100"

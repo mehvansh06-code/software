@@ -27,6 +27,7 @@ export interface UseAppDataReturn {
     handleAddShipment: (sh: Shipment) => Promise<void>;
     handleUpdateShipment: (updated: Shipment) => Promise<void>;
     handleDeleteShipment: (id: string) => Promise<void>;
+    handleAddLicence: (licence: Licence) => Promise<void>;
     handleUpdateLicence: (updated: Licence) => Promise<void>;
     handleUpdateLC: (updated: LetterOfCredit) => Promise<void>;
   };
@@ -152,13 +153,13 @@ export function useAppData(): UseAppDataReturn {
   const handleAddShipment = useCallback(async (sh: Shipment) => {
     await api.shipments.create(sh);
     api.system.addLocalShipment(sh);
-    setShipments(prev => [...prev, sh]);
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleUpdateShipment = useCallback(async (updated: Shipment) => {
     await api.shipments.update(updated.id, updated);
-    setShipments(prev => prev.map(sh => (sh.id === updated.id ? updated : sh)));
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleDeleteShipment = useCallback(async (id: string) => {
     try {
@@ -170,6 +171,11 @@ export function useAppData(): UseAppDataReturn {
     } finally {
       await loadAllData();
     }
+  }, [loadAllData]);
+
+  const handleAddLicence = useCallback(async (licence: Licence) => {
+    await api.licences.create(licence);
+    await loadAllData();
   }, [loadAllData]);
 
   const handleUpdateLicence = useCallback(async (updated: Licence) => {
@@ -224,6 +230,7 @@ export function useAppData(): UseAppDataReturn {
       handleAddShipment,
       handleUpdateShipment,
       handleDeleteShipment,
+      handleAddLicence,
       handleUpdateLicence,
       handleUpdateLC,
     },
