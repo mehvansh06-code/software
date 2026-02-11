@@ -1,12 +1,4 @@
 
-import { 
-  SAMPLE_SUPPLIERS, 
-  SAMPLE_BUYERS, 
-  SAMPLE_SHIPMENTS, 
-  SAMPLE_LICENCES, 
-  SAMPLE_LCS 
-} from './sampleData';
-
 /**
  * DOUBLE-LOCK HYBRID SQL BRIDGE
  * Primary: Relational SQLite (Local Node.js)
@@ -36,11 +28,11 @@ const getSimData = () => {
     return data;
   }
   return {
-    suppliers: SAMPLE_SUPPLIERS,
-    buyers: SAMPLE_BUYERS,
-    shipments: SAMPLE_SHIPMENTS,
-    licences: SAMPLE_LICENCES,
-    lcs: SAMPLE_LCS,
+    suppliers: [],
+    buyers: [],
+    shipments: [],
+    licences: [],
+    lcs: [],
     materials: [],
     lastSync: new Date().toISOString(),
     isDirty: false

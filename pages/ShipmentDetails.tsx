@@ -119,6 +119,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [exportDocData, setExportDocData] = useState({
     sbNo: '', sbDate: '', dbk: 0, rodtep: 0, scripNo: '', epcg: '', advLic: '', lodgement: '', lodgementDate: '', ebrcNo: '', ebrcValue: 0
   });
+  const [openingFolder, setOpeningFolder] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!shipment) return;
@@ -198,21 +201,81 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setNewUpdate(prev => ({ ...prev, status: shipment.status }));
   }, [shipment, editAll]);
 
-  if (!shipment) return <div className="p-20 text-center text-slate-400 font-bold uppercase">Record not found</div>;
+  const isExport = !!(shipment?.buyerId);
+  const partnerName = shipment
+    ? (isExport
+      ? (buyers.find(b => b.id === shipment.buyerId)?.name || 'Unknown Buyer')
+      : (suppliers.find(s => s.id === shipment.supplierId)?.name || 'Unknown Vendor'))
+    : '';
 
-  const isExport = !!shipment.buyerId;
-  const partnerName = isExport 
-    ? (buyers.find(b => b.id === shipment.buyerId)?.name || 'Unknown Buyer')
-    : (suppliers.find(s => s.id === shipment.supplierId)?.name || 'Unknown Vendor');
-
-  // Check for Payment Reminder (3 days before due date)
   const showPaymentAlert = useMemo(() => {
-    if (!shipment.paymentDueDate) return false;
+    if (!shipment?.paymentDueDate) return false;
     const dueDate = new Date(shipment.paymentDueDate).getTime();
     const today = new Date().getTime();
     const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
-    return diffDays <= 3 && diffDays >= 0; 
-  }, [shipment.paymentDueDate]);
+    return diffDays <= 3 && diffDays >= 0;
+  }, [shipment?.paymentDueDate]);
+
+  const paymentSummary = useMemo(() => {
+    if (!shipment) return { totalFC: 0, receivedFC: 0, pendingFC: 0 };
+    const totalFC = isExport ? (shipment.fobValueFC ?? shipment.amount) : shipment.amount;
+    const toFC = (p: PaymentLog) => {
+      if (p.currency === shipment.currency) return p.amount;
+      if (p.currency === 'INR') return p.amount / (shipment.exchangeRate || 1);
+      return 0;
+    };
+    const receivedFC = (shipment.payments || []).reduce((sum, p) => sum + toFC(p), 0);
+    return { totalFC: totalFC ?? 0, receivedFC, pendingFC: Math.max(0, (totalFC ?? 0) - receivedFC) };
+  }, [shipment, isExport]);
+
+  const documentCheckerRows = useMemo(() => {
+    const invRef = (shipment?.invoiceNumber || '')
+      .replace(/[/\\:*?"<>|]/g, '_')
+      .replace(/\s+/g, '_')
+      .trim() || 'ref';
+    const lodgementRef = ((shipment as any)?.lodgement || invRef).replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim() || 'ref';
+    const baseName = (f: string) => f.replace(/\.[^/.]+$/, '').trim();
+    const hasFile = (expected: string) =>
+      folderFiles.some((f) => baseName(f).toUpperCase() === expected.toUpperCase());
+    const rows: { label: string; expectedName: string; found: boolean }[] = [];
+    const staticList = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
+    staticList.forEach((doc) => {
+      const prefix = (doc as { prefix?: string }).prefix || doc.id + '_';
+      const ref = doc.id === 'LODGE' ? lodgementRef : invRef;
+      rows.push({ label: doc.label, expectedName: prefix + ref, found: hasFile(prefix + ref) });
+    });
+    (shipment?.payments || []).forEach((pay) => {
+      const amount = Number(pay.amount);
+      const currency = (pay.currency || 'USD').toUpperCase();
+      rows.push({
+        label: `Payment Advise — ${formatCurrency(amount, currency)}`,
+        expectedName: `PAY_ADV_${amount}_${currency}`,
+        found: hasFile(`PAY_ADV_${amount}_${currency}`)
+      });
+    });
+    return rows;
+  }, [shipment?.invoiceNumber, shipment?.payments, (shipment as any)?.lodgement, isExport, folderFiles]);
+
+  const allShipmentDetailsFilled = useMemo(() => {
+    if (!shipment) return false;
+    const hasInvoice = !!(shipment.invoiceNumber && (shipment.invoiceDate || shipment.expectedShipmentDate));
+    const hasItems = (shipment.items?.length ?? 0) > 0;
+    const hasLogistics = !!(shipment.blNumber || shipment.containerNumber);
+    if (isExport) {
+      const sbNo = (shipment as any).sbNo;
+      const lodgement = (shipment as any).lodgement;
+      return !!(hasInvoice && hasItems && hasLogistics && sbNo && lodgement);
+    }
+    const hasBOE = !!(shipment.beNumber && (shipment.assessedValue > 0 || (shipment.dutyBCD ?? 0) + (shipment.dutySWS ?? 0) + (shipment.gst ?? 0) > 0));
+    return !!(hasInvoice && hasItems && hasLogistics && hasBOE);
+  }, [shipment, isExport]);
+
+  const linkedLC = useMemo(() => {
+    if (!shipment?.isUnderLC || !shipment?.lcNumber || !lcs.length) return null;
+    return lcs.find(lc => lc.lcNumber === shipment.lcNumber || lc.id === (shipment as any).linkedLcId) || null;
+  }, [shipment?.isUnderLC, shipment?.lcNumber, (shipment as any)?.linkedLcId, lcs]);
+
+  if (!shipment) return <div className="p-20 text-center text-slate-400 font-bold uppercase">Record not found</div>;
 
   const canDelete = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
   const handleDeleteShipment = async () => {
@@ -420,74 +483,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const totalDuty = dutiesData.dutyBCD + dutiesData.dutySWS + dutiesData.dutyINT;
 
-  // Payment summary: total (FC), received (FC), pending (FC) — ledger in foreign currency only
-  const paymentSummary = useMemo(() => {
-    const totalFC = isExport ? (shipment.fobValueFC ?? shipment.amount) : shipment.amount;
-    const toFC = (p: PaymentLog) => {
-      if (p.currency === shipment.currency) return p.amount;
-      if (p.currency === 'INR') return p.amount / (shipment.exchangeRate || 1);
-      return 0;
-    };
-    const receivedFC = (shipment.payments || []).reduce((sum, p) => sum + toFC(p), 0);
-    return { totalFC, receivedFC, pendingFC: Math.max(0, totalFC - receivedFC) };
-  }, [shipment.payments, shipment.amount, shipment.fobValueFC, shipment.currency, shipment.exchangeRate, isExport]);
-
-  // Document checker: expected file names (e.g. CI_245, BOE_245). Payment Advise = one per lodged payment: PAY_ADV_2000_USD.
-  const documentCheckerRows = useMemo(() => {
-    const invRef = (shipment?.invoiceNumber || '')
-      .replace(/[/\\:*?"<>|]/g, '_')
-      .replace(/\s+/g, '_')
-      .trim() || 'ref';
-    const lodgementRef = ((shipment as any)?.lodgement || invRef).replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim() || 'ref';
-    const baseName = (f: string) => f.replace(/\.[^/.]+$/, '').trim();
-    const hasFile = (expected: string) =>
-      folderFiles.some((f) => baseName(f).toUpperCase() === expected.toUpperCase());
-    const rows: { label: string; expectedName: string; found: boolean }[] = [];
-    const staticList = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
-    staticList.forEach((doc) => {
-      const prefix = (doc as { prefix?: string }).prefix || doc.id + '_';
-      const ref = doc.id === 'LODGE' ? lodgementRef : invRef;
-      const expectedName = prefix + ref;
-      rows.push({
-        label: doc.label,
-        expectedName,
-        found: hasFile(expectedName)
-      });
-    });
-    (shipment?.payments || []).forEach((pay) => {
-      const amount = Number(pay.amount);
-      const currency = (pay.currency || 'USD').toUpperCase();
-      const expectedName = `PAY_ADV_${amount}_${currency}`;
-      rows.push({
-        label: `Payment Advise — ${formatCurrency(amount, currency)}`,
-        expectedName,
-        found: hasFile(expectedName)
-      });
-    });
-    return rows;
-  }, [shipment?.invoiceNumber, shipment?.payments, (shipment as any)?.lodgement, isExport, folderFiles]);
-
-  // All key shipment details filled (invoice, logistics, BOE/export docs). Used to show red on pending docs only when everything else is complete.
-  const allShipmentDetailsFilled = useMemo(() => {
-    if (!shipment) return false;
-    const hasInvoice = !!(shipment.invoiceNumber && (shipment.invoiceDate || shipment.expectedShipmentDate));
-    const hasItems = (shipment.items?.length ?? 0) > 0;
-    const hasLogistics = !!(shipment.blNumber || shipment.containerNumber);
-    if (isExport) {
-      const sbNo = (shipment as any).sbNo;
-      const lodgement = (shipment as any).lodgement;
-      return !!(hasInvoice && hasItems && hasLogistics && sbNo && lodgement);
-    }
-    const hasBOE = !!(shipment.beNumber && (shipment.assessedValue > 0 || (shipment.dutyBCD ?? 0) + (shipment.dutySWS ?? 0) + (shipment.gst ?? 0) > 0));
-    return !!(hasInvoice && hasItems && hasLogistics && hasBOE);
-  }, [shipment, isExport]);
-
-  // Import: find linked LC by lcNumber
-  const linkedLC = useMemo(() => {
-    if (!shipment.isUnderLC || !shipment.lcNumber || !lcs.length) return null;
-    return lcs.find(lc => lc.lcNumber === shipment.lcNumber || lc.id === shipment.linkedLcId) || null;
-  }, [shipment.isUnderLC, shipment.lcNumber, shipment.linkedLcId, lcs]);
-
   const handleMarkPaymentReceived = async (payId: string) => {
     const payments = (shipment.payments || []).map(p => p.id === payId ? { ...p, received: true } : p);
     await onUpdate({ ...shipment, payments });
@@ -500,9 +495,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     }
   };
 
-  const [openingFolder, setOpeningFolder] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const sanitizeFolderName = (str: string) => (str || '').replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'Unknown';
   const displayFolderPath = documentsFolderPath || (shipment ? `${sanitizeFolderName(partnerName)}_${sanitizeFolderName(shipment.invoiceNumber)}` : '');
 

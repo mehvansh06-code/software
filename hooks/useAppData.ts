@@ -164,6 +164,9 @@ export function useAppData(): UseAppDataReturn {
     try {
       await api.shipments.delete(id);
       setShipments(prev => prev.filter(sh => sh.id !== id));
+    } catch (e) {
+      console.warn('Delete shipment failed:', id, e);
+      throw e;
     } finally {
       await loadAllData();
     }

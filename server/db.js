@@ -376,7 +376,7 @@ function seedDummyData() {
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const shipRows = [
     { id: 'sh1', supplierId: 's1', buyerId: null, productId: 'm1', invoiceNumber: 'INV/IMP/24/001', company: 'GFPL', amount: 17500, currency: 'USD', exchangeRate: 84, rate: 3.5, quantity: 5000, status: 'IN_TRANSIT', expectedShipmentDate: daysAgo(5), createdAt: now, fobValueFC: 17500, fobValueINR: 1470000, invoiceValueINR: 1470000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0100', lcAmount: 0, lcDate: daysAgo(30), isUnderLicence: 1, linkedLicenceId: 'lic1', licenceObligationAmount: 50000, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Shanghai', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(30), expectedArrivalDate: daysFuture(25), invoiceDate: daysAgo(10), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item1 },
     { id: 'sh2', supplierId: 's2', buyerId: null, productId: 'm2', invoiceNumber: 'INV/IMP/24/002', company: 'GFPL', amount: 12000, currency: 'EUR', exchangeRate: 90, rate: 1.2, quantity: 10000, status: 'ORDERED', expectedShipmentDate: null, createdAt: now, fobValueFC: 12000, fobValueINR: 1080000, invoiceValueINR: 1080000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0101', lcAmount: 0, lcDate: daysAgo(15), isUnderLicence: 1, linkedLicenceId: 'lic2', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Hamburg', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(45), expectedArrivalDate: null, invoiceDate: daysAgo(3), freightCharges: 500, otherCharges: 200, documents: {}, history: hist, payments: [], items: item2 },
@@ -429,7 +429,7 @@ function seedAdditionalData() {
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const item5 = [{ productId: 'm10', productName: 'Combed Cotton 30s', hsnCode: '5205', quantity: 8000, unit: 'KGS', rate: 3.2, amount: 25600, productType: 'RAW_MATERIAL' }];
   const item6 = [{ productId: 'm11', productName: 'Ring Spun Yarn 40s', hsnCode: '5206', quantity: 5000, unit: 'KGS', rate: 4.0, amount: 20000, productType: 'RAW_MATERIAL' }];
   const item7 = [{ productId: 'mp2', productName: 'Polyester Staple Fiber', hsnCode: '5503', quantity: 4000, unit: 'KGS', rate: 1.5, amount: 6000, productType: 'RAW_MATERIAL' }];
@@ -464,7 +464,7 @@ function ensureMinimalShipments() {
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const item1 = [{ productId: mat.id, productName: mat.name, hsnCode: mat.hsnCode || '', quantity: 1000, unit: 'KGS', rate: 5, amount: 5000, productType: 'RAW_MATERIAL' }];
   const s1 = {
     id: 'shseed1', supplierId: sup.id, buyerId: null, productId: mat.id, invoiceNumber: 'INV/IMP/SEED/001', company: 'GFPL',
@@ -496,9 +496,10 @@ function ensureMinimalShipments() {
   console.log('Added minimal sample shipments (none existed).');
 }
 
-seedDummyData();
-seedAdditionalData();
-ensureMinimalShipments();
+// Sample data seeding disabled — use scripts/clear-sample-data.js to clear DB; DB starts empty on fresh install
+// seedDummyData();
+// seedAdditionalData();
+// ensureMinimalShipments();
 
 module.exports = db;
 module.exports.getShipmentValues = getShipmentValues;
