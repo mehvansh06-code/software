@@ -71,11 +71,6 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
   const partnerSuppliers = suppliers.length ? suppliers : approvedSuppliers;
   const partnerBuyers = buyers.length ? buyers : approvedBuyers;
 
-  useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'NewShipment.tsx',message:'partner lists',data:{suppliersLen:suppliers.length,buyersLen:buyers.length,approvedSuppliersLen:approvedSuppliers.length,approvedBuyersLen:approvedBuyers.length,isExport},timestamp:Date.now(),hypothesisId:'H7'})}).catch(()=>{});
-    // #endregion
-  }, [suppliers.length, buyers.length, approvedSuppliers.length, approvedBuyers.length, isExport]);
 
   const availableProducts = useMemo(() => {
     if (isExport) return MASTER_PRODUCTS;

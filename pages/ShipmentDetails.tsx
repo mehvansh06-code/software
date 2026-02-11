@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Shipment, ShipmentStatus, User, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, LCStatus, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS } from '../types';
+import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, LCStatus, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS } from '../types';
 import { SHIPMENT_STATUS_ORDER_IMPORT, SHIPMENT_STATUS_ORDER_EXPORT, getShipmentStatusLabel, formatINR, formatDate, formatCurrency } from '../constants';
 import { 
   ArrowLeft, 
@@ -36,11 +36,12 @@ interface ShipmentDetailsProps {
   licences?: Licence[];
   lcs?: LetterOfCredit[];
   onUpdate: (updated: Shipment) => void;
+  onDelete?: (id: string) => Promise<void>;
   onUpdateLC?: (updated: LetterOfCredit) => Promise<void>;
   user: User;
 }
 
-const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], onUpdate, onUpdateLC, user }) => {
+const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], onUpdate, onDelete, onUpdateLC, user }) => {
   const { id } = useParams();
   const navigate = useNavigate();
   const shipment = shipments.find(s => s.id === id);
@@ -138,62 +139,56 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   }, [shipment?.id]);
 
   useEffect(() => {
-    if (shipment) {
-      setLogisticsData({
-        blNumber: shipment.blNumber || '',
-        blDate: shipment.blDate || '',
-        containerNumber: shipment.containerNumber || '',
-        shippingLine: shipment.shippingLine || '',
-        trackingUrl: shipment.trackingUrl || '',
-        portCode: shipment.portCode || '',
-        portOfLoading: shipment.portOfLoading || '',
-        portOfDischarge: shipment.portOfDischarge || '',
-        expectedArrivalDate: shipment.expectedArrivalDate || ''
-      });
-      setDutiesData({
-        assessedValue: shipment.assessedValue || 0,
-        dutyBCD: shipment.dutyBCD || 0,
-        dutySWS: shipment.dutySWS || 0,
-        dutyINT: shipment.dutyINT || 0,
-        gst: shipment.gst || 0,
-        beNumber: shipment.beNumber || '',
-        beDate: shipment.beDate || '',
-        incoTerm: shipment.incoTerm || 'FOB',
-        portCode: shipment.portCode || ''
-      });
-      setInvoiceExchangeRate(shipment.exchangeRate ?? 0);
-      setInvoiceEditData({
-        invoiceNumber: shipment.invoiceNumber || '',
-        invoiceDate: shipment.invoiceDate || '',
-        freightCharges: Number(shipment.freightCharges) || 0,
-        otherCharges: Number(shipment.otherCharges) || 0,
-        items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) }))
-      });
-      setExportDocData({
-        sbNo: (shipment as any).sbNo || '',
-        sbDate: (shipment as any).sbDate || '',
-        dbk: (shipment as any).dbk ?? 0,
-        rodtep: (shipment as any).rodtep ?? 0,
-        scripNo: (shipment as any).scripNo || '',
-        epcg: (shipment as any).epcg || '',
-        advLic: (shipment as any).advLic || '',
-        lodgement: (shipment as any).lodgement || '',
-        lodgementDate: (shipment as any).lodgementDate || '',
-        ebrcNo: (shipment as any).ebrcNo || '',
-        ebrcValue: (shipment as any).ebrcValue ?? 0
-      });
-      setLodgementValue((shipment as any).lodgement || '');
-      setLodgementDateValue((shipment as any).lodgementDate || '');
-      setNewUpdate(prev => ({ ...prev, status: shipment.status }));
-      setInvoiceEditData({
-        invoiceNumber: shipment.invoiceNumber || '',
-        invoiceDate: shipment.invoiceDate || '',
-        freightCharges: Number(shipment.freightCharges) || 0,
-        otherCharges: Number(shipment.otherCharges) || 0,
-        items: (shipment.items || []).map((it) => ({ ...it, amount: it.quantity * it.rate }))
-      });
-    }
-  }, [shipment]);
+    if (!shipment) return;
+    // Don't overwrite form state while user is editing invoice/details — prevents reverting invoice date etc. after save
+    if (editAll) return;
+    setLogisticsData({
+      blNumber: shipment.blNumber || '',
+      blDate: shipment.blDate || '',
+      containerNumber: shipment.containerNumber || '',
+      shippingLine: shipment.shippingLine || '',
+      trackingUrl: shipment.trackingUrl || '',
+      portCode: shipment.portCode || '',
+      portOfLoading: shipment.portOfLoading || '',
+      portOfDischarge: shipment.portOfDischarge || '',
+      expectedArrivalDate: shipment.expectedArrivalDate || ''
+    });
+    setDutiesData({
+      assessedValue: shipment.assessedValue || 0,
+      dutyBCD: shipment.dutyBCD || 0,
+      dutySWS: shipment.dutySWS || 0,
+      dutyINT: shipment.dutyINT || 0,
+      gst: shipment.gst || 0,
+      beNumber: shipment.beNumber || '',
+      beDate: shipment.beDate || '',
+      incoTerm: shipment.incoTerm || 'FOB',
+      portCode: shipment.portCode || ''
+    });
+    setInvoiceExchangeRate(shipment.exchangeRate ?? 0);
+    setInvoiceEditData({
+      invoiceNumber: shipment.invoiceNumber || '',
+      invoiceDate: shipment.invoiceDate || '',
+      freightCharges: Number(shipment.freightCharges) || 0,
+      otherCharges: Number(shipment.otherCharges) || 0,
+      items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) }))
+    });
+    setExportDocData({
+      sbNo: (shipment as any).sbNo || '',
+      sbDate: (shipment as any).sbDate || '',
+      dbk: (shipment as any).dbk ?? 0,
+      rodtep: (shipment as any).rodtep ?? 0,
+      scripNo: (shipment as any).scripNo || '',
+      epcg: (shipment as any).epcg || '',
+      advLic: (shipment as any).advLic || '',
+      lodgement: (shipment as any).lodgement || '',
+      lodgementDate: (shipment as any).lodgementDate || '',
+      ebrcNo: (shipment as any).ebrcNo || '',
+      ebrcValue: (shipment as any).ebrcValue ?? 0
+    });
+    setLodgementValue((shipment as any).lodgement || '');
+    setLodgementDateValue((shipment as any).lodgementDate || '');
+    setNewUpdate(prev => ({ ...prev, status: shipment.status }));
+  }, [shipment, editAll]);
 
   if (!shipment) return <div className="p-20 text-center text-slate-400 font-bold uppercase">Record not found</div>;
 
@@ -210,6 +205,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
     return diffDays <= 3 && diffDays >= 0; 
   }, [shipment.paymentDueDate]);
+
+  const canDelete = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
+  const handleDeleteShipment = async () => {
+    if (!onDelete || !shipment?.id) return;
+    if (!window.confirm('Delete this shipment? This cannot be undone.')) return;
+    await onDelete(shipment.id);
+    navigate(isExport ? '/export-shipments' : '/shipments');
+  };
 
   const handleSaveLogistics = async () => {
     const updated = { ...shipment, ...logisticsData };
@@ -546,6 +549,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
            <button onClick={() => setShowUpdateModal(true)} className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
               <Plus size={16} /> Add Status Update
            </button>
+           {canDelete && onDelete && (
+             <button type="button" onClick={handleDeleteShipment} className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center gap-2 transition-all shadow-lg shadow-red-100">
+               <Trash2 size={16} /> Delete Shipment
+             </button>
+           )}
         </div>
       </header>
       
@@ -644,7 +652,19 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 </div>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Exchange Rate</label>
-                  <p className="text-sm font-bold text-slate-800">{(shipment.exchangeRate ?? invoiceExchangeRate) ? `1 ${shipment.currency} = ₹${(shipment.exchangeRate ?? invoiceExchangeRate)}` : '—'}</p>
+                  {editAll ? (
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold"
+                      value={invoiceExchangeRate || ''}
+                      onChange={e => setInvoiceExchangeRate(parseFloat(e.target.value) || 0)}
+                      placeholder="e.g. 84"
+                    />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{(shipment.exchangeRate ?? invoiceExchangeRate) ? `1 ${shipment.currency} = ₹${(shipment.exchangeRate ?? invoiceExchangeRate)}` : '—'}</p>
+                  )}
                 </div>
               </div>
               <table className="w-full">

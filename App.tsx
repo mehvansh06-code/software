@@ -25,7 +25,9 @@ import {
   Grid,
   TrendingUp,
   ShoppingCart,
-  Database
+  Database,
+  WifiOff,
+  RefreshCw
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -34,12 +36,33 @@ interface LayoutProps {
   user: User;
   setDomain: (domain: AppDomain | null) => void;
   onLogout: () => void;
+  connectionMode?: 'SQL' | 'OFFLINE';
+  onRefreshData?: () => Promise<void>;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLogout }) => {
+const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLogout, connectionMode = 'SQL', onRefreshData }) => {
   const location = useLocation();
   const isImport = domain === AppDomain.IMPORT;
-  
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStats, setSyncStats] = useState<{ isDirty?: boolean }>({});
+
+  useEffect(() => {
+    if (connectionMode !== 'OFFLINE') return;
+    api.system.getStats().then((s: any) => setSyncStats({ isDirty: s?.isDirty })).catch(() => setSyncStats({}));
+  }, [connectionMode]);
+
+  const handleSyncToServer = async () => {
+    if (!onRefreshData) return;
+    setIsSyncing(true);
+    try {
+      const ok = await api.system.syncToSQL();
+      if (ok) await onRefreshData();
+    } finally {
+      setIsSyncing(false);
+      setSyncStats({ isDirty: false });
+    }
+  };
+
   const navItems = isImport ? [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
     { path: '/suppliers', label: 'Supplier Master', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] },
@@ -65,13 +88,27 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
         </div>
         
         <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-          <div className="px-4 py-2 mb-6 bg-white/5 rounded-xl border border-white/10">
-            <div className="flex items-center gap-2 text-emerald-400">
-               <Database size={12} className="animate-pulse" />
-               <span className="text-[10px] font-black uppercase tracking-[0.2em]">Ledger: Active</span>
+          {connectionMode === 'OFFLINE' ? (
+            <div className="px-4 py-3 mb-6 bg-amber-500/20 rounded-xl border border-amber-400/30">
+              <div className="flex items-center gap-2 text-amber-300">
+                <WifiOff size={12} />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em]">Offline (browser only)</span>
+              </div>
+              <p className="text-[9px] text-white/60 mt-1">Data is saved only in this browser. It will not appear on localhost or other devices until you sync.</p>
+              <p className="text-[9px] text-white/50 mt-1">Start the backend: <code className="bg-black/20 px-1 rounded">node server.js</code></p>
+              <button type="button" onClick={handleSyncToServer} disabled={isSyncing} className="mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-amber-500/30 hover:bg-amber-500/50 text-amber-200 text-[10px] font-black uppercase tracking-wider disabled:opacity-50">
+                <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} /> {isSyncing ? 'Syncing…' : 'Sync to server now'}
+              </button>
             </div>
-            <p className="text-[9px] text-white/40 mt-1">High-speed sync active</p>
-          </div>
+          ) : (
+            <div className="px-4 py-2 mb-6 bg-white/5 rounded-xl border border-white/10">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <Database size={12} className="animate-pulse" />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em]">Ledger: Active</span>
+              </div>
+              <p className="text-[9px] text-white/40 mt-1">High-speed sync active · Real-time across tabs</p>
+            </div>
+          )}
 
           <button onClick={() => setDomain(null)} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-white/60 hover:bg-white/10 mb-4">
             <Grid size={20} /> <span className="font-medium text-sm">Switch Domain</span>
@@ -121,6 +158,7 @@ const App: React.FC = () => {
   const [licences, setLicences] = useState<Licence[]>([]);
   const [lcs, setLcs] = useState<LetterOfCredit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [connectionMode, setConnectionMode] = useState<'SQL' | 'OFFLINE'>('SQL');
 
   const loadAllData = useCallback(async () => {
     try {
@@ -148,8 +186,10 @@ const App: React.FC = () => {
       });
       setLicences(l || []);
       setLcs(lc || []);
+      setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
     } catch (err) {
       console.error('Data refresh failed:', err);
+      setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
     }
   }, []);
 
@@ -239,6 +279,11 @@ const App: React.FC = () => {
     setShipments(prev => prev.map(sh => sh.id === updated.id ? updated : sh));
   };
 
+  const handleDeleteShipment = async (id: string) => {
+    await api.shipments.delete(id);
+    setShipments(prev => prev.filter(sh => sh.id !== id));
+  };
+
   const handleUpdateLicence = async (updated: Licence) => {
     await api.licences.update(updated.id, updated);
     setLicences(prev => prev.map(l => l.id === updated.id ? updated : l));
@@ -282,7 +327,8 @@ const App: React.FC = () => {
     <HashRouter>
       <DomainRoutes domain={domain} user={user} setDomain={setDomain} onLogout={handleLogout}
         shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs}
-        handleAddShipment={handleAddShipment} handleUpdateShipment={handleUpdateShipment}
+        connectionMode={connectionMode} onRefreshData={loadAllData}
+        handleAddShipment={handleAddShipment} handleUpdateShipment={handleUpdateShipment} handleDeleteShipment={handleDeleteShipment}
         handleAddSupplier={handleAddSupplier} handleUpdateSupplier={handleUpdateSupplier}
         handleAddBuyer={handleAddBuyer} handleUpdateBuyer={handleUpdateBuyer}
         handleUpdateLicence={handleUpdateLicence} handleUpdateLC={handleUpdateLC}
@@ -303,8 +349,11 @@ function DomainRoutes(props: {
   buyers: Buyer[];
   licences: Licence[];
   lcs: LetterOfCredit[];
+  connectionMode: 'SQL' | 'OFFLINE';
+  onRefreshData: () => Promise<void>;
   handleAddShipment: (sh: Shipment) => Promise<void>;
   handleUpdateShipment: (s: Shipment) => void;
+  handleDeleteShipment: (id: string) => Promise<void>;
   handleAddSupplier: (s: Supplier) => Promise<void>;
   handleUpdateSupplier: (s: Supplier) => Promise<void>;
   handleAddBuyer: (b: Buyer) => Promise<void>;
@@ -313,7 +362,7 @@ function DomainRoutes(props: {
   handleUpdateLC: (l: LetterOfCredit) => Promise<void>;
 }) {
   const { domain, user, setDomain, onLogout, shipments, suppliers, buyers, licences, lcs,
-    handleAddShipment, handleUpdateShipment, handleAddSupplier, handleUpdateSupplier,
+    connectionMode, onRefreshData, handleAddShipment, handleUpdateShipment, handleDeleteShipment, handleAddSupplier, handleUpdateSupplier,
     handleAddBuyer, handleUpdateBuyer, handleUpdateLicence, handleUpdateLC } = props;
   const location = useLocation();
   const navigate = useNavigate();
@@ -330,23 +379,23 @@ function DomainRoutes(props: {
     <Routes>
       {domain === AppDomain.IMPORT ? (
         <>
-          <Route path="/" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><Dashboard shipments={shipments} suppliers={suppliers} licences={licences} lcs={lcs} /></Layout>} />
-            <Route path="/suppliers" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><SupplierMaster suppliers={suppliers} user={user} onUpdateItem={handleUpdateSupplier} onAddItem={handleAddSupplier} /></Layout>} />
-            <Route path="/materials" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><MaterialsMaster /></Layout>} />
-            <Route path="/shipments" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><ShipmentMaster shipments={shipments} suppliers={suppliers} buyers={[]} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} /></Layout>} />
-            <Route path="/shipments/:id" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onUpdateLC={handleUpdateLC} user={user} /></Layout>} />
-            <Route path="/licences" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><LicenceTracker licences={licences} shipments={shipments} onUpdateItem={handleUpdateLicence} onUpdateShipment={handleUpdateShipment} /></Layout>} />
-          <Route path="/lcs" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><LCTracker lcs={lcs} suppliers={suppliers} onUpdateItem={handleUpdateLC} /></Layout>} />
+          <Route path="/" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><Dashboard shipments={shipments} suppliers={suppliers} licences={licences} lcs={lcs} /></Layout>} />
+            <Route path="/suppliers" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><SupplierMaster suppliers={suppliers} user={user} onUpdateItem={handleUpdateSupplier} onAddItem={handleAddSupplier} /></Layout>} />
+            <Route path="/materials" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><MaterialsMaster /></Layout>} />
+            <Route path="/shipments" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><ShipmentMaster shipments={shipments} suppliers={suppliers} buyers={[]} user={user} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} onDeleteShipment={handleDeleteShipment} /></Layout>} />
+            <Route path="/shipments/:id" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} /></Layout>} />
+            <Route path="/licences" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><LicenceTracker licences={licences} shipments={shipments} onUpdateItem={handleUpdateLicence} onUpdateShipment={handleUpdateShipment} /></Layout>} />
+          <Route path="/lcs" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><LCTracker lcs={lcs} suppliers={suppliers} onUpdateItem={handleUpdateLC} /></Layout>} />
           <Route path="/export-shipments" element={<Navigate to="/shipments" replace />} />
         </>
       ) : (
         <>
-          <Route path="/" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><ExportDashboard shipments={shipments} buyers={buyers} licences={licences} /></Layout>} />
-          <Route path="/buyers" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><BuyerMaster buyers={buyers} user={user} onUpdateItem={handleUpdateBuyer} onAddItem={handleAddBuyer} /></Layout>} />
+          <Route path="/" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><ExportDashboard shipments={shipments} buyers={buyers} licences={licences} /></Layout>} />
+          <Route path="/buyers" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><BuyerMaster buyers={buyers} user={user} onUpdateItem={handleUpdateBuyer} onAddItem={handleAddBuyer} /></Layout>} />
           <Route path="/shipments" element={<Navigate to="/export-shipments" replace />} />
-          <Route path="/export-shipments" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><ShipmentMaster isExport shipments={shipments} suppliers={[]} buyers={buyers} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} /></Layout>} />
-          <Route path="/export-lcs" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><ExportLCTracker lcs={lcs} buyers={buyers} onUpdateItem={handleUpdateLC} /></Layout>} />
-          <Route path="/shipments/:id" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onUpdateLC={handleUpdateLC} user={user} /></Layout>} />
+          <Route path="/export-shipments" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><ShipmentMaster isExport shipments={shipments} suppliers={[]} buyers={buyers} user={user} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} onDeleteShipment={handleDeleteShipment} /></Layout>} />
+          <Route path="/export-lcs" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><ExportLCTracker lcs={lcs} buyers={buyers} onUpdateItem={handleUpdateLC} /></Layout>} />
+          <Route path="/shipments/:id" element={<Layout user={user} domain={domain} setDomain={setDomain} onLogout={onLogout} connectionMode={connectionMode} onRefreshData={onRefreshData}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} /></Layout>} />
         </>
       )}
     </Routes>

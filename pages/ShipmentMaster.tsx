@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
-import { Shipment, Supplier, Buyer } from '../types';
-import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X } from 'lucide-react';
+import { Shipment, Supplier, Buyer, User, UserRole } from '../types';
+import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
 import * as XLSX from 'xlsx';
@@ -11,20 +11,23 @@ interface ShipmentMasterProps {
   shipments: Shipment[];
   suppliers: Supplier[];
   buyers: Buyer[];
+  user: User;
   isExport?: boolean;
   onAddShipment: (s: Shipment) => Promise<void>;
   onUpdateShipment?: (s: Shipment) => void;
+  onDeleteShipment?: (id: string) => Promise<void>;
 }
 
 type SortKey = 'date_new' | 'date_old' | 'value_high' | 'value_low';
 
-const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, buyers, isExport = false, onAddShipment, onUpdateShipment }) => {
+const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, buyers, user, isExport = false, onAddShipment, onUpdateShipment, onDeleteShipment }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [companyFilter, setCompanyFilter] = useState('ALL');
   const [sortOrder, setSortOrder] = useState<SortKey>('date_new');
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingRemarksId, setEditingRemarksId] = useState<string | null>(null);
   const [remarksDraft, setRemarksDraft] = useState('');
+  const canDelete = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
 
   const getPartnerName = (sh: Shipment) => {
     if (isExport) {
@@ -250,9 +253,16 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                         )}
                       </td>
                       <td className="px-6 py-5 text-right">
-                        <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 font-bold rounded-xl transition-all text-[11px] text-indigo-600 hover:bg-indigo-50">
-                          Manage <ChevronRight size={14} />
-                        </Link>
+                        <div className="flex items-center justify-end gap-2">
+                          <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 font-bold rounded-xl transition-all text-[11px] text-indigo-600 hover:bg-indigo-50">
+                            Manage <ChevronRight size={14} />
+                          </Link>
+                          {canDelete && onDeleteShipment && (
+                            <button type="button" onClick={async () => { if (!window.confirm('Delete this shipment? This cannot be undone.')) return; await onDeleteShipment?.(sh.id); }} className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Delete shipment">
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </>
                   ) : (
@@ -292,9 +302,16 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                         </select>
                       </td>
                       <td className="px-6 py-5 text-right">
-                        <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 font-bold rounded-xl transition-all text-[11px] text-amber-600 hover:bg-amber-50">
-                          Manage <ChevronRight size={14} />
-                        </Link>
+                        <div className="flex items-center justify-end gap-2">
+                          <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 font-bold rounded-xl transition-all text-[11px] text-amber-600 hover:bg-amber-50">
+                            Manage <ChevronRight size={14} />
+                          </Link>
+                          {canDelete && onDeleteShipment && (
+                            <button type="button" onClick={async () => { if (!window.confirm('Delete this shipment? This cannot be undone.')) return; await onDeleteShipment?.(sh.id); }} className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Delete shipment">
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </>
                   )}

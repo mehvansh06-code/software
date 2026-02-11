@@ -1,0 +1,503 @@
+const path = require('path');
+const fs = require('fs');
+const Database = require('better-sqlite3');
+
+const DB_PATH = path.join(__dirname, '..', 'ledger.db');
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS suppliers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT,
+    country TEXT,
+    bankName TEXT,
+    accountHolderName TEXT,
+    swiftCode TEXT,
+    bankAddress TEXT,
+    contactPerson TEXT,
+    contactDetails TEXT,
+    status TEXT DEFAULT 'PENDING',
+    requestedBy TEXT,
+    createdAt TEXT,
+    hasIntermediaryBank INTEGER,
+    intermediaryBankName TEXT,
+    intermediaryAccountHolderName TEXT,
+    intermediarySwiftCode TEXT,
+    intermediaryBankAddress TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS products (
+    id TEXT PRIMARY KEY,
+    supplierId TEXT,
+    name TEXT,
+    description TEXT,
+    hsnCode TEXT,
+    unit TEXT,
+    type TEXT,
+    FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS materials (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    hsnCode TEXT,
+    unit TEXT DEFAULT 'KGS',
+    type TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS buyers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT,
+    country TEXT,
+    bankName TEXT,
+    accountHolderName TEXT,
+    swiftCode TEXT,
+    bankAddress TEXT,
+    contactPerson TEXT,
+    contactDetails TEXT,
+    salesPersonName TEXT,
+    salesPersonContact TEXT,
+    hasConsignee INTEGER,
+    status TEXT DEFAULT 'PENDING',
+    requestedBy TEXT,
+    createdAt TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS shipments (
+    id TEXT PRIMARY KEY,
+    supplierId TEXT,
+    buyerId TEXT,
+    productId TEXT,
+    invoiceNumber TEXT UNIQUE,
+    company TEXT,
+    amount REAL,
+    currency TEXT,
+    exchangeRate REAL,
+    rate REAL,
+    quantity REAL,
+    status TEXT,
+    expectedShipmentDate TEXT,
+    createdAt TEXT,
+    fobValueFC REAL,
+    fobValueINR REAL,
+    invoiceValueINR REAL,
+    isUnderLC INTEGER,
+    lcNumber TEXT,
+    lcAmount REAL,
+    lcDate TEXT,
+    isUnderLicence INTEGER,
+    linkedLicenceId TEXT,
+    licenceObligationAmount REAL,
+    containerNumber TEXT,
+    blNumber TEXT,
+    blDate TEXT,
+    beNumber TEXT,
+    beDate TEXT,
+    shippingLine TEXT,
+    portCode TEXT,
+    portOfLoading TEXT,
+    portOfDischarge TEXT,
+    assessedValue REAL,
+    dutyBCD REAL,
+    dutySWS REAL,
+    dutyINT REAL,
+    gst REAL,
+    trackingUrl TEXT,
+    incoTerm TEXT,
+    paymentDueDate TEXT,
+    expectedArrivalDate TEXT,
+    documents_json TEXT,
+    history_json TEXT,
+    payments_json TEXT,
+    items_json TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS licences (
+    id TEXT PRIMARY KEY,
+    number TEXT UNIQUE,
+    type TEXT,
+    issueDate TEXT,
+    expiryDate TEXT,
+    dutySaved REAL,
+    eoRequired REAL,
+    eoFulfilled REAL,
+    company TEXT,
+    status TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS lcs (
+    id TEXT PRIMARY KEY,
+    lcNumber TEXT UNIQUE,
+    issuingBank TEXT,
+    supplierId TEXT,
+    amount REAL,
+    currency TEXT,
+    issueDate TEXT,
+    expiryDate TEXT,
+    maturityDate TEXT,
+    company TEXT,
+    status TEXT,
+    remarks TEXT
+  );
+`);
+
+function runMigration(sql, label) {
+  try {
+    db.exec(sql);
+  } catch (e) {
+    if (!/duplicate column name|already exists/i.test(e.message)) console.warn('Migration', label, e.message);
+  }
+}
+
+runMigration('ALTER TABLE shipments ADD COLUMN expectedArrivalDate TEXT', 'expectedArrivalDate');
+runMigration('ALTER TABLE shipments ADD COLUMN items_json TEXT', 'items_json');
+runMigration('ALTER TABLE suppliers ADD COLUMN hasIntermediaryBank INTEGER', 'hasIntermediaryBank');
+runMigration('ALTER TABLE suppliers ADD COLUMN intermediaryBankName TEXT', 'intermediaryBankName');
+runMigration('ALTER TABLE suppliers ADD COLUMN intermediaryAccountHolderName TEXT', 'intermediaryAccountHolderName');
+runMigration('ALTER TABLE suppliers ADD COLUMN intermediarySwiftCode TEXT', 'intermediarySwiftCode');
+runMigration('ALTER TABLE suppliers ADD COLUMN intermediaryBankAddress TEXT', 'intermediaryBankAddress');
+runMigration('ALTER TABLE shipments ADD COLUMN invoiceDate TEXT', 'invoiceDate');
+runMigration('ALTER TABLE shipments ADD COLUMN freightCharges REAL', 'freightCharges');
+runMigration('ALTER TABLE shipments ADD COLUMN otherCharges REAL', 'otherCharges');
+runMigration('ALTER TABLE shipments ADD COLUMN documentsFolderPath TEXT', 'documentsFolderPath');
+runMigration('ALTER TABLE shipments ADD COLUMN remarks TEXT', 'remarks');
+runMigration('ALTER TABLE shipments ADD COLUMN isLC INTEGER', 'shipments.isLC');
+runMigration('ALTER TABLE shipments ADD COLUMN lcReferenceNumber TEXT', 'shipments.lcReferenceNumber');
+runMigration('ALTER TABLE shipments ADD COLUMN lcOpeningDate TEXT', 'shipments.lcOpeningDate');
+runMigration('ALTER TABLE shipments ADD COLUMN fileStatus TEXT', 'shipments.fileStatus');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_lc_reference ON shipments(lcReferenceNumber) WHERE lcReferenceNumber IS NOT NULL', 'idx_shipments_lc_reference');
+runMigration('ALTER TABLE lcs ADD COLUMN buyerId TEXT', 'lcs.buyerId');
+runMigration('ALTER TABLE lcs ADD COLUMN shipments_json TEXT', 'lcs.shipments_json');
+runMigration('ALTER TABLE lcs ADD COLUMN balanceAmount REAL', 'lcs.balanceAmount');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lc_transactions (
+    id TEXT PRIMARY KEY,
+    lcId TEXT NOT NULL,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL,
+    date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    shipmentId TEXT,
+    createdAt TEXT NOT NULL
+  )
+`);
+
+runMigration(`
+  CREATE TABLE IF NOT EXISTS shipment_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shipmentId TEXT NOT NULL,
+    productId TEXT,
+    productName TEXT,
+    description TEXT,
+    hsnCode TEXT,
+    quantity REAL,
+    unit TEXT,
+    rate REAL,
+    amount REAL,
+    productType TEXT,
+    sortOrder INTEGER DEFAULT 0,
+    FOREIGN KEY(shipmentId) REFERENCES shipments(id) ON DELETE CASCADE
+  )
+`, 'shipment_items');
+
+runMigration(`
+  CREATE TABLE IF NOT EXISTS shipment_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shipmentId TEXT NOT NULL,
+    status TEXT,
+    date TEXT,
+    location TEXT,
+    remarks TEXT,
+    updatedBy TEXT,
+    sortOrder INTEGER DEFAULT 0,
+    FOREIGN KEY(shipmentId) REFERENCES shipments(id) ON DELETE CASCADE
+  )
+`, 'shipment_history');
+
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_items_shipmentId ON shipment_items(shipmentId)', 'idx_shipment_items');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_history_shipmentId ON shipment_history(shipmentId)', 'idx_shipment_history');
+
+function migrateJsonToNormalized() {
+  try {
+    const rows = db.prepare('SELECT id, items_json, history_json FROM shipments').all();
+    const insItem = db.prepare('INSERT OR IGNORE INTO shipment_items (shipmentId, productId, productName, description, hsnCode, quantity, unit, rate, amount, productType, sortOrder) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+    const insHist = db.prepare('INSERT OR IGNORE INTO shipment_history (shipmentId, status, date, location, remarks, updatedBy, sortOrder) VALUES (?,?,?,?,?,?,?)');
+    for (const r of rows) {
+      const hasItems = db.prepare('SELECT 1 FROM shipment_items WHERE shipmentId = ?').get(r.id);
+      if (!hasItems && r.items_json) {
+        try {
+          const items = JSON.parse(r.items_json);
+          if (Array.isArray(items)) items.forEach((it, i) => {
+            insItem.run(r.id, it.productId || null, it.productName || null, it.description || null, it.hsnCode || null, it.quantity ?? null, it.unit || null, it.rate ?? null, it.amount ?? null, it.productType || null, i);
+          });
+        } catch (_) {}
+      }
+      const hasHist = db.prepare('SELECT 1 FROM shipment_history WHERE shipmentId = ?').get(r.id);
+      if (!hasHist && r.history_json) {
+        try {
+          const hist = JSON.parse(r.history_json);
+          if (Array.isArray(hist)) hist.forEach((h, i) => {
+            insHist.run(r.id, h.status || null, h.date || null, h.location || null, h.remarks || null, h.updatedBy || null, i);
+          });
+        } catch (_) {}
+      }
+    }
+  } catch (e) {
+    console.warn('migrateJsonToNormalized:', e.message);
+  }
+}
+migrateJsonToNormalized();
+
+function runMany(sql, rows) {
+  rows.forEach((row) => db.prepare(sql).run(...row));
+}
+
+function getShipmentValues(s, folderPath) {
+  const productId = (s.items && s.items[0]) ? s.items[0].productId : s.productId;
+  const rate = (s.items && s.items[0]) ? s.items[0].rate : s.rate;
+  const quantity = (s.items && s.items[0]) ? s.items[0].quantity : s.quantity;
+  return [
+    s.id,
+    s.supplierId || null,
+    s.buyerId || null,
+    productId ?? null,
+    s.invoiceNumber ?? null,
+    s.company ?? null,
+    s.amount ?? null,
+    s.currency ?? null,
+    (s.exchangeRate != null && s.exchangeRate !== '') ? s.exchangeRate : 1,
+    rate ?? null,
+    quantity ?? null,
+    s.status ?? null,
+    s.expectedShipmentDate ?? null,
+    s.createdAt ?? null,
+    s.fobValueFC ?? 0,
+    s.fobValueINR ?? 0,
+    s.invoiceValueINR ?? 0,
+    s.isUnderLC ? 1 : 0,
+    s.lcNumber || null,
+    s.lcAmount ?? 0,
+    s.lcDate || null,
+    s.isUnderLicence ? 1 : 0,
+    s.linkedLicenceId || null,
+    s.licenceObligationAmount ?? 0,
+    s.containerNumber || null,
+    s.blNumber || null,
+    s.blDate || null,
+    s.beNumber || null,
+    s.beDate || null,
+    s.shippingLine || null,
+    s.portCode || null,
+    s.portOfLoading || null,
+    s.portOfDischarge || null,
+    s.assessedValue ?? 0,
+    s.dutyBCD ?? 0,
+    s.dutySWS ?? 0,
+    s.dutyINT ?? 0,
+    s.gst ?? 0,
+    s.trackingUrl || null,
+    s.incoTerm || 'FOB',
+    s.paymentDueDate || null,
+    s.expectedArrivalDate ?? null,
+    s.invoiceDate ?? null,
+    s.freightCharges ?? null,
+    s.otherCharges ?? null,
+    typeof s.documents === 'string' ? s.documents : JSON.stringify(s.documents || {}),
+    typeof s.history === 'string' ? s.history : JSON.stringify(s.history || []),
+    typeof s.payments === 'string' ? s.payments : JSON.stringify(s.payments || []),
+    typeof s.items === 'string' ? s.items : JSON.stringify(s.items || []),
+    folderPath ?? null
+  ];
+}
+
+function seedDummyData() {
+  const hasSuppliers = db.prepare('SELECT COUNT(*) as c FROM suppliers').get().c > 0;
+  if (hasSuppliers) return;
+  const now = new Date().toISOString();
+  const daysAgo = (d) => new Date(Date.now() - d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const daysFuture = (d) => new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  runMany(`INSERT INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    ['s1', 'Shenzhen Global Textiles', 'Industrial Zone A, Shenzhen', 'China', 'Bank of China', 'Shenzhen Global Textiles Ltd', 'BKCHCNBJ', 'Shenzhen', 'Li Wei', 'liwei@szglobal.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s2', 'Berlin Polymers GmbH', 'Hauptstrasse 10, Berlin', 'Germany', 'Deutsche Bank', 'Berlin Polymers GmbH', 'DEUTDEDB', 'Berlin', 'Hans Mueller', 'hans@berlinpolymers.de', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s3', 'Tokyo Synthetics Co', 'Shinjuku 1-2-3, Tokyo', 'Japan', 'MUFG Bank', 'Tokyo Synthetics Co Ltd', 'BOTKJPJT', 'Tokyo', 'Yuki Tanaka', 'yuki@tokyosyn.co.jp', 'APPROVED', 'Admin', now, 1, 'Mizuho Bank', 'Tokyo Synthetics Co Ltd', 'MHCBJPJT', 'Tokyo Branch'],
+    ['s4', 'Mumbai Dyestuffs Pvt Ltd', 'Andheri East, Mumbai', 'India', 'HDFC Bank', 'Mumbai Dyestuffs Pvt Ltd', 'HDFCINBB', 'Mumbai', 'Raj Patel', 'raj@mumbaidye.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s5', 'Istanbul Loom Co', 'Taksim Square, Istanbul', 'Turkey', 'Turkiye Is Bankasi', 'Istanbul Loom Co', 'ISBKTRIS', 'Istanbul', 'Mehmet Yilmaz', 'mehmet@istanbulloom.com', 'PENDING', 'Admin', now, 0, null, null, null, null],
+  ]);
+  runMany('INSERT INTO products VALUES (?,?,?,?,?,?,?)', [
+    ['p1', 's1', 'Premium Cotton Yarn', '40s count', '5205', 'KGS', 'RAW_MATERIAL'],
+    ['p2', 's1', 'Polyester Staple Fiber', '1.2D', '5503', 'KGS', 'RAW_MATERIAL'],
+    ['p3', 's2', 'Nylon Textured Yarn', '70D', '5402', 'KGS', 'RAW_MATERIAL'],
+    ['p4', 's3', 'Viscose Rayon', '30s', '5403', 'KGS', 'RAW_MATERIAL'],
+    ['p5', 's4', 'Reactive Dyes Red', 'Liquid', '3204', 'LTR', 'RAW_MATERIAL'],
+  ]);
+  runMany('INSERT INTO materials VALUES (?,?,?,?,?,?)', [
+    ['m1', 'Cotton Yarn 40s', 'Combed cotton', '5205', 'KGS', 'RAW_MATERIAL'],
+    ['m2', 'Polyester Staple Fiber', '1.2 Denier', '5503', 'KGS', 'RAW_MATERIAL'],
+    ['m3', 'Nylon Textured Yarn', '70D', '5402', 'KGS', 'RAW_MATERIAL'],
+    ['m4', 'Viscose Rayon Yarn', '30s', '5403', 'KGS', 'RAW_MATERIAL'],
+    ['m5', 'Reactive Dyes Red', 'Liquid dye', '3204', 'LTR', 'RAW_MATERIAL'],
+    ['m6', 'Caustic Soda Flakes', 'Industrial grade', '2815', 'KGS', 'RAW_MATERIAL'],
+    ['m7', 'Industrial Weaving Loom', 'Auto loom', '8448', 'NOS', 'CAPITAL_GOOD'],
+    ['m8', 'Spandex Elastic Yarn', '40D', '5404', 'KGS', 'RAW_MATERIAL'],
+  ]);
+  runMany('INSERT INTO buyers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+    ['b1', 'London Fashion Hub', '22 Savile Row, London', 'United Kingdom', 'Barclays Bank', 'London Fashion Hub PLC', 'BARCGB22XXX', 'Canary Wharf, London', 'James Miller', 'james@londonfashion.co.uk', 'Rahul Sharma', '9876543210', 1, 'APPROVED', 'Rahul Sharma', now],
+    ['b2', 'NY Trends Inc', '5th Avenue, New York', 'USA', 'Chase Bank', 'NY Trends Inc', 'CHASUS33XXX', 'Manhattan, NY', 'Sarah Jessica', 'sarah@nytrends.com', 'J P Tosniwal', '9988776655', 0, 'APPROVED', 'J P Tosniwal', now],
+    ['b3', 'Dubai Textile Trading', 'Sheikh Zayed Road, Dubai', 'UAE', 'Emirates NBD', 'Dubai Textile Trading LLC', 'EBILAEAD', 'Dubai', 'Omar Hassan', 'omar@dubaitextile.ae', 'Sales Team', '9123456789', 0, 'APPROVED', 'Admin', now],
+  ]);
+  runMany('INSERT INTO licences VALUES (?,?,?,?,?,?,?,?,?,?)', [
+    ['lic1', '0310224567', 'ADVANCE', daysAgo(200), daysFuture(90), 1000000, 6000000, 500000, 'GFPL', 'ACTIVE'],
+    ['lic2', '0310224568', 'ADVANCE', daysAgo(180), daysFuture(120), 1200000, 7000000, 2000000, 'GFPL', 'ACTIVE'],
+    ['lic3', '0310224569', 'EPCG', daysAgo(150), daysFuture(200), 800000, 5000000, 1500000, 'GTEX', 'ACTIVE'],
+    ['lic4', '0310224570', 'EPCG', daysAgo(100), daysFuture(250), 900000, 5500000, 0, 'GFPL', 'ACTIVE'],
+  ]);
+  runMany('INSERT INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [
+    ['lc1', 'LC/IMP/24/0100', 'State Bank of India', 's1', 50000, 'USD', daysAgo(30), daysFuture(60), daysFuture(90), 'GFPL', 'OPEN', 'Q4 Cotton import'],
+    ['lc2', 'LC/IMP/24/0101', 'HDFC Bank', 's2', 35000, 'EUR', daysAgo(15), daysFuture(75), daysFuture(105), 'GFPL', 'OPEN', 'Polymer batch'],
+    ['lc3', 'LC/IMP/24/0102', 'ICICI Bank', 's3', 42000, 'USD', daysAgo(7), daysFuture(30), daysFuture(60), 'GTEX', 'OPEN', 'Synthetic yarn'],
+  ]);
+  const item1 = [{ productId: 'm1', productName: 'Cotton Yarn 40s', hsnCode: '5205', quantity: 5000, unit: 'KGS', rate: 3.5, amount: 17500, productType: 'RAW_MATERIAL' }];
+  const item2 = [{ productId: 'm2', productName: 'Polyester Staple Fiber', hsnCode: '5503', quantity: 10000, unit: 'KGS', rate: 1.2, amount: 12000, productType: 'RAW_MATERIAL' }];
+  const item3 = [{ productId: 'mp1', productName: 'Cotton Yarn 40s', hsnCode: '5205', quantity: 2000, unit: 'KGS', rate: 5, amount: 10000, productType: 'RAW_MATERIAL' }];
+  const item4 = [{ productId: 'mp1', productName: 'Cotton Yarn 40s', hsnCode: '5205', quantity: 3000, unit: 'KGS', rate: 5, amount: 15000, productType: 'RAW_MATERIAL' }];
+  const hist = [{ status: 'ORDERED', date: now, location: 'System Origin', remarks: 'Order placed' }];
+  const shipSql = `INSERT INTO shipments (
+    id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
+    status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
+    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
+    licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
+    incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
+    documents_json, history_json, payments_json, items_json, documentsFolderPath
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  const shipRows = [
+    { id: 'sh1', supplierId: 's1', buyerId: null, productId: 'm1', invoiceNumber: 'INV/IMP/24/001', company: 'GFPL', amount: 17500, currency: 'USD', exchangeRate: 84, rate: 3.5, quantity: 5000, status: 'IN_TRANSIT', expectedShipmentDate: daysAgo(5), createdAt: now, fobValueFC: 17500, fobValueINR: 1470000, invoiceValueINR: 1470000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0100', lcAmount: 0, lcDate: daysAgo(30), isUnderLicence: 1, linkedLicenceId: 'lic1', licenceObligationAmount: 50000, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Shanghai', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(30), expectedArrivalDate: daysFuture(25), invoiceDate: daysAgo(10), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item1 },
+    { id: 'sh2', supplierId: 's2', buyerId: null, productId: 'm2', invoiceNumber: 'INV/IMP/24/002', company: 'GFPL', amount: 12000, currency: 'EUR', exchangeRate: 90, rate: 1.2, quantity: 10000, status: 'ORDERED', expectedShipmentDate: null, createdAt: now, fobValueFC: 12000, fobValueINR: 1080000, invoiceValueINR: 1080000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0101', lcAmount: 0, lcDate: daysAgo(15), isUnderLicence: 1, linkedLicenceId: 'lic2', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Hamburg', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(45), expectedArrivalDate: null, invoiceDate: daysAgo(3), freightCharges: 500, otherCharges: 200, documents: {}, history: hist, payments: [], items: item2 },
+    { id: 'sh3', supplierId: null, buyerId: 'b1', productId: 'mp1', invoiceNumber: 'INV/EXP/24/001', company: 'GFPL', amount: 10000, currency: 'GBP', exchangeRate: 106.5, rate: 5, quantity: 2000, status: 'ORDERED', expectedShipmentDate: null, createdAt: now, fobValueFC: 10000, fobValueINR: 1065000, invoiceValueINR: 1065000, isUnderLC: 0, lcNumber: null, lcAmount: 0, lcDate: null, isUnderLicence: 1, linkedLicenceId: 'lic1', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Mundra', portOfLoading: 'Southampton', portOfDischarge: 'Southampton', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(14), expectedArrivalDate: null, invoiceDate: daysAgo(2), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item3 },
+    { id: 'sh4', supplierId: null, buyerId: 'b2', productId: 'mp1', invoiceNumber: 'INV/EXP/24/002', company: 'GTEX', amount: 15000, currency: 'USD', exchangeRate: 84, rate: 5, quantity: 3000, status: 'LOADING', expectedShipmentDate: null, createdAt: now, fobValueFC: 15000, fobValueINR: 1260000, invoiceValueINR: 1260000, isUnderLC: 0, lcNumber: null, lcAmount: 0, lcDate: null, isUnderLicence: 1, linkedLicenceId: 'lic3', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Mundra', portOfLoading: 'New York', portOfDischarge: 'New York', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(21), expectedArrivalDate: null, invoiceDate: daysAgo(1), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item4 },
+  ];
+  shipRows.forEach((s) => {
+    db.prepare(shipSql).run(...getShipmentValues(s, null));
+  });
+  console.log('Seeded sample data: vendors, materials, buyers, licences, LCs, shipments.');
+}
+
+function seedAdditionalData() {
+  const hasSuppliers = db.prepare('SELECT COUNT(*) as c FROM suppliers').get().c > 0;
+  if (!hasSuppliers) return;
+  const hasExtra = db.prepare('SELECT 1 FROM suppliers WHERE id = ?').get('s10');
+  if (hasExtra) return;
+  const now = new Date().toISOString();
+  const daysAgo = (d) => new Date(Date.now() - d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const daysFuture = (d) => new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  runMany(`INSERT OR IGNORE INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    ['s10', 'Vietnam Cotton Co', 'Ho Chi Minh City', 'Vietnam', 'Vietcombank', 'Vietnam Cotton Co Ltd', 'VCBCVNVX', 'HCMC', 'Nguyen Van', 'nguyen@vncotton.vn', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s11', 'Pakistan Yarn Mills', 'Karachi', 'Pakistan', 'HBL', 'Pakistan Yarn Mills Ltd', 'HABBPKKA', 'Karachi', 'Ali Khan', 'ali@pk yarn.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+  ]);
+  runMany('INSERT OR IGNORE INTO products VALUES (?,?,?,?,?,?,?)', [
+    ['p10', 's10', 'Combed Cotton 30s', 'Vietnam origin', '5205', 'KGS', 'RAW_MATERIAL'],
+    ['p11', 's11', 'Ring Spun Yarn', '40s', '5206', 'KGS', 'RAW_MATERIAL'],
+  ]);
+  runMany('INSERT OR IGNORE INTO materials VALUES (?,?,?,?,?,?)', [
+    ['m10', 'Combed Cotton 30s', 'Vietnam', '5205', 'KGS', 'RAW_MATERIAL'],
+    ['m11', 'Ring Spun Yarn 40s', 'Pakistan', '5206', 'KGS', 'RAW_MATERIAL'],
+  ]);
+  runMany('INSERT OR IGNORE INTO buyers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+    ['b10', 'Berlin Textiles GmbH', 'Berlin', 'Germany', 'Commerzbank', 'Berlin Textiles GmbH', 'COBADEFF', 'Berlin', 'Klaus Weber', 'klaus@berlintextiles.de', 'Sales', '9111223344', 0, 'APPROVED', 'Admin', now],
+  ]);
+  runMany('INSERT OR IGNORE INTO licences VALUES (?,?,?,?,?,?,?,?,?,?)', [
+    ['lic10', '0310224571', 'ADVANCE', daysAgo(90), daysFuture(180), 1100000, 6500000, 800000, 'GFPL', 'ACTIVE'],
+    ['lic11', '0310224572', 'EPCG', daysAgo(60), daysFuture(220), 850000, 5200000, 600000, 'GTEX', 'ACTIVE'],
+  ]);
+  runMany('INSERT OR IGNORE INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [
+    ['lc10', 'LC/IMP/24/0103', 'Axis Bank', 's10', 28000, 'USD', daysAgo(10), daysFuture(50), daysFuture(80), 'GFPL', 'OPEN', 'Vietnam cotton'],
+    ['lc11', 'LC/IMP/24/0104', 'Kotak Bank', 's11', 32000, 'USD', daysAgo(5), daysFuture(45), daysFuture(75), 'GTEX', 'OPEN', 'Pakistan yarn'],
+  ]);
+  const hist = [{ status: 'ORDERED', date: now, location: 'System Origin', remarks: 'Order placed' }];
+  const shipSqlAdd = `INSERT OR IGNORE INTO shipments (
+    id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
+    status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
+    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
+    licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
+    incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
+    documents_json, history_json, payments_json, items_json, documentsFolderPath
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  const item5 = [{ productId: 'm10', productName: 'Combed Cotton 30s', hsnCode: '5205', quantity: 8000, unit: 'KGS', rate: 3.2, amount: 25600, productType: 'RAW_MATERIAL' }];
+  const item6 = [{ productId: 'm11', productName: 'Ring Spun Yarn 40s', hsnCode: '5206', quantity: 5000, unit: 'KGS', rate: 4.0, amount: 20000, productType: 'RAW_MATERIAL' }];
+  const item7 = [{ productId: 'mp2', productName: 'Polyester Staple Fiber', hsnCode: '5503', quantity: 4000, unit: 'KGS', rate: 1.5, amount: 6000, productType: 'RAW_MATERIAL' }];
+  [
+    { id: 'sh10', supplierId: 's10', buyerId: null, productId: 'm10', invoiceNumber: 'INV/IMP/24/010', company: 'GFPL', amount: 25600, currency: 'USD', exchangeRate: 84, rate: 3.2, quantity: 8000, status: 'IN_TRANSIT', expectedShipmentDate: daysAgo(2), createdAt: now, fobValueFC: 25600, fobValueINR: 2150400, invoiceValueINR: 2150400, isUnderLC: 1, lcNumber: 'LC/IMP/24/0103', lcAmount: 0, lcDate: daysAgo(10), isUnderLicence: 1, linkedLicenceId: 'lic10', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Ho Chi Minh', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(20), expectedArrivalDate: daysFuture(18), invoiceDate: daysAgo(5), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item5 },
+    { id: 'sh11', supplierId: 's11', buyerId: null, productId: 'm11', invoiceNumber: 'INV/IMP/24/011', company: 'GTEX', amount: 20000, currency: 'USD', exchangeRate: 84, rate: 4, quantity: 5000, status: 'ORDERED', expectedShipmentDate: null, createdAt: now, fobValueFC: 20000, fobValueINR: 1680000, invoiceValueINR: 1680000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0104', lcAmount: 0, lcDate: daysAgo(5), isUnderLicence: 1, linkedLicenceId: 'lic11', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Karachi', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(35), expectedArrivalDate: null, invoiceDate: daysAgo(1), freightCharges: 300, otherCharges: 100, documents: {}, history: hist, payments: [], items: item6 },
+    { id: 'sh12', supplierId: null, buyerId: 'b1', productId: 'mp2', invoiceNumber: 'INV/EXP/24/010', company: 'GFPL', amount: 6000, currency: 'USD', exchangeRate: 84, rate: 1.5, quantity: 4000, status: 'LOADING', expectedShipmentDate: null, createdAt: now, fobValueFC: 6000, fobValueINR: 504000, invoiceValueINR: 504000, isUnderLC: 0, lcNumber: null, lcAmount: 0, lcDate: null, isUnderLicence: 1, linkedLicenceId: 'lic1', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Mundra', portOfLoading: 'London', portOfDischarge: 'London', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(10), expectedArrivalDate: null, invoiceDate: daysAgo(0), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item7 },
+  ].forEach((s) => {
+    db.prepare(shipSqlAdd).run(...getShipmentValues(s, null));
+  });
+  console.log('Added extra sample data (vendors, LCs, licences, shipments).');
+}
+
+function ensureMinimalShipments() {
+  const shipCount = db.prepare('SELECT COUNT(*) as c FROM shipments').get().c;
+  if (shipCount > 0) return;
+  const sup = db.prepare('SELECT id FROM suppliers LIMIT 1').get();
+  const buy = db.prepare('SELECT id FROM buyers LIMIT 1').get();
+  const lic = db.prepare('SELECT id FROM licences LIMIT 1').get();
+  const mat = db.prepare('SELECT id, name, hsnCode FROM materials LIMIT 1').get();
+  if (!sup || !mat) return;
+  const now = new Date().toISOString();
+  const daysAgo = (d) => new Date(Date.now() - d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const daysFuture = (d) => new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const hist = [{ status: 'ORDERED', date: now, location: 'System Origin', remarks: 'Order placed' }];
+  const linkedLic = (lic != null && lic.id != null) ? lic.id : null;
+  const shipSql = `INSERT INTO shipments (
+    id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
+    status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
+    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
+    licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
+    incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
+    documents_json, history_json, payments_json, items_json, documentsFolderPath
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  const item1 = [{ productId: mat.id, productName: mat.name, hsnCode: mat.hsnCode || '', quantity: 1000, unit: 'KGS', rate: 5, amount: 5000, productType: 'RAW_MATERIAL' }];
+  const s1 = {
+    id: 'shseed1', supplierId: sup.id, buyerId: null, productId: mat.id, invoiceNumber: 'INV/IMP/SEED/001', company: 'GFPL',
+    amount: 5000, currency: 'USD', exchangeRate: 84, rate: 5, quantity: 1000, status: 'IN_TRANSIT', expectedShipmentDate: daysAgo(3), createdAt: now,
+    fobValueFC: 5000, fobValueINR: 420000, invoiceValueINR: 420000, isUnderLC: 0, lcNumber: null, lcAmount: 0, lcDate: null,
+    isUnderLicence: lic ? 1 : 0, linkedLicenceId: linkedLic, licenceObligationAmount: 0,
+    containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null,
+    portCode: 'Mundra', portOfLoading: 'Mundra', portOfDischarge: 'Mundra',
+    assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null,
+    incoTerm: 'FOB', paymentDueDate: daysFuture(14), expectedArrivalDate: daysFuture(12), invoiceDate: daysAgo(5), freightCharges: null, otherCharges: null,
+    documents: {}, history: hist, payments: [], items: item1
+  };
+  db.prepare(shipSql).run(...getShipmentValues(s1, null));
+  if (buy) {
+    const item2 = [{ productId: mat.id, productName: mat.name, hsnCode: mat.hsnCode || '', quantity: 500, unit: 'KGS', rate: 8, amount: 4000, productType: 'RAW_MATERIAL' }];
+    const s2 = {
+      id: 'shseed2', supplierId: null, buyerId: buy.id, productId: mat.id, invoiceNumber: 'INV/EXP/SEED/001', company: 'GFPL',
+      amount: 4000, currency: 'USD', exchangeRate: 84, rate: 8, quantity: 500, status: 'ORDERED', expectedShipmentDate: null, createdAt: now,
+      fobValueFC: 4000, fobValueINR: 336000, invoiceValueINR: 336000, isUnderLC: 0, lcNumber: null, lcAmount: 0, lcDate: null,
+      isUnderLicence: lic ? 1 : 0, linkedLicenceId: linkedLic, licenceObligationAmount: 0,
+      containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null,
+      portCode: 'Mundra', portOfLoading: 'Mundra', portOfDischarge: 'Port',
+      assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null,
+      incoTerm: 'FOB', paymentDueDate: daysFuture(7), expectedArrivalDate: null, invoiceDate: daysAgo(1), freightCharges: null, otherCharges: null,
+      documents: {}, history: hist, payments: [], items: item2
+    };
+    db.prepare(shipSql).run(...getShipmentValues(s2, null));
+  }
+  console.log('Added minimal sample shipments (none existed).');
+}
+
+seedDummyData();
+seedAdditionalData();
+ensureMinimalShipments();
+
+module.exports = db;
+module.exports.getShipmentValues = getShipmentValues;

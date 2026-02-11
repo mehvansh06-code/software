@@ -58,11 +58,6 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const safeEndpoint = sanitizeEndpoint(endpoint);
   if (!safeEndpoint) return Promise.reject(new Error('Invalid endpoint'));
 
-  // #region agent log
-  const method = (options.method || 'GET').toUpperCase();
-  fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'request', data: { endpoint: safeEndpoint, method }, timestamp: Date.now(), hypothesisId: 'H1' }) }).catch(() => {});
-  // #endregion
-
   if (forceSimulated) return handleSimulatedRequest(safeEndpoint, options);
 
   const controller = new AbortController();
@@ -76,9 +71,6 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
     });
 
     clearTimeout(timeoutId);
-    // #region agent log
-    if (!response.ok) fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'response not ok', data: { endpoint: safeEndpoint, method, status: response.status }, timestamp: Date.now(), hypothesisId: 'H1' }) }).catch(() => {});
-    // #endregion
     if (!response.ok) throw new Error('Offline');
 
     serverAvailable = true;
@@ -86,9 +78,6 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
   } catch (error) {
     clearTimeout(timeoutId);
     serverAvailable = false;
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'fallback', data: { endpoint: safeEndpoint, method, err: (error as Error)?.message }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-    // #endregion
     return handleSimulatedRequest(safeEndpoint, options);
   }
 }
@@ -100,9 +89,6 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
   const method = (options.method || 'GET').toUpperCase();
 
   if (endpoint === 'stats') {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:handleSimulatedRequest', message: 'return stats', data: { endpoint, method }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-    // #endregion
     return {
       suppliers: sim.suppliers.length,
       buyers: sim.buyers.length,
@@ -117,21 +103,12 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
 
   if (!options.method || options.method === 'GET') {
     if (endpoint.includes('/documents-folder-files')) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:handleSimulatedRequest', message: 'return documents-folder-files fallback', data: { endpoint, method }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-      // #endregion
       return { files: [] };
     }
     if (endpoint.includes('/documents-folder') && !endpoint.endsWith('documents-folder-files')) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:handleSimulatedRequest', message: 'return documents-folder fallback', data: { endpoint, method }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-      // #endregion
       return { path: null, exists: false };
     }
     const ret = sim[table] || [];
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:handleSimulatedRequest', message: 'return GET', data: { endpoint, method, isArray: Array.isArray(ret) }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-    // #endregion
     return ret;
   }
 
@@ -155,15 +132,9 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
     sim.isDirty = true; // Mark as having unsynced local data
     sim.lastSync = new Date().toISOString();
     saveSimData(sim);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:handleSimulatedRequest', message: 'return POST/PUT', data: { endpoint, method }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-    // #endregion
     return { success: true, mode: 'BROWSER_PERSISTENT' };
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/6a4545ac-9fc1-409a-b304-e37dab664d41', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:handleSimulatedRequest', message: 'return default []', data: { endpoint, method }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-  // #endregion
   return [];
 }
 
@@ -182,6 +153,7 @@ export const api = {
     list: () => fetchApi('shipments'),
     create: (data: any) => fetchApi('shipments', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`shipments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchApi(`shipments/${id}`, { method: 'DELETE' }),
     getDocumentsFolder: (id: string) => {
       if (!id || String(id) === 'undefined') return Promise.resolve({ path: null, exists: false });
       return fetchApi(`shipments/${id}/documents-folder`).catch((e) => {
@@ -264,23 +236,9 @@ export const api = {
       sim.isDirty = true;
       saveSimData(sim);
     },
+    /** Disabled: pushing localStorage to server would overwrite server data with stale local data. No conflict resolution implemented. */
     syncToSQL: async () => {
-      const sim = getSimData();
-      try {
-        await Promise.all([
-          ...(sim.suppliers || []).map((s: any) => fetch(`${API_BASE}/suppliers`, { method: 'POST', body: JSON.stringify(s), headers: { 'Content-Type': 'application/json' } })),
-          ...(sim.buyers || []).map((b: any) => fetch(`${API_BASE}/buyers`, { method: 'POST', body: JSON.stringify(b), headers: { 'Content-Type': 'application/json' } })),
-          ...(sim.shipments || []).map((s: any) => fetch(`${API_BASE}/shipments`, { method: 'POST', body: JSON.stringify(s), headers: { 'Content-Type': 'application/json' } })),
-          ...(sim.licences || []).map((l: any) => fetch(`${API_BASE}/licences`, { method: 'POST', body: JSON.stringify(l), headers: { 'Content-Type': 'application/json' } })),
-          ...(sim.lcs || []).map((lc: any) => fetch(`${API_BASE}/lcs`, { method: 'POST', body: JSON.stringify(lc), headers: { 'Content-Type': 'application/json' } })),
-          ...(sim.materials || []).map((m: any) => fetch(`${API_BASE}/materials`, { method: 'POST', body: JSON.stringify(m), headers: { 'Content-Type': 'application/json' } })),
-        ]);
-        sim.isDirty = false;
-        saveSimData(sim);
-        return true;
-      } catch (e) {
-        return false;
-      }
+      return true;
     },
     reset: () => {
       localStorage.removeItem(SIM_KEY);
