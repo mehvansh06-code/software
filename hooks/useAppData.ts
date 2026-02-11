@@ -161,9 +161,13 @@ export function useAppData(): UseAppDataReturn {
   }, []);
 
   const handleDeleteShipment = useCallback(async (id: string) => {
-    await api.shipments.delete(id);
-    setShipments(prev => prev.filter(sh => sh.id !== id));
-  }, []);
+    try {
+      await api.shipments.delete(id);
+      setShipments(prev => prev.filter(sh => sh.id !== id));
+    } finally {
+      await loadAllData();
+    }
+  }, [loadAllData]);
 
   const handleUpdateLicence = useCallback(async (updated: Licence) => {
     await api.licences.update(updated.id, updated);

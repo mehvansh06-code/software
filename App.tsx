@@ -1,6 +1,6 @@
 import React from 'react';
 import { HashRouter } from 'react-router-dom';
-import useAppData from './hooks/useAppData';
+import { useAppData } from './hooks/useAppData';
 import DomainRoutes from './routes/DomainRoutes';
 import Login from './pages/Login';
 import DomainSelector from './pages/DomainSelector';
