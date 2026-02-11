@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CLASSES_ROOT\flotex-open]
+@="URL:Flotex Open Folder"
+"URL Protocol"=""
+
+[HKEY_CLASSES_ROOT\flotex-open\shell\open\command]
+@="powershell.exe -ExecutionPolicy Bypass -File \"C:\\Flotex\\opener.ps1\" \"%1\""

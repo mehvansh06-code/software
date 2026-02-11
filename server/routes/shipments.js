@@ -1,7 +1,6 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
@@ -175,6 +174,12 @@ function openFolderResponse(res, success, message, statusCode, debug) {
   return res.status(statusCode == null ? 200 : statusCode).json(payload);
 }
 
+/** Converts forward slashes to backslashes; ensures Windows UNC-friendly path (e.g. \\LAPTOP-RMPRPKLJ\Import Shipment Documents\...). */
+function toWindowsPath(pathStr) {
+  if (!pathStr || typeof pathStr !== 'string') return pathStr;
+  return pathStr.replace(/\//g, '\\');
+}
+
 function createRouter(broadcast) {
   const router = express.Router();
 
@@ -240,7 +245,7 @@ function createRouter(broadcast) {
           try { fs.mkdirSync(folderPath, { recursive: true }); } catch (e) { console.warn('Could not create shipment documents folder:', folderPath, e.message); }
         }
         const exists = fs.existsSync(folderPath);
-        send(folderPath, exists);
+        send(toWindowsPath(folderPath), exists);
       } catch (pathErr) {
         console.warn('GET /documents-folder path/fs:', pathErr.message);
         send(null, false);
@@ -364,40 +369,8 @@ function createRouter(broadcast) {
         }
       }
 
-      const isWin = process.platform === 'win32';
-      try {
-        if (isWin) {
-          const proc = spawn('explorer', [cleanPath], {
-            windowsVerbatimArguments: true,
-            detached: true,
-            stdio: 'ignore'
-          });
-          proc.unref();
-          proc.on('error', (err) => {
-            if (!res.headersSent) openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message, path: cleanPath.substring(0, 120) });
-          });
-          proc.on('spawn', () => {
-            if (!res.headersSent) openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
-          });
-          proc.on('close', () => {
-            if (!res.headersSent) openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
-          });
-        } else {
-          const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-          const proc = spawn(cmd, [cleanPath]);
-          proc.on('error', (err) => {
-            if (!res.headersSent) openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message, path: cleanPath.substring(0, 120) });
-          });
-          proc.on('close', (code) => {
-            if (!res.headersSent) {
-              if (code !== 0) openFolderResponse(res, false, 'Failed to open folder (exit ' + code + '). You can open it manually: ' + cleanPath, 200, { path: cleanPath.substring(0, 120) });
-              else openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
-            }
-          });
-        }
-      } catch (execErr) {
-        if (!res.headersSent) openFolderResponse(res, false, execErr.message || 'Failed to open folder', 200, { execError: execErr.message, path: cleanPath.substring(0, 120) });
-      }
+      const pathForClient = toWindowsPath(cleanPath);
+      if (!res.headersSent) return res.status(200).json({ success: true, message: 'OK', path: pathForClient });
     } catch (err) {
       console.error('POST /open-documents-folder error:', err);
       if (!res.headersSent) {

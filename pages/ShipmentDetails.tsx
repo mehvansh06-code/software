@@ -500,6 +500,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const sanitizeFolderName = (str: string) => (str || '').replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'Unknown';
   const displayFolderPath = documentsFolderPath || (shipment ? `${sanitizeFolderName(partnerName)}_${sanitizeFolderName(shipment.invoiceNumber)}` : '');
 
+  const FALLBACK_OPEN_FOLDER_MS = 2000;
   const openDocumentsFolder = async () => {
     const shipmentId = shipment?.id ?? (shipment as { _id?: string })?._id;
     if (!shipmentId || String(shipmentId) === 'undefined') {
@@ -512,19 +513,25 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setToastMessage(null);
     setOpeningFolder(true);
     try {
-      const result = await api.shipments.openDocumentsFolder(shipmentId, shipment);
-      if (result?.success) {
+      const result = await api.shipments.openDocumentsFolder(shipmentId, shipment) as { success?: boolean; message?: string; path?: string };
+      const returnedPath = result?.path && typeof result.path === 'string' ? result.path : null;
+      if (result?.success && returnedPath) {
         setFolderError(null);
-        api.shipments.getDocumentsFolder(shipmentId).then((r: { path?: string | null }) => r?.path && setDocumentsFolderPath(r.path));
-        const isRemote = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
-        if (isRemote) {
-          setToastVariant('info');
-          setToastMessage('Folder opened on the server computer. If you\'re on another device, check the machine running the backend.');
-          setTimeout(() => setToastMessage(null), 6000);
-        }
+        setDocumentsFolderPath(returnedPath);
+        window.location.href = `flotex-open://${encodeURIComponent(returnedPath)}`;
+        setTimeout(() => {
+          if (typeof document !== 'undefined' && document.hasFocus()) {
+            try {
+              navigator.clipboard.writeText(returnedPath);
+              setToastVariant('info');
+              setToastMessage('Opening folder... If it doesn\'t appear, the path has been copied to your clipboard for manual pasting.');
+              setTimeout(() => setToastMessage(null), 6000);
+            } catch (_) {}
+          }
+        }, FALLBACK_OPEN_FOLDER_MS);
         return;
       }
-      const msg = result?.message || result?.error || 'Could not open folder';
+      const msg = result?.message || result?.error || (returnedPath ? 'Could not open folder' : 'No folder path returned from server.');
       setFolderError(msg);
       setToastVariant('error');
       setToastMessage(msg);
