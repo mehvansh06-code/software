@@ -25,3 +25,9 @@ dist-ssr
 
 # Local shipment document folders (created per shipment)
 shipment_documents/
+
+# Environment and local DB
+.env
+*.db
+*.db-shm
+*.db-wal

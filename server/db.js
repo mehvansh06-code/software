@@ -179,6 +179,7 @@ runMigration('ALTER TABLE shipments ADD COLUMN lineSealNumber TEXT', 'shipments.
 runMigration('ALTER TABLE licences ADD COLUMN importValidityDate TEXT', 'licences.importValidityDate');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_lc_reference ON shipments(lcReferenceNumber) WHERE lcReferenceNumber IS NOT NULL', 'idx_shipments_lc_reference');
 runMigration('ALTER TABLE buyers ADD COLUMN consignees_json TEXT', 'buyers.consignees_json');
+runMigration('ALTER TABLE shipments ADD COLUMN version INTEGER DEFAULT 1', 'shipments.version');
 runMigration('ALTER TABLE lcs ADD COLUMN buyerId TEXT', 'lcs.buyerId');
 runMigration('ALTER TABLE lcs ADD COLUMN shipments_json TEXT', 'lcs.shipments_json');
 runMigration('ALTER TABLE lcs ADD COLUMN balanceAmount REAL', 'lcs.balanceAmount');

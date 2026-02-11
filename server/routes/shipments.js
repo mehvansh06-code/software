@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
@@ -14,6 +15,69 @@ function safeParseJson(str, fallback) {
   } catch (_) {
     return fallback;
   }
+}
+
+/** Store currency and quantities in cents/paise (integer) for precision */
+function toCents(x) {
+  if (x == null || x === undefined || x === '') return null;
+  const n = Number(x);
+  if (Number.isNaN(n)) return null;
+  return Math.round(n * 100);
+}
+
+function fromCents(x) {
+  if (x == null || x === undefined) return 0;
+  const n = Number(x);
+  if (Number.isNaN(n)) return 0;
+  return n / 100;
+}
+
+/** Convert shipment row from DB (cents) to client (decimals) */
+function rowToClient(r) {
+  if (!r) return r;
+  return {
+    ...r,
+    amount: fromCents(r.amount),
+    rate: fromCents(r.rate),
+    quantity: fromCents(r.quantity),
+    fobValueFC: fromCents(r.fobValueFC),
+    fobValueINR: fromCents(r.fobValueINR),
+    invoiceValueINR: fromCents(r.invoiceValueINR),
+    lcAmount: fromCents(r.lcAmount),
+    licenceObligationAmount: fromCents(r.licenceObligationAmount),
+    licenceObligationQuantity: fromCents(r.licenceObligationQuantity),
+    assessedValue: fromCents(r.assessedValue),
+    dutyBCD: fromCents(r.dutyBCD),
+    dutySWS: fromCents(r.dutySWS),
+    dutyINT: fromCents(r.dutyINT),
+    gst: fromCents(r.gst),
+    freightCharges: r.freightCharges != null ? fromCents(r.freightCharges) : null,
+    otherCharges: r.otherCharges != null ? fromCents(r.otherCharges) : null,
+    version: r.version != null ? r.version : 1,
+  };
+}
+
+/** Convert client payload to DB format (cents) for getShipmentValues */
+function clientToCents(s) {
+  return {
+    ...s,
+    amount: toCents(s.amount) ?? 0,
+    rate: toCents(s.rate),
+    quantity: toCents(s.quantity),
+    fobValueFC: toCents(s.fobValueFC) ?? 0,
+    fobValueINR: toCents(s.fobValueINR) ?? 0,
+    invoiceValueINR: toCents(s.invoiceValueINR) ?? 0,
+    lcAmount: toCents(s.lcAmount) ?? 0,
+    licenceObligationAmount: toCents(s.licenceObligationAmount),
+    licenceObligationQuantity: toCents(s.licenceObligationQuantity),
+    assessedValue: toCents(s.assessedValue) ?? 0,
+    dutyBCD: toCents(s.dutyBCD) ?? 0,
+    dutySWS: toCents(s.dutySWS) ?? 0,
+    dutyINT: toCents(s.dutyINT) ?? 0,
+    gst: toCents(s.gst) ?? 0,
+    freightCharges: toCents(s.freightCharges),
+    otherCharges: toCents(s.otherCharges),
+  };
 }
 
 function sanitizeFolderName(str) {
@@ -31,7 +95,7 @@ function isValidDocumentsFolderPath(p) {
 function getShipmentItems(shipmentId) {
   try {
     const rows = db.prepare('SELECT productId, productName, description, hsnCode, quantity, unit, rate, amount, productType FROM shipment_items WHERE shipmentId = ? ORDER BY sortOrder, id').all(shipmentId);
-    if (rows && rows.length > 0) return rows.map(r => ({ productId: r.productId, productName: r.productName || '', description: r.description, hsnCode: r.hsnCode || '', quantity: r.quantity, unit: r.unit || 'KGS', rate: r.rate, amount: r.amount, productType: r.productType }));
+    if (rows && rows.length > 0) return rows.map(r => ({ productId: r.productId, productName: r.productName || '', description: r.description, hsnCode: r.hsnCode || '', quantity: fromCents(r.quantity), unit: r.unit || 'KGS', rate: fromCents(r.rate), amount: fromCents(r.amount), productType: r.productType }));
     return null;
   } catch (_) { return null; }
 }
@@ -49,7 +113,19 @@ function setShipmentItems(shipmentId, items) {
   if (!items || !Array.isArray(items) || items.length === 0) return;
   const ins = db.prepare('INSERT INTO shipment_items (shipmentId, productId, productName, description, hsnCode, quantity, unit, rate, amount, productType, sortOrder) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
   items.forEach((it, i) => {
-    ins.run(shipmentId, it.productId || null, it.productName || null, it.description || null, it.hsnCode || null, it.quantity ?? null, it.unit || 'KGS', it.rate ?? null, it.amount ?? null, it.productType || null, i);
+    ins.run(
+      shipmentId,
+      it.productId || null,
+      it.productName || null,
+      it.description || null,
+      it.hsnCode || null,
+      toCents(it.quantity) ?? null,
+      it.unit || 'KGS',
+      toCents(it.rate) ?? null,
+      toCents(it.amount) ?? null,
+      it.productType || null,
+      i
+    );
   });
 }
 
@@ -119,12 +195,27 @@ function getValidDocumentsFolderPath(row) {
   }
 }
 
+function checkLicenceExpiry(shipment) {
+  const linkedId = shipment.linkedLicenceId;
+  if (!linkedId) return;
+  const licence = db.prepare('SELECT expiryDate FROM licences WHERE id = ?').get(linkedId);
+  if (!licence || !licence.expiryDate) return;
+  const shipmentDate = shipment.expectedShipmentDate || shipment.invoiceDate;
+  if (!shipmentDate) return;
+  if (licence.expiryDate < shipmentDate) {
+    const err = new Error('Compliance Error: Selected Licence has expired.');
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 function linkShipmentToLC(shipment, broadcast) {
   if (!shipment || !shipment.isUnderLC || !shipment.lcNumber) return;
   const lcRef = String(shipment.lcNumber).trim();
   if (!lcRef) return;
   const shipmentId = shipment.id;
   const shipmentValue = Number(shipment.amount) || 0;
+  const shipmentValueMajor = shipmentValue / 100;
   let row = null;
   try {
     row = db.prepare('SELECT * FROM lcs WHERE lcNumber = ?').get(lcRef);
@@ -134,9 +225,16 @@ function linkShipmentToLC(shipment, broadcast) {
   if (row) {
     const shipments = (() => { try { return JSON.parse(row.shipments_json || '[]'); } catch (_) { return []; } })();
     if (shipments.indexOf(shipmentId) !== -1) return;
-    shipments.push(shipmentId);
     const balanceAmount = Number(row.balanceAmount);
-    const newBalance = (isNaN(balanceAmount) ? (Number(row.amount) || 0) : balanceAmount) - shipmentValue;
+    const currentBalance = (Number.isNaN(balanceAmount) ? (Number(row.amount) || 0) : balanceAmount);
+    const shipmentValueMajor = shipmentValue / 100;
+    if (currentBalance - shipmentValueMajor < 0) {
+      const err = new Error('Transaction Declined: Letter of Credit limit exceeded.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const newBalance = currentBalance - shipmentValueMajor;
+    shipments.push(shipmentId);
     try {
       db.prepare('UPDATE lcs SET shipments_json = ?, balanceAmount = ? WHERE id = ?').run(JSON.stringify(shipments), newBalance, row.id);
     } catch (e) {
@@ -153,14 +251,14 @@ function linkShipmentToLC(shipment, broadcast) {
     const ins = db.prepare('INSERT INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, balanceAmount, currency, issueDate, expiryDate, maturityDate, company, status, remarks, shipments_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
     ins.run(
       newId, lcRef, '—', isExport ? null : (shipment.supplierId || null), isExport ? (shipment.buyerId || null) : null,
-      shipmentValue, 0, shipment.currency || 'USD', now, now, now, shipment.company || 'GFPL', 'DRAFT', 'Auto-created from shipment',
+      shipmentValueMajor, 0, shipment.currency || 'USD', now, now, now, shipment.company || 'GFPL', 'DRAFT', 'Auto-created from shipment',
       JSON.stringify([shipmentId])
     );
   } catch (e) {
     if (/no such column/.test(e.message)) {
       db.prepare('INSERT OR REPLACE INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, currency, issueDate, expiryDate, maturityDate, company, status, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
         newId, lcRef, '—', isExport ? null : (shipment.supplierId || null), isExport ? (shipment.buyerId || null) : null,
-        shipmentValue, shipment.currency || 'USD', now, now, now, shipment.company || 'GFPL', 'DRAFT', 'Auto-created from shipment'
+        shipmentValueMajor, shipment.currency || 'USD', now, now, now, shipment.company || 'GFPL', 'DRAFT', 'Auto-created from shipment'
       );
     } else throw e;
   }
@@ -173,6 +271,16 @@ function openFolderResponse(res, success, message, statusCode, debug) {
   if (debug != null) payload.debug = debug;
   return res.status(statusCode == null ? 200 : statusCode).json(payload);
 }
+
+/** Sanitize filename for download or upload: reject directory traversal and path separators. Returns null if invalid. */
+function sanitizeFileDownloadFilename(filename) {
+  if (typeof filename !== 'string' || filename === '') return null;
+  const trimmed = filename.trim();
+  if (trimmed === '' || trimmed.includes('..') || trimmed.includes('/') || trimmed.includes('\\')) return null;
+  return trimmed;
+}
+
+const multerMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 /** Converts to Windows path; ensures network (UNC) paths start with exactly \\. */
 /** Ensures Windows UNC paths (IP or network name) start with exactly two backslashes (\\), not four or one. */
@@ -187,6 +295,25 @@ function toWindowsPath(pathStr) {
   return s;
 }
 
+function buildShipmentResponse(r) {
+  const folderPath = isValidDocumentsFolderPath(r.documentsFolderPath) ? r.documentsFolderPath : null;
+  const items = getShipmentItems(r.id) ?? (r.productId ? [{ productId: r.productId, productName: '', quantity: fromCents(r.quantity), rate: fromCents(r.rate), amount: fromCents(r.quantity) * fromCents(r.rate) }] : []);
+  const history = getShipmentHistory(r.id) ?? [];
+  const row = rowToClient(r);
+  return {
+    ...row,
+    isUnderLC: !!r.isUnderLC,
+    isUnderLicence: !!r.isUnderLicence,
+    linkedLicenceId: r.linkedLicenceId != null && r.linkedLicenceId !== '' ? String(r.linkedLicenceId) : null,
+    lcSettled: !!r.lcSettled,
+    documents: safeParseJson(r.documents_json, {}),
+    history,
+    payments: safeParseJson(r.payments_json, []),
+    items,
+    documentsFolderPath: folderPath
+  };
+}
+
 function createRouter(broadcast) {
   const router = express.Router();
 
@@ -196,22 +323,7 @@ function createRouter(broadcast) {
       const result = [];
       for (const r of rows) {
         try {
-          const folderPath = isValidDocumentsFolderPath(r.documentsFolderPath) ? r.documentsFolderPath : null;
-          const itemsFallback = r.productId ? [{ productId: r.productId, productName: '', quantity: r.quantity, rate: r.rate, amount: (r.quantity || 0) * (r.rate || 0) }] : [];
-          const items = getShipmentItems(r.id) || (r.items_json ? safeParseJson(r.items_json, itemsFallback) : itemsFallback);
-          const history = getShipmentHistory(r.id) || safeParseJson(r.history_json, []);
-          result.push({
-            ...r,
-            isUnderLC: !!r.isUnderLC,
-            isUnderLicence: !!r.isUnderLicence,
-            linkedLicenceId: r.linkedLicenceId != null && r.linkedLicenceId !== '' ? String(r.linkedLicenceId) : null,
-            lcSettled: !!r.lcSettled,
-            documents: safeParseJson(r.documents_json, {}),
-            history,
-            payments: safeParseJson(r.payments_json, []),
-            items,
-            documentsFolderPath: folderPath
-          });
+          result.push(buildShipmentResponse(r));
         } catch (rowErr) {
           console.warn('Shipment list row error:', r?.id, rowErr.message);
         }
@@ -220,6 +332,20 @@ function createRouter(broadcast) {
     } catch (err) {
       console.error('GET /shipments list error:', err);
       if (!res.headersSent) res.status(500).json({ error: 'Failed to load shipments' });
+    }
+  });
+
+  router.get('/:id', (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
+      const id = idCheck.value;
+      const r = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
+      if (!r) return res.status(404).json({ error: 'Shipment not found' });
+      res.json(buildShipmentResponse(r));
+    } catch (err) {
+      console.error('GET /shipments/:id error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to load shipment' });
     }
   });
 
@@ -291,14 +417,14 @@ function createRouter(broadcast) {
         if (!fs.existsSync(folderPath)) { sendFiles([]); return; }
         const baseResolved = path.resolve(folderPath);
         const names = fs.readdirSync(folderPath);
-        const files = names.filter((n) => {
+        const fileNames = names.filter((n) => {
           if (typeof n !== 'string' || n.includes('..')) return false;
           const p = path.join(folderPath, n);
           const resolved = path.resolve(p);
           if (resolved !== baseResolved && !resolved.startsWith(baseResolved + path.sep)) return false;
           try { return fs.statSync(p).isFile(); } catch (_) { return false; }
         });
-        sendFiles(files);
+        sendFiles(fileNames.map((name) => ({ name })));
       } catch (pathErr) {
         console.warn('GET /documents-folder-files path/fs:', pathErr.message);
         sendFiles([]);
@@ -306,6 +432,97 @@ function createRouter(broadcast) {
     } catch (err) {
       console.error('GET /documents-folder-files error:', err);
       if (!res.headersSent) res.status(200).json({ files: [] });
+    }
+  });
+
+  router.get('/:id/files/:filename', (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
+      const id = idCheck.value;
+      const filename = sanitizeFileDownloadFilename(req.params && req.params.filename);
+      if (!filename) return res.status(400).json({ error: 'Invalid file name' });
+
+      let row;
+      try {
+        row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
+      } catch (e) {
+        console.warn('GET /files/:filename db:', e.message);
+        return res.status(500).json({ error: 'Failed to resolve shipment' });
+      }
+      if (!row) return res.status(404).json({ error: 'Shipment not found' });
+
+      let folderPath = null;
+      try {
+        folderPath = getValidDocumentsFolderPath(row);
+      } catch (e) {
+        console.warn('getValidDocumentsFolderPath failed (files):', e.message);
+        return res.status(500).json({ error: 'Failed to resolve documents folder' });
+      }
+      if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
+
+      const fullPath = path.join(folderPath, filename);
+      const resolvedFull = path.resolve(fullPath);
+      const resolvedBase = path.resolve(folderPath);
+      if (resolvedFull !== resolvedBase && !resolvedFull.startsWith(resolvedBase + path.sep)) {
+        return res.status(400).json({ error: 'Invalid file name' });
+      }
+      if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File not found' });
+      try {
+        const stat = fs.statSync(fullPath);
+        if (!stat.isFile()) return res.status(404).json({ error: 'File not found' });
+      } catch (statErr) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+
+      res.download(fullPath, filename, (err) => {
+        if (err && !res.headersSent) {
+          console.warn('File download error:', err.message);
+          res.status(500).json({ error: 'Download failed' });
+        }
+      });
+    } catch (err) {
+      console.error('GET /:id/files/:filename error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'An error occurred' });
+    }
+  });
+
+  router.post('/:id/files', multerMemory.single('file'), (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
+      const id = idCheck.value;
+      const row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
+      if (!row) return res.status(404).json({ error: 'Shipment not found' });
+      let folderPath;
+      try {
+        folderPath = getValidDocumentsFolderPath(row);
+      } catch (e) {
+        console.warn('getValidDocumentsFolderPath failed (files upload):', e.message);
+        return res.status(500).json({ error: 'Documents folder could not be resolved' });
+      }
+      if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
+      if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file uploaded' });
+      const rawName = req.file.originalname || 'upload';
+      const filename = sanitizeFileDownloadFilename(rawName) || rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
+      const fullPath = path.join(folderPath, filename);
+      const resolvedFull = path.resolve(fullPath);
+      const resolvedBase = path.resolve(folderPath);
+      if (resolvedFull !== resolvedBase && !resolvedFull.startsWith(resolvedBase + path.sep)) {
+        return res.status(400).json({ error: 'Invalid file name' });
+      }
+      try {
+        if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
+        fs.writeFileSync(fullPath, req.file.buffer);
+      } catch (writeErr) {
+        console.warn('File write error:', writeErr.message);
+        return res.status(500).json({ error: 'Failed to save file' });
+      }
+      broadcast();
+      res.status(201).json({ success: true, filename });
+    } catch (err) {
+      console.error('POST /:id/files error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'An error occurred' });
     }
   });
 
@@ -327,9 +544,10 @@ function createRouter(broadcast) {
       if (!row && req.body && req.body.shipment) {
         const s = req.body.shipment;
         s.id = s.id || s._id || id;
+        const sNorm = clientToCents(s);
         let documentsFolderPath;
         try {
-          documentsFolderPath = ensureShipmentDocumentsFolder(s);
+          documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
           pathToOpenFromBody = documentsFolderPath;
         } catch (e) {
           return openFolderResponse(res, false, 'Could not resolve folder path: ' + e.message, 200, { detail: e.message });
@@ -348,9 +566,9 @@ function createRouter(broadcast) {
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           `);
           const runTx = db.transaction(() => {
-            stmt50.run(...getShipmentValues(s, documentsFolderPath));
-            setShipmentItems(id, s.items);
-            setShipmentHistory(id, s.history);
+            stmt50.run(...getShipmentValues(sNorm, documentsFolderPath));
+            setShipmentItems(id, s.items || []);
+            setShipmentHistory(id, s.history || []);
           });
           runTx();
         } catch (insertErr) {
@@ -396,7 +614,12 @@ function createRouter(broadcast) {
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(s.id, 'Shipment ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
-    const sNorm = { ...s, id: idCheck.value };
+    const sNorm = clientToCents({ ...s, id: idCheck.value });
+    try {
+      checkLicenceExpiry(sNorm);
+    } catch (e) {
+      return res.status(e.statusCode || 400).json({ success: false, error: e.message });
+    }
     const documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
     const stmt = db.prepare(`
       INSERT OR REPLACE INTO shipments (
@@ -413,15 +636,19 @@ function createRouter(broadcast) {
     try {
       const runTx = db.transaction(() => {
         stmt.run(...getShipmentValues(sNorm, documentsFolderPath));
-        setShipmentItems(idCheck.value, sNorm.items);
-        setShipmentHistory(idCheck.value, sNorm.history);
+        setShipmentItems(idCheck.value, s.items || []);
+        setShipmentHistory(idCheck.value, s.history || []);
       });
       runTx();
     } catch (e) {
       console.error('POST /api/shipments transaction error:', e);
       return res.status(500).json({ success: false, error: e.message || 'Database error' });
     }
-    linkShipmentToLC(sNorm, broadcast);
+    try {
+      linkShipmentToLC(sNorm, broadcast);
+    } catch (lcErr) {
+      return res.status(lcErr.statusCode || 400).json({ success: false, error: lcErr.message });
+    }
     res.json({ success: true });
     broadcast();
   });
@@ -432,6 +659,18 @@ function createRouter(broadcast) {
     const id = idCheck.value;
     const s = req.body;
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
+
+    const sNorm = clientToCents({ ...s, id });
+    try {
+      checkLicenceExpiry(sNorm);
+    } catch (e) {
+      return res.status(e.statusCode || 400).json({ success: false, error: e.message });
+    }
+
+    const exists = db.prepare('SELECT 1 FROM shipments WHERE id = ?').get(id);
+    if (exists && (s.version == null || s.version === undefined)) {
+      return res.status(400).json({ success: false, error: 'Version is required for update' });
+    }
 
     const insertStmt = db.prepare(`
       INSERT OR REPLACE INTO shipments (
@@ -455,53 +694,66 @@ function createRouter(broadcast) {
         incoTerm=?, paymentDueDate=?, expectedArrivalDate=?,
         invoiceDate=?, freightCharges=?, otherCharges=?, exchangeRate=?, remarks=?,
         isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?, consigneeId=?, lcSettled=?,
-        shipperSealNumber=?, lineSealNumber=?
-      WHERE id=?
+        shipperSealNumber=?, lineSealNumber=?,
+        version = version + 1
+      WHERE id=? AND version=?
     `);
 
     try {
       const runTx = db.transaction(() => {
         const exists = db.prepare('SELECT 1 FROM shipments WHERE id = ?').get(id);
         if (!exists) {
-          const sNorm = { ...s, id };
           const documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
           insertStmt.run(...getShipmentValues(sNorm, documentsFolderPath));
-          setShipmentItems(id, sNorm.items);
-          setShipmentHistory(id, sNorm.history);
+          setShipmentItems(id, s.items || []);
+          setShipmentHistory(id, s.history || []);
         } else {
-          const existing = db.prepare('SELECT exchangeRate, remarks, isUnderLC, lcNumber, fileStatus, consigneeId, lcSettled FROM shipments WHERE id = ?').get(id);
+          const version = s.version;
+          const existing = db.prepare('SELECT exchangeRate, remarks, fileStatus, consigneeId, lcSettled FROM shipments WHERE id = ?').get(id);
           const allowedFileStatus = ['pending', 'clearing', 'ok'].includes(s.fileStatus) ? s.fileStatus : (existing?.fileStatus ?? null);
           const consigneeIdVal = s.consigneeId !== undefined ? s.consigneeId : (existing?.consigneeId ?? null);
           const lcSettledVal = s.lcSettled !== undefined ? (s.lcSettled ? 1 : 0) : (existing?.lcSettled ?? 0);
-          updateStmt.run(
-            s.status, s.containerNumber, s.blNumber, s.blDate, s.beNumber, s.beDate,
-            s.shippingLine, s.portCode, s.portOfLoading, s.portOfDischarge,
-            s.assessedValue, s.dutyBCD, s.dutySWS, s.dutyINT, s.gst, s.trackingUrl,
-            JSON.stringify(s.documents || {}), JSON.stringify(s.history || []), JSON.stringify(s.payments || []), JSON.stringify(s.items || []),
-            s.isUnderLicence ? 1 : 0, s.linkedLicenceId || null, s.licenceObligationAmount ?? null, s.licenceObligationQuantity ?? null,
-            s.incoTerm, s.paymentDueDate, s.expectedArrivalDate || null,
-            s.invoiceDate || null, s.freightCharges ?? null, s.otherCharges ?? null,
+          const result = updateStmt.run(
+            s.status, sNorm.containerNumber, sNorm.blNumber, sNorm.blDate, sNorm.beNumber, sNorm.beDate,
+            sNorm.shippingLine, sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
+            sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, sNorm.gst, sNorm.trackingUrl,
+            JSON.stringify(s.documents || {}), '[]', JSON.stringify(s.payments || []), '[]',
+            sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,
+            sNorm.incoTerm, sNorm.paymentDueDate, sNorm.expectedArrivalDate || null,
+            sNorm.invoiceDate || null, sNorm.freightCharges ?? null, sNorm.otherCharges ?? null,
             s.exchangeRate !== undefined && s.exchangeRate !== null ? s.exchangeRate : (existing?.exchangeRate ?? null),
             s.remarks !== undefined ? s.remarks : (existing?.remarks ?? null),
-            s.isUnderLC ? 1 : 0, s.lcNumber || null, s.lcAmount ?? null, s.lcDate || null,
+            sNorm.isUnderLC ? 1 : 0, sNorm.lcNumber || null, sNorm.lcAmount ?? null, sNorm.lcDate || null,
             allowedFileStatus,
             consigneeIdVal,
             lcSettledVal,
-            s.shipperSealNumber || null,
-            s.lineSealNumber || null,
-            id
+            sNorm.shipperSealNumber || null,
+            sNorm.lineSealNumber || null,
+            id,
+            version
           );
-          setShipmentItems(id, s.items);
-          setShipmentHistory(id, s.history);
+          if (result.changes === 0) {
+            const err = new Error('Data was modified by another user.');
+            err.statusCode = 409;
+            throw err;
+          }
+          setShipmentItems(id, s.items || []);
+          setShipmentHistory(id, s.history || []);
         }
       });
       runTx();
     } catch (e) {
+      if (e.statusCode === 409) return res.status(409).json({ success: false, error: e.message });
       console.error('PUT /api/shipments/:id transaction error:', e);
       return res.status(500).json({ success: false, error: e.message || 'Database error' });
     }
-    linkShipmentToLC({ ...s, id }, broadcast);
-    res.json({ success: true });
+    try {
+      linkShipmentToLC(sNorm, broadcast);
+    } catch (lcErr) {
+      return res.status(lcErr.statusCode || 400).json({ success: false, error: lcErr.message });
+    }
+    const updated = db.prepare('SELECT version FROM shipments WHERE id = ?').get(id);
+    res.json({ success: true, version: updated ? updated.version : undefined });
     broadcast();
   });
 

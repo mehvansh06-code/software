@@ -339,6 +339,8 @@ export interface Shipment {
   fileStatus?: 'pending' | 'clearing' | 'ok';
   /** Export: selected consignee id (from buyer.consignees) */
   consigneeId?: string;
+  /** Optimistic locking version (server returns on GET/PUT). */
+  version?: number;
   attachments?: {
     [key: string]: string; // Base64 or local URL
   };

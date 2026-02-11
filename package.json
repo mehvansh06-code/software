@@ -10,6 +10,7 @@
     "dotenv": "^17.2.4",
     "express": "^4.18.2",
     "lucide-react": "^0.344.0",
+    "multer": "^2.0.2",
     "number-to-words": "^1.2.4",
     "react-router-dom": "^7.13.0",
     "tailwindcss": "^4.1.18",

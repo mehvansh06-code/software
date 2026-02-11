@@ -5,10 +5,13 @@ const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 
 require('./server/db');
 const db = require('./server/db');
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('./server/config');
+const { verifyToken, JWT_SECRET } = require('./server/middleware');
 
 const supplierRoutes = require('./server/routes/suppliers');
 const materialRoutes = require('./server/routes/materials');
@@ -60,6 +63,37 @@ app.use((req, res, next) => {
 const corsOrigin = process.env.CORS_ORIGIN || true;
 app.use(cors({ origin: corsOrigin, credentials: false }));
 app.use(express.json({ limit: '512kb' }));
+
+// Hardcoded admin user for Phase 1 (replace with DB lookup in production)
+const ADMIN_USERS = [
+  { id: '1', username: 'director', name: 'J P Tosniwal', role: 'MANAGEMENT' },
+  { id: '2', username: 'checker', name: 'Sarah Accountant', role: 'CHECKER' },
+  { id: '3', username: 'employee', name: 'Rahul Sharma', role: 'EXECUTIONER' },
+];
+const ADMIN_PASSWORD_HASH = bcrypt.hashSync('admin123', 10);
+
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) {
+    return res.status(400).json({ success: false, error: 'Username and password required' });
+  }
+  const user = ADMIN_USERS.find((u) => u.username === username);
+  if (!user || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+    return res.status(401).json({ success: false, error: 'Invalid username or password' });
+  }
+  const token = jwt.sign(
+    { userId: user.id, role: user.role },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+  res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role } });
+});
+
+app.get('/api/status', (req, res) => {
+  res.json({ ok: true, message: 'Server is running' });
+});
+
+app.use(verifyToken);
 
 app.use('/api/suppliers', supplierRoutes(broadcast));
 app.use('/api/materials', materialRoutes(broadcast));

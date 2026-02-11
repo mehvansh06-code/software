@@ -49,6 +49,15 @@ const saveSimData = (data: any) => {
 let serverAvailable = false;
 let forceSimulated = false;
 
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token');
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const safeEndpoint = sanitizeEndpoint(endpoint);
   if (!safeEndpoint) return Promise.reject(new Error('Invalid endpoint'));
@@ -62,10 +71,14 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
     const response = await fetch(`${API_BASE}/${safeEndpoint}`, {
       ...options,
       signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...options.headers },
+      headers: { ...getAuthHeaders(), ...(options.headers as Record<string, string>) },
     });
 
     clearTimeout(timeoutId);
+    if (response.status === 401) {
+      if (typeof window !== 'undefined') localStorage.removeItem('token');
+      throw new Error('Session expired. Please log in again.');
+    }
     if (!response.ok) throw new Error('Offline');
 
     serverAvailable = true;
@@ -104,6 +117,11 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
       return { path: null, exists: false };
     }
     const ret = sim[table] || [];
+    if (table === 'shipments' && idMatch) {
+      const one = (ret as any[]).find((s: any) => s.id === idMatch);
+      if (one != null) return one;
+      return Promise.reject(new Error('Shipment not found'));
+    }
     return ret;
   }
 
@@ -134,6 +152,15 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
 }
 
 export const api = {
+  login: (username: string, password: string): Promise<{ success: boolean; token?: string; user?: { id: string; username: string; name: string; role: string }; error?: string }> => {
+    const safe = sanitizeEndpoint('login');
+    if (!safe) return Promise.reject(new Error('Invalid endpoint'));
+    return fetch(`${API_BASE}/${safe}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    }).then((r) => r.json());
+  },
   suppliers: {
     list: () => fetchApi('suppliers'),
     create: (data: any) => fetchApi('suppliers', { method: 'POST', body: JSON.stringify(data) }),
@@ -147,9 +174,63 @@ export const api = {
   },
   shipments: {
     list: () => fetchApi('shipments'),
+    get: (id: string): Promise<any> => {
+      if (!id || String(id) === 'undefined') return Promise.reject(new Error('Invalid shipment ID'));
+      return fetchApi(`shipments/${id}`);
+    },
     create: (data: any) => fetchApi('shipments', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`shipments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    /** PUT with full response for optimistic locking: returns { status, data } so caller can handle 409. */
+    updateWithResponse: async (id: string, data: any): Promise<{ status: number; data: any }> => {
+      const safe = sanitizeEndpoint(`shipments/${id}`);
+      if (!safe) return { status: 400, data: { error: 'Invalid endpoint' } };
+      const url = `${API_BASE}/${safe}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+      try {
+        const response = await fetch(url, {
+          method: 'PUT',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(data),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (response.status === 401) {
+          if (typeof window !== 'undefined') localStorage.removeItem('token');
+          throw new Error('Session expired. Please log in again.');
+        }
+        let body: any;
+        try {
+          body = await response.json();
+        } catch {
+          body = { error: 'Invalid response' };
+        }
+        return { status: response.status, data: body };
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        throw err;
+      }
+    },
     delete: (id: string) => fetchApi(`shipments/${id}`, { method: 'DELETE' }),
+    uploadFiles: (id: string, formData: FormData): Promise<{ success: boolean; filename?: string; error?: string }> => {
+      if (!id || String(id) === 'undefined') return Promise.reject(new Error('Invalid shipment ID'));
+      const url = `${API_BASE}/shipments/${id}/files`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { method: 'POST', headers, body: formData }).then(async (r) => {
+        let data: any;
+        try {
+          data = await r.json();
+        } catch {
+          data = { error: 'Invalid response' };
+        }
+        if (r.ok) return { success: true, filename: data.filename };
+        return { success: false, error: data.error || 'Upload failed' };
+      });
+    },
     getDocumentsFolder: (id: string) => {
       if (!id || String(id) === 'undefined') return Promise.resolve({ path: null, exists: false });
       return fetchApi(`shipments/${id}/documents-folder`).catch((e) => {
@@ -157,9 +238,23 @@ export const api = {
         return { path: null, exists: false };
       });
     },
-    getDocumentsFolderFiles: (id: string): Promise<{ files: string[] }> => {
+    getDocumentsFolderFiles: (id: string): Promise<{ files: Array<{ name: string } | string> }> => {
       if (!id || String(id) === 'undefined') return Promise.resolve({ files: [] });
       return fetchApi(`shipments/${id}/documents-folder-files`).catch(() => ({ files: [] }));
+    },
+    /** Authenticated file download; returns blob for use with createObjectURL / download link. */
+    downloadFile: (id: string, filename: string): Promise<Blob> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/shipments/${id}/files/${encodeURIComponent(filename)}`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { headers }).then((r) => {
+        if (!r.ok) throw new Error(r.status === 404 ? 'File not found' : 'Download failed');
+        return r.blob();
+      });
     },
     openDocumentsFolder: (id: string, shipment?: any): Promise<{ success: boolean; message: string; [k: string]: unknown }> => {
       if (!id || String(id) === 'undefined') {
