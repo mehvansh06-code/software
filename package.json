@@ -25,6 +25,7 @@
     "start": "node server.js",
     "server": "node server.js",
     "restart": "node restart-server.js",
-    "dev": "vite"
+    "dev": "vite",
+    "clear-data": "node server/clear-sample-data.js"
   }
 }

@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
@@ -350,9 +350,9 @@ function createRouter(broadcast) {
       }
       let folderPath = row ? getValidDocumentsFolderPath(row) : pathToOpenFromBody;
       if (!folderPath || typeof folderPath !== 'string') {
-        return openFolderResponse(res, false, 'Documents folder path is missing or could not be resolved. Save the shipment with valid partner and invoice details.', 400, { pathMissing: true });
+        return openFolderResponse(res, false, 'Documents folder path could not be resolved. Ensure the shipment has Company, Invoice number, and (for import) a supplier or (for export) a buyer.', 400, { pathMissing: true });
       }
-      const cleanPath = path.normalize(folderPath);
+      const cleanPath = path.normalize(folderPath).replace(/[/\\]+$/, '');
       console.log('[Open Folder] Shipment id:', id, '| Resolved path:', cleanPath);
 
       if (!fs.existsSync(cleanPath)) {
@@ -365,24 +365,31 @@ function createRouter(broadcast) {
 
       const isWin = process.platform === 'win32';
       try {
-        let proc;
         if (isWin) {
-          proc = spawn('explorer', [cleanPath], { windowsHide: true });
+          const quotedPath = '"' + cleanPath.replace(/"/g, '""') + '"';
+          exec('start "" ' + quotedPath, { windowsHide: true }, (err, stdout, stderr) => {
+            if (res.headersSent) return;
+            if (err) {
+              openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message, path: cleanPath.substring(0, 120) });
+              return;
+            }
+            openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
+          });
         } else {
           const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-          proc = spawn(cmd, [cleanPath]);
+          const proc = spawn(cmd, [cleanPath]);
+          proc.on('error', (err) => {
+            if (!res.headersSent) openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message, path: cleanPath.substring(0, 120) });
+          });
+          proc.on('close', (code) => {
+            if (!res.headersSent) {
+              if (code !== 0) openFolderResponse(res, false, 'Failed to open folder (exit ' + code + '). You can open it manually: ' + cleanPath, 200, { path: cleanPath.substring(0, 120) });
+              else openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
+            }
+          });
         }
-        proc.on('error', (err) => {
-          if (!res.headersSent) openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message });
-        });
-        proc.on('close', (code) => {
-          if (!res.headersSent) {
-            if (code !== 0) openFolderResponse(res, false, 'Failed to open folder (exit ' + code + ')', 200);
-            else openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 80) });
-          }
-        });
       } catch (execErr) {
-        if (!res.headersSent) openFolderResponse(res, false, execErr.message || 'Failed to open folder', 200, { execError: execErr.message });
+        if (!res.headersSent) openFolderResponse(res, false, execErr.message || 'Failed to open folder', 200, { execError: execErr.message, path: cleanPath.substring(0, 120) });
       }
     } catch (err) {
       console.error('POST /open-documents-folder error:', err);
