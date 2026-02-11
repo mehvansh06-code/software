@@ -170,6 +170,7 @@ runMigration('ALTER TABLE shipments ADD COLUMN lcReferenceNumber TEXT', 'shipmen
 runMigration('ALTER TABLE shipments ADD COLUMN lcOpeningDate TEXT', 'shipments.lcOpeningDate');
 runMigration('ALTER TABLE shipments ADD COLUMN fileStatus TEXT', 'shipments.fileStatus');
 runMigration('ALTER TABLE shipments ADD COLUMN consigneeId TEXT', 'shipments.consigneeId');
+runMigration('ALTER TABLE shipments ADD COLUMN lcSettled INTEGER', 'shipments.lcSettled');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_lc_reference ON shipments(lcReferenceNumber) WHERE lcReferenceNumber IS NOT NULL', 'idx_shipments_lc_reference');
 runMigration('ALTER TABLE buyers ADD COLUMN consignees_json TEXT', 'buyers.consignees_json');
 runMigration('ALTER TABLE lcs ADD COLUMN buyerId TEXT', 'lcs.buyerId');
@@ -315,7 +316,8 @@ function getShipmentValues(s, folderPath) {
     typeof s.items === 'string' ? s.items : JSON.stringify(s.items || []),
     folderPath ?? null,
     s.remarks ?? null,
-    s.consigneeId ?? null
+    s.consigneeId ?? null,
+    s.lcSettled ? 1 : 0
   ];
 }
 

@@ -225,8 +225,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       if (p.currency === 'INR') return p.amount / (shipment.exchangeRate || 1);
       return 0;
     };
-    const receivedFC = (shipment.payments || []).reduce((sum, p) => sum + toFC(p), 0);
-    return { totalFC: totalFC ?? 0, receivedFC, pendingFC: Math.max(0, (totalFC ?? 0) - receivedFC) };
+    const receivedFC = (shipment.payments || []).filter(p => p.received === true).reduce((sum, p) => sum + toFC(p), 0);
+    const pendingFC = Math.max(0, (totalFC ?? 0) - receivedFC);
+    return { totalFC: totalFC ?? 0, receivedFC, pendingFC };
   }, [shipment, isExport]);
 
   const documentCheckerRows = useMemo(() => {
@@ -491,7 +492,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleMarkLCSettled = async () => {
     await onUpdate({ ...shipment, lcSettled: true });
-    if (!isExport && linkedLC && onUpdateLC) {
+    if (linkedLC && onUpdateLC) {
       await onUpdateLC({ ...linkedLC, status: LCStatus.PAID });
     }
   };
@@ -1049,9 +1050,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                  <Plus size={14} /> Add Payment
                </button>
              </div>
-             <div className="px-6 py-4 grid grid-cols-3 gap-4 border-b border-slate-100 bg-slate-50/30">
+             <div className="px-6 py-4 grid grid-cols-2 gap-4 border-b border-slate-100 bg-slate-50/30">
                <div><p className="text-[9px] font-black uppercase text-slate-400">Total ({shipment.currency})</p><p className="text-sm font-black text-slate-800">{formatCurrency(paymentSummary.totalFC, shipment.currency)}</p></div>
-               <div><p className="text-[9px] font-black uppercase text-emerald-600">Received</p><p className="text-sm font-black text-emerald-700">{formatCurrency(paymentSummary.receivedFC, shipment.currency)}</p></div>
                <div><p className="text-[9px] font-black uppercase text-amber-600">Pending</p><p className="text-sm font-black text-amber-700">{formatCurrency(paymentSummary.pendingFC, shipment.currency)}</p></div>
              </div>
              {shipment.isUnderLC && (

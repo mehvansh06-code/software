@@ -64,14 +64,28 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   }, [shipments, searchTerm, companyFilter, sortOrder, isExport]);
 
   const getProductNames = (sh: Shipment) => (sh.items && sh.items.length) ? sh.items.map(i => i.productName).join(', ') : (sh as any).productName || '—';
+  /** Import: only payments marked as received count toward Paid/Partial */
   const getPaymentStatus = (sh: Shipment) => {
     const toFC = (p: { amount: number; currency: string }) =>
       p.currency === sh.currency ? p.amount : (p.currency === 'INR' ? p.amount / (sh.exchangeRate || 1) : 0);
-    const totalFC = (sh.payments || []).reduce((sum, p) => sum + toFC(p), 0);
+    const receivedFC = (sh.payments || []).filter(p => p.received === true).reduce((sum, p) => sum + toFC(p), 0);
     const dueFC = sh.amount || 0;
-    if (totalFC >= dueFC) return 'Paid';
-    if (totalFC > 0) return 'Partial';
+    if (dueFC <= 0) return receivedFC > 0 ? 'Paid' : 'Pending';
+    if (receivedFC >= dueFC) return 'Paid';
+    if (receivedFC > 0) return 'Partial';
     return 'Pending';
+  };
+
+  /** Export: only payments marked as received count; full received only when received amount >= due (never mark partial as full) */
+  const getExportPaymentStatus = (sh: Shipment): { status: 'pending' | 'partial' | 'received'; receivedFC: number } => {
+    const toFC = (p: { amount: number; currency: string }) =>
+      p.currency === sh.currency ? p.amount : (p.currency === 'INR' ? p.amount / (sh.exchangeRate || 1) : 0);
+    const receivedFC = (sh.payments || []).filter(p => p.received === true).reduce((sum, p) => sum + toFC(p), 0);
+    const dueFC = sh.amount || 0;
+    if (dueFC <= 0) return { status: receivedFC > 0 ? 'received' : 'pending', receivedFC };
+    if (receivedFC >= dueFC) return { status: 'received', receivedFC };
+    if (receivedFC > 0) return { status: 'partial', receivedFC };
+    return { status: 'pending', receivedFC };
   };
   const FILE_STATUS_OPTIONS = ['pending', 'clearing', 'ok'] as const;
   const getFileStatus = (sh: Shipment): string => {
@@ -80,19 +94,84 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   };
   const fileStatusLabel = (v: string) => (v === 'ok' ? 'OK' : v === 'clearing' ? 'Clearing' : 'Pending');
 
+  const shipmentToExcelRow = (sh: Shipment): Record<string, string | number | boolean | undefined> => {
+    const payStatus = isExport
+      ? (() => {
+          const { status } = getExportPaymentStatus(sh);
+          if (status === 'pending') return 'Pending';
+          if (status === 'received') return 'Received';
+          return 'Partial received';
+        })()
+      : getPaymentStatus(sh);
+    return {
+      id: sh.id,
+      supplierId: sh.supplierId ?? '',
+      buyerId: sh.buyerId ?? '',
+      partner: getPartnerName(sh),
+      productSummary: getProductNames(sh),
+      productId: (sh as any).productId ?? '',
+      rate: sh.rate ?? 0,
+      quantity: sh.quantity ?? 0,
+      amount: sh.amount ?? 0,
+      currency: sh.currency ?? '',
+      exchangeRate: sh.exchangeRate ?? 1,
+      incoTerm: sh.incoTerm ?? '',
+      invoiceNumber: sh.invoiceNumber ?? '',
+      invoiceFile: (sh as any).invoiceFile ?? '',
+      company: sh.company ?? '',
+      expectedShipmentDate: sh.expectedShipmentDate ? formatDate(sh.expectedShipmentDate) : '',
+      expectedArrivalDate: sh.expectedArrivalDate ? formatDate(sh.expectedArrivalDate) : '',
+      createdAt: sh.createdAt ? formatDate(sh.createdAt) : '',
+      fobValueFC: sh.fobValueFC ?? 0,
+      fobValueINR: sh.fobValueINR ?? 0,
+      isUnderLC: !!sh.isUnderLC,
+      lcNumber: sh.lcNumber ?? '',
+      lcAmount: sh.lcAmount ?? 0,
+      lcDate: sh.lcDate ?? '',
+      lcSettled: !!(sh as any).lcSettled,
+      linkedLcId: (sh as any).linkedLcId ?? '',
+      containerNumber: sh.containerNumber ?? '',
+      blNumber: sh.blNumber ?? '',
+      blDate: sh.blDate ?? '',
+      beNumber: sh.beNumber ?? '',
+      beDate: sh.beDate ?? '',
+      portCode: sh.portCode ?? '',
+      portOfLoading: sh.portOfLoading ?? '',
+      portOfDischarge: sh.portOfDischarge ?? '',
+      shippingLine: sh.shippingLine ?? '',
+      trackingUrl: sh.trackingUrl ?? '',
+      assessedValue: sh.assessedValue ?? 0,
+      dutyBCD: sh.dutyBCD ?? 0,
+      dutySWS: sh.dutySWS ?? 0,
+      dutyINT: sh.dutyINT ?? 0,
+      gst: sh.gst ?? 0,
+      invoiceValueINR: sh.invoiceValueINR ?? 0,
+      paymentDueDate: sh.paymentDueDate ?? '',
+      invoiceDate: sh.invoiceDate ?? '',
+      freightCharges: sh.freightCharges ?? 0,
+      otherCharges: sh.otherCharges ?? 0,
+      isUnderLicence: !!sh.isUnderLicence,
+      linkedLicenceId: sh.linkedLicenceId ?? '',
+      licenceObligationAmount: sh.licenceObligationAmount ?? 0,
+      status: sh.status ?? '',
+      materialStatusLabel: getShipmentStatusLabel(sh.status),
+      documentsFolderPath: (sh as any).documentsFolderPath ?? '',
+      lodgement: (sh as any).lodgement ?? '',
+      lodgementDate: (sh as any).lodgementDate ?? '',
+      remarks: (sh as any).remarks ?? '',
+      fileStatus: getFileStatus(sh),
+      consigneeId: (sh as any).consigneeId ?? '',
+      paymentStatus: payStatus,
+      items_json: typeof sh.items === 'string' ? sh.items : JSON.stringify(sh.items ?? []),
+      history_json: typeof sh.history === 'string' ? sh.history : JSON.stringify(sh.history ?? []),
+      documents_json: typeof sh.documents === 'string' ? sh.documents : JSON.stringify(sh.documents ?? {}),
+      payments_json: typeof sh.payments === 'string' ? sh.payments : JSON.stringify(sh.payments ?? []),
+      attachments_json: typeof (sh as any).attachments === 'string' ? (sh as any).attachments : JSON.stringify((sh as any).attachments ?? {}),
+    };
+  };
+
   const handleExportExcel = () => {
-    const exportData = filteredAndSorted.map(sh => ({
-      'Invoice #': sh.invoiceNumber,
-      'Invoice Date': sh.invoiceDate ? formatDate(sh.invoiceDate) : '',
-      'Partner': getPartnerName(sh),
-      'Product': getProductNames(sh),
-      'Payment to be made': formatCurrency(sh.amount, sh.currency),
-      'Payment Status': getPaymentStatus(sh),
-      'Material Status': getShipmentStatusLabel(sh.status),
-      'File Status': fileStatusLabel(getFileStatus(sh)),
-      'Remarks': (sh as any).remarks || '',
-      ...(isExport ? { 'Company': sh.company, 'Expected Arrival': sh.expectedArrivalDate ? formatDate(sh.expectedArrivalDate) : '' } : {})
-    }));
+    const exportData = filteredAndSorted.map(sh => shipmentToExcelRow(sh));
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Shipments");
@@ -185,6 +264,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                     <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Buyer</th>
                     <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Expected Arrival</th>
                     <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Amount (FC)</th>
+                    <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Payment Status</th>
                     <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Material Status</th>
                     <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">File Status</th>
                     <th className="px-6 py-4 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Actions</th>
@@ -286,6 +366,18 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                       </td>
                       <td className="px-6 py-5">
                         <p className="font-bold text-sm text-emerald-600">{formatCurrency(sh.amount, sh.currency)}</p>
+                      </td>
+                      <td className="px-6 py-5">
+                        {(() => {
+                          const { status, receivedFC } = getExportPaymentStatus(sh);
+                          if (status === 'pending') {
+                            return <span className="text-[10px] font-black px-2 py-0.5 rounded-full uppercase bg-slate-100 text-slate-600">Pending</span>;
+                          }
+                          if (status === 'received') {
+                            return <span className="text-[10px] font-black px-2 py-0.5 rounded-full uppercase bg-emerald-100 text-emerald-700">Received</span>;
+                          }
+                          return <span className="text-[10px] font-black px-2 py-0.5 rounded-full uppercase bg-amber-100 text-amber-700" title={formatCurrency(receivedFC, sh.currency)}>Partial received</span>;
+                        })()}
                       </td>
                       <td className="px-6 py-5">
                         <span className="text-[10px] font-black px-2 py-0.5 rounded-full uppercase bg-blue-100 text-blue-700">{getShipmentStatusLabel(sh.status)}</span>

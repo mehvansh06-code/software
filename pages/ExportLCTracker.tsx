@@ -268,6 +268,15 @@ const ExportLCTracker: React.FC<ExportLCTrackerProps> = ({ lcs, buyers, onUpdate
                 <input className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.remarks || ''} onChange={e => setEditData({ ...editData, remarks: e.target.value })} placeholder="Optional" />
               </div>
 
+              {editData.id && (
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Status</label>
+                  <select className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.status} onChange={e => setEditData({ ...editData, status: e.target.value as LCStatus })}>
+                    {Object.values(LCStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              )}
+
               <button type="submit" className="w-full py-4 bg-amber-600 text-white font-black uppercase rounded-xl hover:bg-amber-700 transition-all shadow-lg shadow-amber-100">
                 {editData.id ? 'Save Changes' : 'Add Export LC'}
               </button>
