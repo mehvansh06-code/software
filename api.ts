@@ -342,67 +342,23 @@ export const api = {
       });
     },
   },
-  /** OCR: extract text from BOE/Shipping Bill image; returns parsed fields + confidence. */
+  /** OCR: extract or upload-and-scan. Both use fetch with Authorization: Bearer <token> from localStorage. */
   ocr: {
-    extract: (formData: FormData): Promise<{ success: boolean; data?: { beNumber?: string | null; sbNumber?: string | null; date?: string | null; invoiceValue?: string | null; portCode?: string | null; rawText?: string; confidence?: number | null }; error?: string }> => {
-      const url = `${API_BASE}/ocr/extract`;
+    extract: (formData: FormData): Promise<{ success: boolean; data?: any; error?: string }> => {
       const headers: Record<string, string> = {};
       if (typeof window !== 'undefined') {
         const token = localStorage.getItem('token');
         if (token) headers['Authorization'] = `Bearer ${token}`;
       }
-      const controller = new AbortController();
-      const timeoutMs = 60000;
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      return fetch(url, {
-        method: 'POST',
-        headers,
-        body: formData,
-        signal: controller.signal,
-      }).then(async (r) => {
-        clearTimeout(timeoutId);
-        let data: any;
-        try {
-          data = await r.json();
-        } catch {
-          data = { success: false, error: 'Invalid response' };
-        }
-        if (!r.ok) return { success: false, error: data?.error || 'OCR failed' };
-        return data;
-      }).catch((err: any) => {
-        clearTimeout(timeoutId);
-        const msg = err?.name === 'AbortError' ? 'Request timed out. Try again.' : (err?.message || 'OCR failed.');
-        return { success: false, error: msg };
-      });
+      return fetch(`${API_BASE}/ocr/extract`, { method: 'POST', headers, body: formData }).then((r) => r.json());
     },
-    /** Hybrid: upload file, run OCR, save to server folder (Z: Drive), record in DB. Returns parsed data + savedPath. */
-    uploadAndScan: (formData: FormData): Promise<{ success: boolean; data?: { beNumber?: string | null; sbNumber?: string | null; date?: string | null; portCode?: string | null; invoiceValue?: string | null; savedPath?: string; filePath?: string; fileName?: string; confidence?: number | null }; error?: string }> => {
-      const url = `${API_BASE}/ocr/upload-and-scan`;
+    uploadAndScan: (formData: FormData): Promise<{ success: boolean; data?: any; error?: string }> => {
       const headers: Record<string, string> = {};
       if (typeof window !== 'undefined') {
         const token = localStorage.getItem('token');
         if (token) headers['Authorization'] = `Bearer ${token}`;
       }
-      const controller = new AbortController();
-      const timeoutMs = 60000;
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      return fetch(url, { method: 'POST', headers, body: formData, signal: controller.signal })
-        .then(async (r) => {
-          clearTimeout(timeoutId);
-          let data: any;
-          try {
-            data = await r.json();
-          } catch {
-            data = { success: false, error: 'Invalid response' };
-          }
-          if (!r.ok) return { success: false, error: data?.error || 'Upload and scan failed' };
-          return data;
-        })
-        .catch((err: any) => {
-          clearTimeout(timeoutId);
-          const msg = err?.name === 'AbortError' ? 'Request timed out. Try again.' : (err?.message || 'Upload and scan failed.');
-          return { success: false, error: msg };
-        });
+      return fetch(`${API_BASE}/ocr/upload-and-scan`, { method: 'POST', headers, body: formData }).then((r) => r.json());
     },
   },
   system: {

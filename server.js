@@ -66,6 +66,10 @@ function sanitizeFolderName(str) {
 if (DOCUMENTS_BASE) {
   try {
     if (!fs.existsSync(DOCUMENTS_BASE)) fs.mkdirSync(DOCUMENTS_BASE, { recursive: true });
+    Object.values(COMPANY_FOLDER).forEach((name) => {
+      const sub = path.join(DOCUMENTS_BASE, sanitizeFolderName(name));
+      if (!fs.existsSync(sub)) fs.mkdirSync(sub, { recursive: true });
+    });
   } catch (e) {
     console.warn('Could not create documents base at', DOCUMENTS_BASE, e.message);
   }

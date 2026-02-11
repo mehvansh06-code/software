@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { formatCurrency, formatINR, formatDate, COMPANY_OPTIONS } from '../constants';
 import { api } from '../api';
 import { MASTER_PRODUCTS } from '../sampleData';
+import OcrReviewModal from '../components/OcrReviewModal';
 
 interface NewShipmentProps {
   suppliers?: Supplier[];
@@ -30,6 +31,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrToast, setOcrToast] = useState<string | null>(null);
   const [ocrHighConfidence, setOcrHighConfidence] = useState(false);
+  const [pendingOcrData, setPendingOcrData] = useState<{ data: any; file?: File; mode: 'boe' | 'sb' } | null>(null);
   const ocrFileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState<any>({
@@ -156,6 +158,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     setFormData((prev: any) => ({ ...prev, [field]: value }));
   };
 
+  const OCR_TOAST_DISMISS_MS = 5000;
   type ScanMode = 'boe' | 'sb';
   const handleSmartImportClick = (mode: ScanMode) => {
     ocrFileInputRef.current?.click();
@@ -171,42 +174,50 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     setOcrToast(null);
     setOcrHighConfidence(false);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('docType', mode === 'sb' ? 'SB' : 'BOE');
-      const result = await api.ocr.uploadAndScan(formData);
+      const formDataToSend = new FormData();
+      formDataToSend.append('file', file);
+      formDataToSend.append('docType', mode === 'sb' ? 'SB' : 'BOE');
+      formDataToSend.append('company', formData.company || 'GFPL');
+      const result = await api.ocr.uploadAndScan(formDataToSend);
       if (!result.success || !result.data) {
         setOcrToast(result.error || 'Could not extract data or save document.');
-        setTimeout(() => setOcrToast(null), 5000);
+        setTimeout(() => setOcrToast(null), OCR_TOAST_DISMISS_MS);
         return;
       }
-      const d = result.data;
-      const highConfidence = d.source === 'text' || d.confidence === 100;
-      setOcrHighConfidence(!!highConfidence);
-      const updates: Partial<typeof formData> = {};
-      if (mode === 'boe') {
-        if (d.beNumber) updates.invoiceNumber = d.beNumber;
-        if (d.date) updates.invoiceDate = d.date;
-        if (d.portCode) updates.portOfDischarge = d.portCode;
-        if (d.invoiceValue) updates.fobValueFC = d.invoiceValue;
-      } else {
-        if (d.sbNumber) updates.invoiceNumber = d.sbNumber;
-        if (d.date) {
-          updates.invoiceDate = d.date;
-          updates.expectedShipmentDate = d.date;
-        }
-        if (d.portCode) updates.portOfLoading = d.portCode;
-        if (d.invoiceValue) updates.amountFC = d.invoiceValue;
-      }
-      setFormData((prev: any) => ({ ...prev, ...updates }));
-      setOcrToast('Data extracted and document saved to server.');
-      setTimeout(() => setOcrToast(null), 5000);
+      setPendingOcrData({ data: result.data, file, mode });
+      setOcrToast('Data extracted. Review and confirm below.');
+      setTimeout(() => setOcrToast(null), OCR_TOAST_DISMISS_MS);
     } catch (err: any) {
       setOcrToast(err?.message || 'Scan or save failed.');
-      setTimeout(() => setOcrToast(null), 5000);
+      setTimeout(() => setOcrToast(null), OCR_TOAST_DISMISS_MS);
     } finally {
       setOcrLoading(false);
     }
+  };
+
+  const handleOcrConfirm = (reviewed: { number: string; date: string; portCode: string; invoiceValue: string }) => {
+    if (!pendingOcrData) return;
+    const { mode } = pendingOcrData;
+    const updates: Partial<typeof formData> = {};
+    if (mode === 'boe') {
+      updates.invoiceNumber = reviewed.number;
+      updates.invoiceDate = reviewed.date;
+      updates.portOfDischarge = reviewed.portCode;
+      updates.fobValueFC = reviewed.invoiceValue;
+    } else {
+      updates.invoiceNumber = reviewed.number;
+      updates.invoiceDate = reviewed.date;
+      updates.expectedShipmentDate = reviewed.date;
+      updates.portOfLoading = reviewed.portCode;
+      updates.amountFC = reviewed.invoiceValue;
+    }
+    setFormData((prev: any) => ({ ...prev, ...updates }));
+    setOcrHighConfidence(pendingOcrData.data?.source === 'text' || pendingOcrData.data?.confidence === 100);
+    setPendingOcrData(null);
+  };
+
+  const handleOcrCancel = () => {
+    setPendingOcrData(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -354,6 +365,15 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
           {ocrToast}
         </div>
       )}
+
+      <OcrReviewModal
+        open={!!pendingOcrData}
+        isExport={!!isExport}
+        initialData={pendingOcrData?.data ?? {}}
+        viewFile={pendingOcrData?.file}
+        onConfirm={handleOcrConfirm}
+        onCancel={handleOcrCancel}
+      />
 
       <form onSubmit={handleSubmit} className="space-y-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
