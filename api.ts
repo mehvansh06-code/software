@@ -152,8 +152,9 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
 }
 
 export const api = {
+  /** Login: POST /api/auth/login (no Authorization header). Stores token in localStorage on success. */
   login: (username: string, password: string): Promise<{ success: boolean; token?: string; user?: { id: string; username: string; name: string; role: string }; error?: string }> => {
-    const safe = sanitizeEndpoint('login');
+    const safe = sanitizeEndpoint('auth/login');
     if (!safe) return Promise.reject(new Error('Invalid endpoint'));
     return fetch(`${API_BASE}/${safe}`, {
       method: 'POST',
@@ -272,7 +273,7 @@ export const api = {
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
       return fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body,
         signal: controller.signal
       }).then(async (r) => {

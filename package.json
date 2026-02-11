@@ -4,11 +4,13 @@
   "private": true,
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
+    "bcrypt": "^5.1.1",
     "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
     "docx": "^9.5.1",
     "dotenv": "^17.2.4",
     "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.344.0",
     "multer": "^2.0.2",
     "number-to-words": "^1.2.4",

@@ -9,6 +9,8 @@ import type { Shipment } from '../types';
 /**
  * Standalone shipment details page: Form (left), Documents upload + file list (right).
  * Route: /shipments/:id
+ * All API calls go through the api module, which attaches the Authorization: Bearer <token>
+ * header from localStorage for protected /api routes.
  */
 const ShipmentDetailsPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();

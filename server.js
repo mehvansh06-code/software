@@ -13,6 +13,15 @@ const db = require('./server/db');
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('./server/config');
 const { verifyToken, JWT_SECRET } = require('./server/middleware');
 
+// Auth middleware for /api: protect all /api except login and status
+const authMiddleware = (req, res, next) => {
+  const path = (req.originalUrl || req.url || '').split('?')[0];
+  if (req.method === 'POST' && path === '/api/auth/login') return next();
+  if (req.method === 'POST' && path === '/api/login') return next();
+  if (req.method === 'GET' && path === '/api/status') return next();
+  return verifyToken(req, res, next);
+};
+
 const supplierRoutes = require('./server/routes/suppliers');
 const materialRoutes = require('./server/routes/materials');
 const shipmentRoutes = require('./server/routes/shipments');
@@ -64,36 +73,46 @@ const corsOrigin = process.env.CORS_ORIGIN || true;
 app.use(cors({ origin: corsOrigin, credentials: false }));
 app.use(express.json({ limit: '512kb' }));
 
-// Hardcoded admin user for Phase 1 (replace with DB lookup in production)
-const ADMIN_USERS = [
+// Login: use .env ADMIN_USERNAME / ADMIN_PASSWORD when set; else fallback users (director, checker, employee / admin123)
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const ADMIN_PASSWORD_HASH = ADMIN_PASSWORD ? bcrypt.hashSync(ADMIN_PASSWORD, 10) : null;
+const FALLBACK_USERS = [
   { id: '1', username: 'director', name: 'J P Tosniwal', role: 'MANAGEMENT' },
   { id: '2', username: 'checker', name: 'Sarah Accountant', role: 'CHECKER' },
   { id: '3', username: 'employee', name: 'Rahul Sharma', role: 'EXECUTIONER' },
 ];
-const ADMIN_PASSWORD_HASH = bcrypt.hashSync('admin123', 10);
+const FALLBACK_PASSWORD_HASH = bcrypt.hashSync('admin123', 10);
 
-app.post('/api/login', (req, res) => {
+function handleLogin(req, res) {
   const { username, password } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({ success: false, error: 'Username and password required' });
   }
-  const user = ADMIN_USERS.find((u) => u.username === username);
-  if (!user || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+  if (ADMIN_USERNAME && ADMIN_PASSWORD_HASH) {
+    if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+      return res.status(401).json({ success: false, error: 'Invalid username or password' });
+    }
+    const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT' };
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role } });
+  }
+  const user = FALLBACK_USERS.find((u) => u.username === username);
+  if (!user || !bcrypt.compareSync(password, FALLBACK_PASSWORD_HASH)) {
     return res.status(401).json({ success: false, error: 'Invalid username or password' });
   }
-  const token = jwt.sign(
-    { userId: user.id, role: user.role },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  );
+  const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role } });
-});
+}
+
+app.post('/api/auth/login', handleLogin);
+app.post('/api/login', handleLogin);
 
 app.get('/api/status', (req, res) => {
   res.json({ ok: true, message: 'Server is running' });
 });
 
-app.use(verifyToken);
+app.use('/api', authMiddleware);
 
 app.use('/api/suppliers', supplierRoutes(broadcast));
 app.use('/api/materials', materialRoutes(broadcast));

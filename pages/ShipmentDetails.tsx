@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, LCStatus, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType } from '../types';
 import { SHIPMENT_STATUS_ORDER_IMPORT, SHIPMENT_STATUS_ORDER_EXPORT, getShipmentStatusLabel, formatINR, formatDate, formatCurrency } from '../constants';
@@ -25,9 +25,11 @@ import {
   FolderOpen,
   FileCheck,
   RefreshCw,
-  Loader2
+  Loader2,
+  Download
 } from 'lucide-react';
 import { api } from '../api';
+import { ShipmentUpload } from '../components/ShipmentUpload';
 
 interface ShipmentDetailsProps {
   shipments: Shipment[];
@@ -146,14 +148,24 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     }
   }, [shipment?.id, shipment?.documentsFolderPath]);
 
+  const refetchFolderFiles = useCallback(() => {
+    if (!shipment?.id) return;
+    setLoadingDocFiles(true);
+    api.shipments.getDocumentsFolderFiles(shipment.id).then((r: { files?: Array<{ name: string } | string> }) => {
+      const list = Array.isArray(r?.files) ? r.files : [];
+      setFolderFiles(list.map((f: any) => (typeof f === 'string' ? f : f?.name)).filter(Boolean));
+    }).catch(() => setFolderFiles([])).finally(() => setLoadingDocFiles(false));
+  }, [shipment?.id]);
+
   useEffect(() => {
     if (!shipment?.id) {
       setFolderFiles([]);
       return;
     }
     setLoadingDocFiles(true);
-    api.shipments.getDocumentsFolderFiles(shipment.id).then((r: { files?: string[] }) => {
-      setFolderFiles(Array.isArray(r?.files) ? r.files : []);
+    api.shipments.getDocumentsFolderFiles(shipment.id).then((r: { files?: Array<{ name: string } | string> }) => {
+      const list = Array.isArray(r?.files) ? r.files : [];
+      setFolderFiles(list.map((f: any) => (typeof f === 'string' ? f : f?.name)).filter(Boolean));
     }).catch(() => setFolderFiles([])).finally(() => setLoadingDocFiles(false));
   }, [shipment?.id]);
 
@@ -596,7 +608,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const sanitizeFolderName = (str: string) => (str || '').replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'Unknown';
   const displayFolderPath = documentsFolderPath || (shipment ? `${sanitizeFolderName(partnerName)}_${sanitizeFolderName(shipment.invoiceNumber)}` : '');
 
-  const FALLBACK_OPEN_FOLDER_MS = 2000;
   const openDocumentsFolder = async () => {
     const shipmentId = shipment?.id ?? (shipment as { _id?: string })?._id;
     if (!shipmentId || String(shipmentId) === 'undefined') {
@@ -615,17 +626,16 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       if (result?.success && returnedPath) {
         setFolderError(null);
         setDocumentsFolderPath(returnedPath);
-        window.location.href = `flotex-open://${encodeURIComponent(returnedPath)}`;
-        setTimeout(() => {
-          if (typeof document !== 'undefined' && document.hasFocus()) {
-            try {
-              navigator.clipboard.writeText(returnedPath);
-              setToastVariant('info');
-              setToastMessage('Opening folder... If it doesn\'t appear, the path has been copied to your clipboard for manual pasting.');
-              setTimeout(() => setToastMessage(null), 6000);
-            } catch (_) {}
-          }
-        }, FALLBACK_OPEN_FOLDER_MS);
+        try {
+          await navigator.clipboard.writeText(returnedPath);
+          setToastVariant('info');
+          setToastMessage('Folder path copied to clipboard. Open File Explorer and paste (Ctrl+V) in the address bar to open the folder.');
+          setTimeout(() => setToastMessage(null), 6000);
+        } catch (_) {
+          setToastVariant('info');
+          setToastMessage(`Folder path: ${returnedPath}. Copy it and paste in File Explorer address bar.`);
+          setTimeout(() => setToastMessage(null), 8000);
+        }
         return;
       }
       const msg = result?.message || result?.error || (returnedPath ? 'Could not open folder' : 'No folder path returned from server.');
@@ -1443,6 +1453,60 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </div>
            </div>
 
+           {/* Documents: upload and file list with download */}
+           <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
+             <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
+               <FileText size={16} className="text-indigo-500" /> Documents
+             </h2>
+             <div>
+               <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Upload file</h3>
+               <ShipmentUpload
+                 shipmentId={shipment.id}
+                 onUploadSuccess={refetchFolderFiles}
+               />
+             </div>
+             <div className="border-t border-slate-100 pt-6">
+               <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Existing files</h3>
+               {loadingDocFiles ? (
+                 <p className="text-sm text-slate-400 italic flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading…</p>
+               ) : folderFiles.length === 0 ? (
+                 <p className="text-sm text-slate-500">No files yet. Upload one above.</p>
+               ) : (
+                 <ul className="space-y-2">
+                   {folderFiles.map((name) => (
+                     <li key={name} className="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-slate-50 hover:bg-slate-100">
+                       <span className="flex items-center gap-2 text-sm text-slate-800 truncate min-w-0">
+                         <FileText size={14} className="text-slate-400 shrink-0" />
+                         {name}
+                       </span>
+                       <button
+                         type="button"
+                         onClick={async () => {
+                           try {
+                             const blob = await api.shipments.downloadFile(shipment.id, name);
+                             const url = URL.createObjectURL(blob);
+                             const a = document.createElement('a');
+                             a.href = url;
+                             a.download = name;
+                             document.body.appendChild(a);
+                             a.click();
+                             document.body.removeChild(a);
+                             URL.revokeObjectURL(url);
+                           } catch (e: any) {
+                             alert(e?.message || 'Download failed');
+                           }
+                         }}
+                         className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 shrink-0"
+                       >
+                         <Download size={14} /> Download
+                       </button>
+                     </li>
+                   ))}
+                 </ul>
+               )}
+             </div>
+           </div>
+
            {/* Document Checker — auto status from folder; expected names e.g. CI_245, BOE_245, PAY_ADV_2000_USD */}
            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
              <div className="flex items-center justify-between gap-4 mb-2">
@@ -1451,13 +1515,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </h2>
                <button
                  type="button"
-                 onClick={() => {
-                   if (!shipment?.id) return;
-                   setLoadingDocFiles(true);
-                   api.shipments.getDocumentsFolderFiles(shipment.id).then((r: { files?: string[] }) => {
-                     setFolderFiles(Array.isArray(r?.files) ? r.files : []);
-                   }).finally(() => setLoadingDocFiles(false));
-                 }}
+                 onClick={refetchFolderFiles}
                  disabled={loadingDocFiles}
                  className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 disabled:opacity-50 transition-colors"
                  title="Refresh list from folder"

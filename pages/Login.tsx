@@ -32,7 +32,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         setError(result.error || 'Login failed');
       }
     } catch (err: any) {
-      setError(err?.message || 'Invalid username or password');
+      const msg = err?.message || '';
+      if (/failed to fetch|network error|load failed|connection refused/i.test(msg)) {
+        setError('Cannot reach server. Start the backend: run "npm run start" or "node server.js" in the project folder (port 3001).');
+      } else {
+        setError(msg || 'Invalid username or password');
+      }
     } finally {
       setLoading(false);
     }
