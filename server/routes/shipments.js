@@ -5,7 +5,7 @@ const multer = require('multer');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
-const { validateId } = require('../middleware');
+const { validateId, requireRole } = require('../middleware');
 
 function safeParseJson(str, fallback) {
   if (str == null || str === '') return fallback;
@@ -653,7 +653,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.put('/:id', (req, res) => {
+  router.put('/:id', requireRole('MANAGEMENT', 'CHECKER'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const id = idCheck.value;
@@ -757,7 +757,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', requireRole('MANAGEMENT'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const id = idCheck.value;

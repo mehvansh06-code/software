@@ -1,6 +1,6 @@
 const MAX_ID_LENGTH = 128;
 const SAFE_ID_REGEX = /^[a-zA-Z0-9_\-\.]+$/;
-const { verifyToken, JWT_SECRET } = require('./middleware/auth');
+const { verifyToken, requireRole, JWT_SECRET } = require('./middleware/auth');
 
 function validateId(id, label) {
   if (id == null || typeof id !== 'string') return { valid: false, message: (label || 'ID') + ' is required' };
@@ -12,4 +12,4 @@ function validateId(id, label) {
   return { valid: true, value: trimmed };
 }
 
-module.exports = { validateId, verifyToken, JWT_SECRET };
+module.exports = { validateId, verifyToken, requireRole, JWT_SECRET };

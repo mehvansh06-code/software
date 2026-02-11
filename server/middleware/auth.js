@@ -25,4 +25,20 @@ function verifyToken(req, res, next) {
   }
 }
 
-module.exports = { verifyToken, JWT_SECRET };
+/**
+ * Returns middleware that allows only the given roles.
+ * Use after verifyToken. If req.user.role is not in allowedRoles, responds with 403 Forbidden.
+ * @param {...string} allowedRoles - One or more role names (e.g. 'MANAGEMENT', 'CHECKER')
+ */
+function requireRole(...allowedRoles) {
+  const set = new Set(allowedRoles.map((r) => String(r).toUpperCase()));
+  return (req, res, next) => {
+    const role = req.user && req.user.role ? String(req.user.role).toUpperCase() : '';
+    if (!set.has(role)) {
+      return res.status(403).json({ success: false, error: 'Insufficient permissions for this action.' });
+    }
+    next();
+  };
+}
+
+module.exports = { verifyToken, requireRole, JWT_SECRET };

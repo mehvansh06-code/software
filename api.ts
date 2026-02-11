@@ -79,6 +79,10 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
       if (typeof window !== 'undefined') localStorage.removeItem('token');
       throw new Error('Session expired. Please log in again.');
     }
+    if (response.status === 403) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error || 'Insufficient permissions for this action.');
+    }
     if (!response.ok) throw new Error('Offline');
 
     serverAvailable = true;

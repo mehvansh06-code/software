@@ -109,7 +109,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   );
   const [selectedExportColumns, setSelectedExportColumns] = useState<Set<string>>(() => defaultSelectedSet);
 
-  const canDelete = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
+  const canDelete = user.role === UserRole.MANAGEMENT;
 
   const getPartnerName = (sh: Shipment) => {
     if (isExport) {

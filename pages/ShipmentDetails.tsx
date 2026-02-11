@@ -321,39 +321,58 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   if (!shipment) return <div className="p-20 text-center text-slate-400 font-bold uppercase">Record not found</div>;
 
-  const canDelete = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
+  const canDelete = user.role === UserRole.MANAGEMENT;
+  const canEdit = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
   const handleDeleteShipment = async () => {
     if (!onDelete || !shipment?.id) return;
     if (!window.confirm('Delete this shipment? This cannot be undone.')) return;
-    await onDelete(shipment.id);
-    navigate(isExport ? '/export-shipments' : '/shipments');
+    try {
+      await onDelete(shipment.id);
+      navigate(isExport ? '/export-shipments' : '/shipments');
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Insufficient permissions for this action.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
   };
 
   const handleSaveLogistics = async () => {
-    const updated = { ...shipment, ...logisticsData };
-    await onUpdate(updated);
-    setEditLogistics(false);
+    try {
+      const updated = { ...shipment, ...logisticsData };
+      await onUpdate(updated);
+      setEditLogistics(false);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
   };
 
   const handleSaveInvoice = async () => {
-    const items = invoiceEditData.items.map((it) => ({
-      ...it,
-      amount: it.quantity * it.rate
-    }));
-    const subtotal = items.reduce((s, it) => s + it.amount, 0);
-    const totalAmount = subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
-    const updated: Shipment = {
-      ...shipment,
-      invoiceNumber: invoiceEditData.invoiceNumber,
-      invoiceDate: invoiceEditData.invoiceDate || undefined,
-      freightCharges: invoiceEditData.freightCharges || undefined,
-      otherCharges: invoiceEditData.otherCharges || undefined,
-      items,
-      amount: totalAmount,
-      invoiceValueINR: totalAmount * (shipment.exchangeRate ?? 1)
-    };
-    await onUpdate(updated);
-    setEditInvoice(false);
+    try {
+      const items = invoiceEditData.items.map((it) => ({
+        ...it,
+        amount: it.quantity * it.rate
+      }));
+      const subtotal = items.reduce((s, it) => s + it.amount, 0);
+      const totalAmount = subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
+      const updated: Shipment = {
+        ...shipment,
+        invoiceNumber: invoiceEditData.invoiceNumber,
+        invoiceDate: invoiceEditData.invoiceDate || undefined,
+        freightCharges: invoiceEditData.freightCharges || undefined,
+        otherCharges: invoiceEditData.otherCharges || undefined,
+        items,
+        amount: totalAmount,
+        invoiceValueINR: totalAmount * (shipment.exchangeRate ?? 1)
+      };
+      await onUpdate(updated);
+      setEditInvoice(false);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
   };
 
   const updateInvoiceItem = (idx: number, field: keyof ShipmentItem, value: string | number) => {
@@ -386,61 +405,79 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   };
 
   const handleSaveDuties = async () => {
-    const updated = {
-      ...shipment,
-      ...dutiesData,
-      portCode: dutiesData.portCode,
-      isUnderLicence: !!licenceImportData.linkedLicenceId,
-      linkedLicenceId: licenceImportData.linkedLicenceId || undefined,
-      licenceObligationAmount: licenceImportData.licenceObligationAmount || undefined,
-      licenceObligationQuantity: licenceImportData.licenceObligationQuantity || undefined
-    };
-    await onUpdate(updated);
-    setEditDuties(false);
+    try {
+      const updated = {
+        ...shipment,
+        ...dutiesData,
+        portCode: dutiesData.portCode,
+        isUnderLicence: !!licenceImportData.linkedLicenceId,
+        linkedLicenceId: licenceImportData.linkedLicenceId || undefined,
+        licenceObligationAmount: licenceImportData.licenceObligationAmount || undefined,
+        licenceObligationQuantity: licenceImportData.licenceObligationQuantity || undefined
+      };
+      await onUpdate(updated);
+      setEditDuties(false);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
   };
   const handleSaveExportDoc = async () => {
-    const updated = { ...shipment, ...exportDocData };
-    await onUpdate(updated);
-    setEditExportDoc(false);
+    try {
+      const updated = { ...shipment, ...exportDocData };
+      await onUpdate(updated);
+      setEditExportDoc(false);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
   };
 
   const handleSaveAll = async () => {
-    const items = invoiceEditData.items.map((it) => ({ ...it, amount: it.quantity * it.rate }));
-    const subtotal = items.reduce((s, it) => s + it.amount, 0);
-    const totalAmount = isExport
-      ? (Number(invoiceEditData.amountFC) || 0)
-      : subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
-    const exchRate = isExport ? (exportDocData.exchangeRate || 1) : (dutiesData.exchangeRate || 1);
-    const updated: Shipment = {
-      ...shipment,
-      invoiceNumber: invoiceEditData.invoiceNumber,
-      invoiceDate: invoiceEditData.invoiceDate || undefined,
-      freightCharges: invoiceEditData.freightCharges || undefined,
-      otherCharges: invoiceEditData.otherCharges || undefined,
-      items,
-      amount: totalAmount,
-      invoiceValueINR: totalAmount * exchRate,
-      exchangeRate: exchRate,
-      ...(isExport ? { fobValueFC: totalAmount, fobValueINR: totalAmount * exchRate } : {}),
-      ...exportDocData,
-      ...logisticsData,
-      ...dutiesData
-    } as Shipment;
-    if (isExport) {
-      (updated as any).lodgement = lodgementValue || undefined;
-      (updated as any).lodgementDate = lodgementDateValue || undefined;
-    } else {
-      updated.isUnderLicence = !!licenceImportData.linkedLicenceId;
-      updated.linkedLicenceId = licenceImportData.linkedLicenceId || undefined;
-      updated.licenceObligationAmount = licenceImportData.licenceObligationAmount || undefined;
-      updated.licenceObligationQuantity = licenceImportData.licenceObligationQuantity || undefined;
+    try {
+      const items = invoiceEditData.items.map((it) => ({ ...it, amount: it.quantity * it.rate }));
+      const subtotal = items.reduce((s, it) => s + it.amount, 0);
+      const totalAmount = isExport
+        ? (Number(invoiceEditData.amountFC) || 0)
+        : subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
+      const exchRate = isExport ? (exportDocData.exchangeRate || 1) : (dutiesData.exchangeRate || 1);
+      const updated: Shipment = {
+        ...shipment,
+        invoiceNumber: invoiceEditData.invoiceNumber,
+        invoiceDate: invoiceEditData.invoiceDate || undefined,
+        freightCharges: invoiceEditData.freightCharges || undefined,
+        otherCharges: invoiceEditData.otherCharges || undefined,
+        items,
+        amount: totalAmount,
+        invoiceValueINR: totalAmount * exchRate,
+        exchangeRate: exchRate,
+        ...(isExport ? { fobValueFC: totalAmount, fobValueINR: totalAmount * exchRate } : {}),
+        ...exportDocData,
+        ...logisticsData,
+        ...dutiesData
+      } as Shipment;
+      if (isExport) {
+        (updated as any).lodgement = lodgementValue || undefined;
+        (updated as any).lodgementDate = lodgementDateValue || undefined;
+      } else {
+        updated.isUnderLicence = !!licenceImportData.linkedLicenceId;
+        updated.linkedLicenceId = licenceImportData.linkedLicenceId || undefined;
+        updated.licenceObligationAmount = licenceImportData.licenceObligationAmount || undefined;
+        updated.licenceObligationQuantity = licenceImportData.licenceObligationQuantity || undefined;
+      }
+      await onUpdate(updated);
+      setEditAll(false);
+      setEditInvoice(false);
+      setEditExportDoc(false);
+      setEditLogistics(false);
+      setEditDuties(false);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save.');
+      setTimeout(() => setToastMessage(null), 5000);
     }
-    await onUpdate(updated);
-    setEditAll(false);
-    setEditInvoice(false);
-    setEditExportDoc(false);
-    setEditLogistics(false);
-    setEditDuties(false);
   };
 
   const handleCancelAll = () => {
@@ -508,9 +545,15 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   };
 
   const handleSaveLodgement = async () => {
-    await onUpdate({ ...shipment, lodgement: lodgementValue, lodgementDate: lodgementDateValue || undefined });
-    setExportDocData((prev) => ({ ...prev, lodgement: lodgementValue, lodgementDate: lodgementDateValue }));
-    setEditLodgementOnly(false);
+    try {
+      await onUpdate({ ...shipment, lodgement: lodgementValue, lodgementDate: lodgementDateValue || undefined });
+      setExportDocData((prev) => ({ ...prev, lodgement: lodgementValue, lodgementDate: lodgementDateValue }));
+      setEditLodgementOnly(false);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
   };
 
   const handleAddPayment = async () => {
@@ -741,7 +784,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
               <h2 className="text-xs font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><FileText size={16} /> Invoice Details</h2>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-900">{String(shipment.company)} Entity</span>
-                {editAll ? (
+                {canEdit && (editAll ? (
                   <>
                     <button type="button" onClick={handleSaveAll} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase tracking-widest">
                       <Save size={12} /> Save
@@ -754,7 +797,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   <button type="button" onClick={() => setEditAll(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-widest">
                     <Edit3 size={12} /> Edit
                   </button>
-                )}
+                ))}
               </div>
             </div>
             <div className="p-8 space-y-4">
@@ -1318,7 +1361,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                <p className="text-[10px] text-slate-500 mb-2">Lodgement is filed with the bank; the bank gives a lodgement number. Incoming payment is settled against this lodgement no.</p>
                <div className="flex items-center gap-4 flex-wrap mb-3">
                  <span className="text-[10px] font-black uppercase text-slate-500">Lodgement No.</span>
-                 {editLodgementOnly ? (
+                 {canEdit && editLodgementOnly ? (
                    <>
                      <input className="flex-1 min-w-[200px] max-w-xs px-3 py-2 border rounded-lg font-bold text-sm" value={lodgementValue} onChange={e => setLodgementValue(e.target.value)} placeholder="Bank lodgement number" />
                      <button type="button" onClick={handleSaveLodgement} className="text-[10px] font-black uppercase text-emerald-600 hover:text-emerald-700">Save</button>
@@ -1327,13 +1370,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                  ) : (
                    <>
                      <span className="font-bold text-slate-800">{(shipment as any).lodgement || '—'}</span>
-                     <button type="button" onClick={() => setEditLodgementOnly(true)} className="text-[10px] font-black uppercase text-amber-600 hover:text-amber-700">Edit</button>
+                     {canEdit && <button type="button" onClick={() => setEditLodgementOnly(true)} className="text-[10px] font-black uppercase text-amber-600 hover:text-amber-700">Edit</button>}
                    </>
                  )}
                </div>
                <div className="flex items-center gap-4 flex-wrap">
                  <span className="text-[10px] font-black uppercase text-slate-500">Lodgement Date</span>
-                 {editLodgementOnly ? (
+                 {canEdit && editLodgementOnly ? (
                    <input type="date" className="px-3 py-2 border rounded-lg font-bold text-sm" value={lodgementDateValue} onChange={e => setLodgementDateValue(e.target.value)} />
                  ) : (
                    <span className="font-bold text-slate-800">{(shipment as any).lodgementDate ? formatDate((shipment as any).lodgementDate) : '—'}</span>
