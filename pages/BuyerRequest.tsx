@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Buyer, Consignee, User, SupplierStatus } from '../types';
 import { Plus, Trash2, Globe, Landmark, CheckCircle, Users, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -6,10 +6,13 @@ import { useNavigate } from 'react-router-dom';
 interface BuyerRequestProps {
   onSubmit: (buyer: Buyer) => Promise<void>;
   user: User;
+  initialBuyer?: Buyer | null;
+  onCancel?: () => void;
 }
 
-const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user }) => {
+const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuyer, onCancel }) => {
   const navigate = useNavigate();
+  const isEdit = !!initialBuyer;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
@@ -29,6 +32,28 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user }) => {
   });
 
   const [consignees, setConsignees] = useState<Consignee[]>([]);
+
+  useEffect(() => {
+    if (initialBuyer) {
+      setFormData({
+        name: initialBuyer.name,
+        address: initialBuyer.address,
+        country: initialBuyer.country,
+        bankName: initialBuyer.bankName,
+        accountHolderName: initialBuyer.accountHolderName,
+        swiftCode: initialBuyer.swiftCode,
+        bankAddress: initialBuyer.bankAddress,
+        contactPerson: initialBuyer.contactPerson,
+        contactNumber: initialBuyer.contactNumber ?? '',
+        contactEmail: initialBuyer.contactEmail ?? '',
+        contactDetails: initialBuyer.contactDetails ?? '',
+        salesPersonName: initialBuyer.salesPersonName,
+        salesPersonContact: initialBuyer.salesPersonContact,
+        hasConsignee: (initialBuyer.consignees?.length ?? 0) > 0
+      });
+      setConsignees(initialBuyer.consignees?.length ? [...initialBuyer.consignees] : []);
+    }
+  }, [initialBuyer?.id]);
 
   const addConsignee = () => {
     setConsignees([...consignees, { id: Math.random().toString(36).substr(2, 9), name: '', address: '' }]);
@@ -51,16 +76,26 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user }) => {
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      const newBuyer: Buyer = {
-        ...formData,
-        id: Math.random().toString(36).substr(2, 9),
-        status: SupplierStatus.PENDING,
-        consignees: formData.hasConsignee ? consignees : [],
-        requestedBy: user.name,
-        createdAt: new Date().toISOString(),
-      };
-      await onSubmit(newBuyer);
-      navigate('/buyers');
+      const payload: Buyer = isEdit && initialBuyer
+        ? {
+            ...formData,
+            id: initialBuyer.id,
+            status: initialBuyer.status,
+            consignees: formData.hasConsignee ? consignees : [],
+            requestedBy: initialBuyer.requestedBy,
+            createdAt: initialBuyer.createdAt,
+          }
+        : {
+            ...formData,
+            id: Math.random().toString(36).substr(2, 9),
+            status: SupplierStatus.PENDING,
+            consignees: formData.hasConsignee ? consignees : [],
+            requestedBy: user.name,
+            createdAt: new Date().toISOString(),
+          };
+      await onSubmit(payload);
+      if (isEdit && onCancel) onCancel();
+      else navigate('/buyers');
     } catch (err) {
       console.error(err);
       alert('Failed to save buyer.');
@@ -72,8 +107,8 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user }) => {
   return (
     <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500 pb-24">
       <header>
-        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Onboard Global Buyer</h1>
-        <p className="text-slate-500 font-medium">Capture international buyer details and shipping instructions.</p>
+        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">{isEdit ? 'Edit Buyer' : 'Onboard Global Buyer'}</h1>
+        <p className="text-slate-500 font-medium">{isEdit ? 'Update buyer details and shipping instructions.' : 'Capture international buyer details and shipping instructions.'}</p>
       </header>
 
       <form onSubmit={handleSubmit} className="space-y-8">
@@ -212,13 +247,13 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user }) => {
           </div>
         </div>
 
-        <div className="fixed bottom-0 left-64 right-0 bg-white/80 backdrop-blur-lg border-t border-slate-100 p-6 flex justify-end gap-4 shadow-2xl">
-          <button type="button" onClick={() => navigate('/buyers')} className="px-8 py-3 rounded-2xl font-bold text-slate-500 hover:bg-slate-100 transition-all">
-            Discard
+        <div className={`fixed bottom-0 right-0 bg-white/80 backdrop-blur-lg border-t border-slate-100 p-6 flex justify-end gap-4 shadow-2xl ${isEdit ? 'left-0' : 'left-64'}`}>
+          <button type="button" onClick={isEdit && onCancel ? onCancel : () => navigate('/buyers')} className="px-8 py-3 rounded-2xl font-bold text-slate-500 hover:bg-slate-100 transition-all">
+            {isEdit ? 'Cancel' : 'Discard'}
           </button>
           <button type="submit" disabled={isSubmitting} className="px-10 py-3 bg-amber-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-amber-100 hover:bg-amber-700 transition-all flex items-center gap-2 disabled:opacity-50">
             <CheckCircle size={20} />
-            {isSubmitting ? 'Saving...' : 'Submit for Audit'}
+            {isSubmitting ? 'Saving...' : isEdit ? 'Save Changes' : 'Submit for Audit'}
           </button>
         </div>
       </form>

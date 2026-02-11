@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { spawn, exec } = require('child_process');
+const { spawn } = require('child_process');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
@@ -329,8 +329,8 @@ function createRouter(broadcast) {
               licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
               portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
               incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-              documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           `);
           const runTx = db.transaction(() => {
             stmt50.run(...getShipmentValues(s, documentsFolderPath));
@@ -366,14 +366,20 @@ function createRouter(broadcast) {
       const isWin = process.platform === 'win32';
       try {
         if (isWin) {
-          const quotedPath = '"' + cleanPath.replace(/"/g, '""') + '"';
-          exec('start "" ' + quotedPath, { windowsHide: true }, (err, stdout, stderr) => {
-            if (res.headersSent) return;
-            if (err) {
-              openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message, path: cleanPath.substring(0, 120) });
-              return;
-            }
-            openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
+          const proc = spawn('explorer', [cleanPath], {
+            windowsVerbatimArguments: true,
+            detached: true,
+            stdio: 'ignore'
+          });
+          proc.unref();
+          proc.on('error', (err) => {
+            if (!res.headersSent) openFolderResponse(res, false, err.message || 'Failed to open folder', 200, { execError: err.message, path: cleanPath.substring(0, 120) });
+          });
+          proc.on('spawn', () => {
+            if (!res.headersSent) openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
+          });
+          proc.on('close', () => {
+            if (!res.headersSent) openFolderResponse(res, true, 'OK', 200, { path: cleanPath.substring(0, 120) });
           });
         } else {
           const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -417,8 +423,8 @@ function createRouter(broadcast) {
         licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
         portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
         incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
     try {
       const runTx = db.transaction(() => {
@@ -451,8 +457,8 @@ function createRouter(broadcast) {
         licenceObligationAmount, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
         portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
         incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
     const updateStmt = db.prepare(`
       UPDATE shipments SET
@@ -462,7 +468,7 @@ function createRouter(broadcast) {
         documents_json=?, history_json=?, payments_json=?, items_json=?,
         licenceObligationAmount=?, incoTerm=?, paymentDueDate=?, expectedArrivalDate=?,
         invoiceDate=?, freightCharges=?, otherCharges=?, exchangeRate=?, remarks=?,
-        isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?
+        isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?, consigneeId=?
       WHERE id=?
     `);
 
@@ -476,8 +482,9 @@ function createRouter(broadcast) {
           setShipmentItems(id, sNorm.items);
           setShipmentHistory(id, sNorm.history);
         } else {
-          const existing = db.prepare('SELECT exchangeRate, remarks, isUnderLC, lcNumber, fileStatus FROM shipments WHERE id = ?').get(id);
+          const existing = db.prepare('SELECT exchangeRate, remarks, isUnderLC, lcNumber, fileStatus, consigneeId FROM shipments WHERE id = ?').get(id);
           const allowedFileStatus = ['pending', 'clearing', 'ok'].includes(s.fileStatus) ? s.fileStatus : (existing?.fileStatus ?? null);
+          const consigneeIdVal = s.consigneeId !== undefined ? s.consigneeId : (existing?.consigneeId ?? null);
           updateStmt.run(
             s.status, s.containerNumber, s.blNumber, s.blDate, s.beNumber, s.beDate,
             s.shippingLine, s.portCode, s.portOfLoading, s.portOfDischarge,
@@ -489,6 +496,7 @@ function createRouter(broadcast) {
             s.remarks !== undefined ? s.remarks : (existing?.remarks ?? null),
             s.isUnderLC ? 1 : 0, s.lcNumber || null, s.lcAmount ?? null, s.lcDate || null,
             allowedFileStatus,
+            consigneeIdVal,
             id
           );
           setShipmentItems(id, s.items);

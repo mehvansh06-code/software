@@ -122,6 +122,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [openingFolder, setOpeningFolder] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<'error' | 'info'>('error');
 
   useEffect(() => {
     if (!shipment) return;
@@ -502,6 +503,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     const shipmentId = shipment?.id ?? (shipment as { _id?: string })?._id;
     if (!shipmentId || String(shipmentId) === 'undefined') {
       setFolderError('Shipment ID is missing. Save the shipment and try again.');
+      setToastVariant('error');
       setToastMessage('Shipment ID is missing. Save the shipment and try again.');
       return;
     }
@@ -513,15 +515,23 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       if (result?.success) {
         setFolderError(null);
         api.shipments.getDocumentsFolder(shipmentId).then((r: { path?: string | null }) => r?.path && setDocumentsFolderPath(r.path));
+        const isRemote = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+        if (isRemote) {
+          setToastVariant('info');
+          setToastMessage('Folder opened on the server computer. If you\'re on another device, check the machine running the backend.');
+          setTimeout(() => setToastMessage(null), 6000);
+        }
         return;
       }
       const msg = result?.message || result?.error || 'Could not open folder';
       setFolderError(msg);
+      setToastVariant('error');
       setToastMessage(msg);
       setTimeout(() => setToastMessage(null), 5000);
     } catch (e) {
       const msg = (e as Error)?.message || 'Server unavailable. Start the backend (node server.js) to open the folder.';
       setFolderError(msg);
+      setToastVariant('error');
       setToastMessage(msg);
       setTimeout(() => setToastMessage(null), 5000);
     } finally {
@@ -1341,8 +1351,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     </div>
     {toastMessage && (
       <div
-        role="alert"
-        className="fixed bottom-6 right-6 z-50 max-w-sm px-4 py-3 rounded-xl bg-red-600 text-white text-sm font-medium shadow-lg border border-red-700 animate-in fade-in slide-in-from-bottom-2"
+        role={toastVariant === 'error' ? 'alert' : 'status'}
+        className={`fixed bottom-6 right-6 z-50 max-w-sm px-4 py-3 rounded-xl text-white text-sm font-medium shadow-lg animate-in fade-in slide-in-from-bottom-2 ${toastVariant === 'info' ? 'bg-indigo-600 border border-indigo-700' : 'bg-red-600 border border-red-700'}`}
       >
         {toastMessage}
       </div>

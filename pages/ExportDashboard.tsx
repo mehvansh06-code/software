@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Shipment, Buyer, ShipmentStatus, Licence, LicenceType, LetterOfCredit, LCStatus } from '../types';
+import { Shipment, Buyer, ShipmentStatus, Licence, LicenceType, LetterOfCredit, LCStatus, User, UserRole } from '../types';
 import { 
   TrendingUp, 
   ArrowRight,
@@ -17,12 +17,14 @@ interface ExportDashboardProps {
   shipments?: Shipment[];
   buyers?: Buyer[];
   licences?: Licence[];
+  user?: User;
 }
 
 const ExportDashboard: React.FC<ExportDashboardProps> = ({ 
   shipments = [], 
   buyers = [], 
-  licences = [] 
+  licences = [],
+  user
 }) => {
   try {
     const safeShipments = Array.isArray(shipments) ? shipments : [];
@@ -82,11 +84,13 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
           </section>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className={`grid grid-cols-1 gap-6 ${user?.role === UserRole.EXECUTIONER ? 'md:grid-cols-3' : 'md:grid-cols-4'}`}>
+          {user?.role !== UserRole.EXECUTIONER && (
           <div className="bg-white p-6 rounded-3xl border border-slate-100 flex items-center gap-4 shadow-sm">
              <div className="bg-emerald-50 text-emerald-600 p-3 rounded-2xl"><TrendingUp size={24} /></div>
              <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Turnover (INR)</p><p className="text-lg font-black">{formatINR(totalRevenue)}</p></div>
           </div>
+          )}
           <div className="bg-white p-6 rounded-3xl border border-slate-100 flex items-center gap-4 shadow-sm">
              <div className="bg-amber-50 text-amber-600 p-3 rounded-2xl"><Ship size={24} /></div>
              <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active Sails</p><p className="text-xl font-black">{activeShipmentsCount}</p></div>

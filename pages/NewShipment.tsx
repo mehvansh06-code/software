@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material } from '../types';
+import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, Consignee, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material } from '../types';
 import { UploadCloud, Award, CreditCard, Package, Zap, Trash2, CheckCircle, Anchor } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatCurrency, formatINR, formatDate, COMPANY_OPTIONS } from '../constants';
@@ -50,6 +50,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     exportLicenceType: '' as '' | LicenceType, // Export: manual licence type when linking
     lcAmount: undefined as number | undefined,
     hasCOO: false, // Certificate of Origin (if any) — only then add to document ledger
+    consigneeId: '' as string, // Export: selected consignee (from buyer.consignees)
   });
 
   useEffect(() => {
@@ -70,6 +71,15 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
   // Use all partners for dropdown so list is never empty when any exist (approved or pending)
   const partnerSuppliers = suppliers.length ? suppliers : approvedSuppliers;
   const partnerBuyers = buyers.length ? buyers : approvedBuyers;
+
+  const selectedBuyer = useMemo(() => {
+    if (!isExport || !selectedEntityId) return null;
+    return buyers.find(b => b.id === selectedEntityId) || approvedBuyers.find(b => b.id === selectedEntityId) || null;
+  }, [isExport, selectedEntityId, buyers, approvedBuyers]);
+  const consigneesForBuyer = useMemo(() => {
+    if (!selectedBuyer?.hasConsignee || !selectedBuyer.consignees?.length) return [];
+    return selectedBuyer.consignees;
+  }, [selectedBuyer]);
 
 
   const availableProducts = useMemo(() => {
@@ -171,6 +181,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
         id: Math.random().toString(36).substr(2, 9),
         supplierId: !isExport ? selectedEntityId : undefined,
         buyerId: isExport ? selectedEntityId : undefined,
+        consigneeId: isExport && formData.consigneeId ? formData.consigneeId : undefined,
         items: itemsToUse,
         rate: itemsToUse[0].rate,
         quantity: itemsToUse[0].quantity,
@@ -253,11 +264,35 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                  <div className="md:col-span-2">
                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Approved Account</label>
-                   <select required className="w-full px-4 py-3 rounded-xl border bg-slate-50 font-bold" value={selectedEntityId} onChange={e => setSelectedEntityId(e.target.value)}>
+                   <select
+                     required
+                     className="w-full px-4 py-3 rounded-xl border bg-slate-50 font-bold"
+                     value={selectedEntityId}
+                     onChange={e => {
+                       setSelectedEntityId(e.target.value);
+                       if (isExport) handleChange('consigneeId', '');
+                     }}
+                   >
                      <option value="">-- Choose Partner --</option>
                      {(isExport ? partnerBuyers : partnerSuppliers).map(e => <option key={e.id} value={e.id}>{e.name} ({e.country}){e.status && e.status !== 'APPROVED' ? ' (Pending)' : ''}</option>)}
                    </select>
                  </div>
+                 {isExport && consigneesForBuyer.length > 0 && (
+                   <div className="md:col-span-2">
+                     <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Consignee</label>
+                     <select
+                       className="w-full px-4 py-3 rounded-xl border bg-slate-50 font-bold"
+                       value={formData.consigneeId || ''}
+                       onChange={e => handleChange('consigneeId', e.target.value)}
+                     >
+                       <option value="">-- No consignee / Same as buyer --</option>
+                       {consigneesForBuyer.map((c: Consignee) => (
+                         <option key={c.id} value={c.id}>{c.name}{c.address ? ` — ${c.address}` : ''}</option>
+                       ))}
+                     </select>
+                     <p className="text-[9px] text-slate-400 mt-1">Optional: select delivery consignee if different from buyer.</p>
+                   </div>
+                 )}
                  <div>
                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Transaction Currency</label>
                    <select className="w-full px-4 py-3 rounded-xl border bg-slate-50 font-bold" value={formData.currency} onChange={e => handleChange('currency', e.target.value)}>

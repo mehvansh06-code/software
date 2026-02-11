@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Buyer, User, UserRole, SupplierStatus } from '../types';
-import { Search, CheckCircle, XCircle, Clock, CheckSquare, Square, Plus, X } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Clock, CheckSquare, Square, Plus, X, Eye, Edit3 } from 'lucide-react';
 import BuyerRequest from './BuyerRequest';
 
 interface BuyerMasterProps {
@@ -15,8 +15,11 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [viewingBuyer, setViewingBuyer] = useState<Buyer | null>(null);
+  const [editingBuyer, setEditingBuyer] = useState<Buyer | null>(null);
 
   const canApprove = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
+  const canEdit = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
 
   const handleBulkAction = async (newStatus: SupplierStatus) => {
     if (!selectedIds.length) return;
@@ -104,6 +107,7 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
               <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">Buyer Details</th>
               <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">Region</th>
               <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">Status</th>
+              <th className="px-6 py-5 text-right text-xs font-black text-slate-400 uppercase tracking-widest">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -130,11 +134,112 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
                     {b.status}
                   </div>
                 </td>
+                <td className="px-6 py-5 text-right">
+                  <div className="flex items-center justify-end gap-2">
+                    <button onClick={() => setViewingBuyer(b)} className="p-2 text-slate-400 hover:text-amber-600 rounded-lg transition-all" title="View details"><Eye size={18} /></button>
+                    {canEdit && (
+                      <button onClick={() => setEditingBuyer({ ...b })} className="p-2 text-slate-400 hover:text-amber-600 rounded-lg transition-all" title="Edit"><Edit3 size={18} /></button>
+                    )}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {viewingBuyer && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-8 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white">
+              <h2 className="text-xl font-black text-slate-900">Buyer Details</h2>
+              <button onClick={() => setViewingBuyer(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={22} /></button>
+            </div>
+            <div className="p-8 space-y-6">
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Legal Name</span>
+                <p className="text-slate-900 font-semibold mt-1">{viewingBuyer.name}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Country</span>
+                <p className="text-slate-900 font-semibold mt-1">{viewingBuyer.country}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Address</span>
+                <p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewingBuyer.address}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-xs font-bold text-slate-400 uppercase">Contact Person</span>
+                  <p className="text-slate-900 font-semibold mt-1">{viewingBuyer.contactPerson}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-slate-400 uppercase">Contact Number</span>
+                  <p className="text-slate-700 mt-1">{viewingBuyer.contactNumber || '—'}</p>
+                </div>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Contact Email</span>
+                <p className="text-slate-700 mt-1">{viewingBuyer.contactEmail || '—'}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Bank Name / SWIFT</span>
+                <p className="text-slate-700 mt-1">{viewingBuyer.bankName} — {viewingBuyer.swiftCode}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Account Holder</span>
+                <p className="text-slate-700 mt-1">{viewingBuyer.accountHolderName}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Bank Address</span>
+                <p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewingBuyer.bankAddress}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Sales Person</span>
+                <p className="text-slate-700 mt-1">{viewingBuyer.salesPersonName} — {viewingBuyer.salesPersonContact}</p>
+              </div>
+              {viewingBuyer.consignees?.length > 0 && (
+                <div>
+                  <span className="text-xs font-bold text-slate-400 uppercase">Consignees</span>
+                  <ul className="mt-2 space-y-2">
+                    {viewingBuyer.consignees.map(c => (
+                      <li key={c.id} className="p-3 bg-slate-50 rounded-xl text-sm">
+                        <span className="font-semibold">{c.name}</span>
+                        <p className="text-slate-600 mt-1">{c.address}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Status</span>
+                <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase mt-1 ${
+                  viewingBuyer.status === SupplierStatus.APPROVED ? 'bg-emerald-100 text-emerald-700' :
+                  viewingBuyer.status === SupplierStatus.PENDING ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                }`}>
+                  {viewingBuyer.status}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingBuyer && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-slate-50 w-full max-w-5xl max-h-[90vh] rounded-[2.5rem] shadow-2xl overflow-y-auto p-8 relative">
+            <button onClick={() => setEditingBuyer(null)} className="absolute top-8 right-8 p-2 hover:bg-slate-200 rounded-full transition-all">
+              <X size={24} className="text-slate-500" />
+            </button>
+            <BuyerRequest
+              user={user}
+              initialBuyer={editingBuyer}
+              onCancel={() => setEditingBuyer(null)}
+              onSubmit={async (b) => { await onUpdateItem(b); setEditingBuyer(null); }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

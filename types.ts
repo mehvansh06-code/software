@@ -230,6 +230,8 @@ export interface Shipment {
   remarks?: string;
   /** Manual file status: pending, clearing, ok */
   fileStatus?: 'pending' | 'clearing' | 'ok';
+  /** Export: selected consignee id (from buyer.consignees) */
+  consigneeId?: string;
   attachments?: {
     [key: string]: string; // Base64 or local URL
   };

@@ -12,7 +12,8 @@ import {
   Trash2,
   Globe,
   Landmark,
-  PackagePlus
+  PackagePlus,
+  Eye
 } from 'lucide-react';
 import { formatDate } from '../constants';
 import SupplierRequest from './SupplierRequest';
@@ -28,6 +29,7 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
   const [filterStatus, setFilterStatus] = useState<SupplierStatus | 'ALL'>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [viewingSupplier, setViewingSupplier] = useState<Supplier | null>(null);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
@@ -157,8 +159,9 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                   </td>
                   <td className="px-6 py-5 text-right">
                     <div className="flex items-center justify-end gap-2">
+                      <button onClick={() => setViewingSupplier(s)} className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-all" title="View details"><Eye size={18} /></button>
                       {canEdit && (
-                        <button onClick={() => setEditingSupplier({...s})} className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-all"><Edit3 size={18} /></button>
+                        <button onClick={() => setEditingSupplier({...s})} className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-all" title="Edit"><Edit3 size={18} /></button>
                       )}
                     </div>
                   </td>
@@ -169,17 +172,149 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
         </div>
       </div>
 
+      {viewingSupplier && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-8 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white">
+              <h2 className="text-xl font-black text-slate-900">Supplier Details</h2>
+              <button onClick={() => setViewingSupplier(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={22} /></button>
+            </div>
+            <div className="p-8 space-y-6">
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Legal Name</span>
+                <p className="text-slate-900 font-semibold mt-1">{viewingSupplier.name}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Country</span>
+                <p className="text-slate-900 font-semibold mt-1">{viewingSupplier.country}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Address</span>
+                <p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewingSupplier.address}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-xs font-bold text-slate-400 uppercase">Contact Person</span>
+                  <p className="text-slate-900 font-semibold mt-1">{viewingSupplier.contactPerson}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-slate-400 uppercase">Contact Number</span>
+                  <p className="text-slate-700 mt-1">{viewingSupplier.contactNumber || '—'}</p>
+                </div>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Contact Email</span>
+                <p className="text-slate-700 mt-1">{viewingSupplier.contactEmail || '—'}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Bank Name / SWIFT</span>
+                <p className="text-slate-700 mt-1">{viewingSupplier.bankName} — {viewingSupplier.swiftCode}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Account Holder</span>
+                <p className="text-slate-700 mt-1">{viewingSupplier.accountHolderName}</p>
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Bank Address</span>
+                <p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewingSupplier.bankAddress}</p>
+              </div>
+              {viewingSupplier.hasIntermediaryBank && (
+                <div className="pt-4 border-t border-slate-100">
+                  <span className="text-xs font-bold text-slate-400 uppercase">Intermediary Bank</span>
+                  <p className="text-slate-700 mt-1">{viewingSupplier.intermediaryBankName} — {viewingSupplier.intermediarySwiftCode}</p>
+                  <p className="text-slate-600 text-sm mt-1">{viewingSupplier.intermediaryAccountHolderName}</p>
+                  {viewingSupplier.intermediaryBankAddress && <p className="text-slate-600 text-sm mt-1 whitespace-pre-wrap">{viewingSupplier.intermediaryBankAddress}</p>}
+                </div>
+              )}
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Status</span>
+                <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase mt-1 ${
+                  viewingSupplier.status === SupplierStatus.APPROVED ? 'bg-emerald-100 text-emerald-700' :
+                  viewingSupplier.status === SupplierStatus.PENDING ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                }`}>
+                  {viewingSupplier.status}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editingSupplier && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-2xl">
-            <div className="p-8 border-b border-slate-100 flex items-center justify-between">
-              <h2 className="text-2xl font-black text-slate-900 tracking-tight">Edit Profile</h2>
+          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-8 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white">
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight">Edit Supplier</h2>
               <button onClick={() => setEditingSupplier(null)}><X size={24} /></button>
             </div>
             <div className="p-8 space-y-4">
-               <label className="block text-xs font-bold text-slate-500 uppercase">Legal Name</label>
-               <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.name} onChange={e => setEditingSupplier({...editingSupplier, name: e.target.value})} placeholder="Name" />
-               <button onClick={async () => { await onUpdateItem(editingSupplier); setEditingSupplier(null); }} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl mt-4">Save Changes</button>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Legal Name</label>
+                <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.name} onChange={e => setEditingSupplier({...editingSupplier, name: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Country</label>
+                <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.country} onChange={e => setEditingSupplier({...editingSupplier, country: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Address</label>
+                <textarea rows={3} className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.address} onChange={e => setEditingSupplier({...editingSupplier, address: e.target.value})} />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Contact Person</label>
+                  <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.contactPerson} onChange={e => setEditingSupplier({...editingSupplier, contactPerson: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Contact Number</label>
+                  <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.contactNumber ?? ''} onChange={e => setEditingSupplier({...editingSupplier, contactNumber: e.target.value})} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Contact Email</label>
+                <input type="email" className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.contactEmail ?? ''} onChange={e => setEditingSupplier({...editingSupplier, contactEmail: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Bank Name</label>
+                <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.bankName} onChange={e => setEditingSupplier({...editingSupplier, bankName: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Account Holder</label>
+                <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.accountHolderName} onChange={e => setEditingSupplier({...editingSupplier, accountHolderName: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">SWIFT Code</label>
+                <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.swiftCode} onChange={e => setEditingSupplier({...editingSupplier, swiftCode: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Bank Address</label>
+                <textarea rows={2} className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.bankAddress} onChange={e => setEditingSupplier({...editingSupplier, bankAddress: e.target.value})} />
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" id="hasInter" className="w-4 h-4 rounded accent-indigo-600" checked={!!editingSupplier.hasIntermediaryBank} onChange={e => setEditingSupplier({...editingSupplier, hasIntermediaryBank: e.target.checked})} />
+                <label htmlFor="hasInter" className="text-sm font-semibold text-slate-700">Intermediary bank</label>
+              </div>
+              {editingSupplier.hasIntermediaryBank && (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Intermediary Bank Name</label>
+                    <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.intermediaryBankName ?? ''} onChange={e => setEditingSupplier({...editingSupplier, intermediaryBankName: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Intermediary Account Holder</label>
+                    <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.intermediaryAccountHolderName ?? ''} onChange={e => setEditingSupplier({...editingSupplier, intermediaryAccountHolderName: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Intermediary SWIFT</label>
+                    <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.intermediarySwiftCode ?? ''} onChange={e => setEditingSupplier({...editingSupplier, intermediarySwiftCode: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Intermediary Bank Address</label>
+                    <textarea rows={2} className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.intermediaryBankAddress ?? ''} onChange={e => setEditingSupplier({...editingSupplier, intermediaryBankAddress: e.target.value})} />
+                  </div>
+                </>
+              )}
+              <button onClick={async () => { await onUpdateItem(editingSupplier); setEditingSupplier(null); }} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl mt-4 hover:bg-indigo-700">Save Changes</button>
             </div>
           </div>
         </div>

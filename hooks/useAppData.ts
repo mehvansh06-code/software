@@ -131,23 +131,23 @@ export function useAppData(): UseAppDataReturn {
 
   const handleAddSupplier = useCallback(async (s: Supplier) => {
     await api.suppliers.create(s);
-    setSuppliers(prev => [...prev, s]);
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleUpdateSupplier = useCallback(async (updated: Supplier) => {
     await api.suppliers.update(updated.id, updated);
-    setSuppliers(prev => prev.map(s => (s.id === updated.id ? updated : s)));
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleAddBuyer = useCallback(async (b: Buyer) => {
     await api.buyers.create(b);
-    setBuyers(prev => [...prev, b]);
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleUpdateBuyer = useCallback(async (updated: Buyer) => {
     await api.buyers.update(updated.id, updated);
-    setBuyers(prev => prev.map(b => (b.id === updated.id ? updated : b)));
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleAddShipment = useCallback(async (sh: Shipment) => {
     await api.shipments.create(sh);
