@@ -497,7 +497,11 @@ function createRouter(broadcast) {
       if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
       if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file uploaded' });
       const rawName = req.file.originalname || 'upload';
-      const filename = sanitizeFileDownloadFilename(rawName) || rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
+      let baseName = sanitizeFileDownloadFilename(rawName) || rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
+      const docTypeRaw = (req.query && typeof req.query.documentType === 'string') ? req.query.documentType.trim() : '';
+      const docType = docTypeRaw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
+      if (docType.length > 0) baseName = docType + '_' + baseName;
+      const filename = sanitizeFileDownloadFilename(baseName) || baseName;
       const fullPath = path.join(folderPath, filename);
       const resolvedFull = path.resolve(fullPath);
       const resolvedBase = path.resolve(folderPath);

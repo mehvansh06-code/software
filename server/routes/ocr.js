@@ -74,19 +74,35 @@ router.post('/extract', verifyToken, (req, res, next) => {
         date: p.date || undefined,
         portCode: p.portCode || undefined,
         invoiceValue: p.invoiceValue || undefined,
+        containerNumber: p.containerNumber || undefined,
+        blNumber: p.blNumber || undefined,
+        blDate: p.blDate || undefined,
+        shippingLine: p.shippingLine || undefined,
+        dutyBCD: p.dutyBCD || undefined,
+        dutySWS: p.dutySWS || undefined,
+        dutyINT: p.dutyINT || undefined,
+        gst: p.gst || undefined,
         confidence: confidence != null ? Math.round(confidence) : undefined,
         source: 'ocr',
       };
     }
 
     const data = {
-      beNumber: parsed.beNumber || null,
-      sbNumber: parsed.sbNumber || null,
-      date: parsed.date || null,
-      invoiceValue: parsed.invoiceValue || null,
-      portCode: parsed.portCode || null,
+      beNumber: parsed.beNumber ?? null,
+      sbNumber: parsed.sbNumber ?? null,
+      date: parsed.date ?? null,
+      invoiceValue: parsed.invoiceValue ?? null,
+      portCode: parsed.portCode ?? null,
+      containerNumber: parsed.containerNumber ?? null,
+      blNumber: parsed.blNumber ?? null,
+      blDate: parsed.blDate ?? null,
+      shippingLine: parsed.shippingLine ?? null,
+      dutyBCD: parsed.dutyBCD ?? null,
+      dutySWS: parsed.dutySWS ?? null,
+      dutyINT: parsed.dutyINT ?? null,
+      gst: parsed.gst ?? null,
       confidence: parsed.confidence ?? null,
-      source: parsed.source || null,
+      source: parsed.source ?? null,
     };
 
     res.json({ success: true, data });
@@ -121,8 +137,8 @@ router.post('/upload-and-scan', verifyToken, hasPermission('documents.upload'), 
     const buffer = req.file.buffer;
     const originalName = req.file.originalname || 'scanned-document';
     const mimeType = (req.file.mimetype || '').toLowerCase();
-    const docType = (req.body && req.body.docType) === 'SB' ? 'SB' : 'BOE';
-    const companyKey = (req.body && req.body.company) === 'GTEX' ? 'GTEX' : 'GFPL';
+    const docType = (req.query && req.query.docType === 'SB') || (req.body && req.body.docType === 'SB') ? 'SB' : 'BOE';
+    const companyKey = (req.query && req.query.company === 'GTEX') || (req.body && req.body.company === 'GTEX') ? 'GTEX' : 'GFPL';
     const isPdf = mimeType === 'application/pdf' || isPdfBuffer(buffer);
 
     // 1) PDF: extractDataFromPDF (text first, OCR fallback); Image: Tesseract OCR

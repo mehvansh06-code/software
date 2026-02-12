@@ -1,13 +1,34 @@
 /**
  * OCR Service: text extraction from PDFs (text layer first) and images (Tesseract).
  * For computer-generated PDFs: prioritize pdf-parse (1s, 100%); fallback to first-page image + OCR.
+ * Node-safe: lazy-loads PDF parser (tries v2, falls back to pdf-parse-legacy) and Tesseract to avoid
+ * startup crashes from browser-only APIs (e.g. DOMMatrix).
  */
-
-const { createWorker } = require('tesseract.js');
-const { PDFParse } = require('pdf-parse');
 
 const PDF_MAGIC = Buffer.from('%PDF');
 const MIN_TEXT_LENGTH_FOR_LAYER = 40;
+
+let _pdfParseV2 = undefined;
+let _pdfParseLegacy = undefined;
+
+/** Lazy-load PDF parser: try pdf-parse v2 (PDFParse), fall back to pdf-parse-legacy (Node-safe) on load error. */
+function getPdfParser() {
+  if (_pdfParseV2 === undefined) {
+    try {
+      _pdfParseV2 = require('pdf-parse');
+    } catch {
+      _pdfParseV2 = null;
+    }
+  }
+  if (_pdfParseLegacy === undefined) {
+    try {
+      _pdfParseLegacy = require('pdf-parse-legacy');
+    } catch {
+      _pdfParseLegacy = null;
+    }
+  }
+  return { v2: _pdfParseV2, legacy: _pdfParseLegacy };
+}
 
 function isPdfBuffer(buffer) {
   return Buffer.isBuffer(buffer) && buffer.length >= 4 && buffer.subarray(0, 4).equals(PDF_MAGIC);
@@ -25,20 +46,33 @@ function isTextGarbled(text) {
 
 /**
  * Extract text from PDF using its text layer (fast, 100% for digital PDFs).
+ * Uses pdf-parse v2 when available; falls back to pdf-parse-legacy (Node-safe) otherwise.
  * @param {Buffer} pdfBuffer - PDF file buffer
  * @returns {Promise<{ text: string }>} Extracted text or empty if no text layer
  */
 async function extractTextFromPdf(pdfBuffer) {
-  let parser;
-  try {
-    parser = new PDFParse({ data: pdfBuffer });
-    const result = await parser.getText({ first: 1 });
-    await parser.destroy();
-    return { text: (result && result.text) ? String(result.text) : '' };
-  } catch (e) {
-    if (parser && typeof parser.destroy === 'function') await parser.destroy().catch(() => {});
-    return { text: '' };
+  const { v2, legacy } = getPdfParser();
+  if (v2 && v2.PDFParse) {
+    let parser;
+    try {
+      parser = new v2.PDFParse({ data: pdfBuffer });
+      const result = await parser.getText({ first: 1 });
+      await parser.destroy();
+      return { text: (result && result.text) ? String(result.text) : '' };
+    } catch (e) {
+      if (parser && typeof parser.destroy === 'function') await parser.destroy().catch(() => {});
+      return { text: '' };
+    }
   }
+  if (legacy && typeof legacy === 'function') {
+    try {
+      const result = await legacy(pdfBuffer);
+      return { text: (result && result.text) ? String(result.text) : '' };
+    } catch (e) {
+      return { text: '' };
+    }
+  }
+  return { text: '' };
 }
 
 /**
@@ -53,16 +87,28 @@ async function extractDataFromPDF(buffer) {
   const { text: pdfText } = await extractTextFromPdf(buffer);
   const trimmed = (pdfText || '').trim();
 
+  const spreadParsed = (p) => ({
+    beNumber: p.beNumber || undefined,
+    sbNumber: p.sbNumber || undefined,
+    date: p.date || undefined,
+    portCode: p.portCode || undefined,
+    invoiceValue: p.invoiceValue || undefined,
+    containerNumber: p.containerNumber || undefined,
+    blNumber: p.blNumber || undefined,
+    blDate: p.blDate || undefined,
+    shippingLine: p.shippingLine || undefined,
+    dutyBCD: p.dutyBCD || undefined,
+    dutySWS: p.dutySWS || undefined,
+    dutyINT: p.dutyINT || undefined,
+    gst: p.gst || undefined,
+  });
+
   if (!trimmed || isTextGarbled(trimmed)) {
     const firstPageImage = await pdfFirstPageToImage(buffer);
     const { text, confidence } = await extractTextFromImage(firstPageImage);
     const parsed = parseCustomsDocument(text);
     return {
-      beNumber: parsed.beNumber || undefined,
-      sbNumber: parsed.sbNumber || undefined,
-      date: parsed.date || undefined,
-      portCode: parsed.portCode || undefined,
-      invoiceValue: parsed.invoiceValue || undefined,
+      ...spreadParsed(parsed),
       confidence: confidence != null ? Math.round(confidence) : undefined,
       source: 'ocr',
     };
@@ -70,11 +116,7 @@ async function extractDataFromPDF(buffer) {
 
   const parsed = parseCustomsDocument(trimmed);
   return {
-    beNumber: parsed.beNumber || undefined,
-    sbNumber: parsed.sbNumber || undefined,
-    date: parsed.date || undefined,
-    portCode: parsed.portCode || undefined,
-    invoiceValue: parsed.invoiceValue || undefined,
+    ...spreadParsed(parsed),
     confidence: 100,
     source: 'text',
   };
@@ -98,10 +140,12 @@ async function pdfFirstPageToImage(pdfBuffer) {
 
 /**
  * Extract raw text from an image buffer using Tesseract.js in a worker (non-blocking).
+ * Tesseract is lazy-loaded so the OCR module can load in Node without browser APIs.
  * @param {Buffer} buffer - Image buffer (PNG, JPEG, etc.)
  * @returns {Promise<{ text: string, confidence?: number }>} Raw OCR text and optional confidence
  */
 async function extractTextFromImage(buffer) {
+  const { createWorker } = require('tesseract.js');
   const worker = await createWorker('eng', 1, {
     logger: () => {}, // suppress logs in production
   });
@@ -126,30 +170,34 @@ async function scanAndParse(fileBuffer, opts = {}) {
   const mime = (opts && opts.mimeType) || '';
   const isPdf = mime === 'application/pdf' || isPdfBuffer(fileBuffer);
 
+  const spreadParsed = (p) => ({
+    beNumber: p.beNumber || undefined,
+    sbNumber: p.sbNumber || undefined,
+    date: p.date || undefined,
+    portCode: p.portCode || undefined,
+    invoiceValue: p.invoiceValue || undefined,
+    containerNumber: p.containerNumber || undefined,
+    blNumber: p.blNumber || undefined,
+    blDate: p.blDate || undefined,
+    shippingLine: p.shippingLine || undefined,
+    dutyBCD: p.dutyBCD || undefined,
+    dutySWS: p.dutySWS || undefined,
+    dutyINT: p.dutyINT || undefined,
+    gst: p.gst || undefined,
+  });
+
   if (isPdf) {
     const { text: pdfText } = await extractTextFromPdf(fileBuffer);
     const trimmed = (pdfText || '').trim();
     if (trimmed.length >= MIN_TEXT_LENGTH_FOR_LAYER) {
       const parsed = parseCustomsDocument(trimmed);
-      return {
-        beNumber: parsed.beNumber || undefined,
-        sbNumber: parsed.sbNumber || undefined,
-        date: parsed.date || undefined,
-        portCode: parsed.portCode || undefined,
-        invoiceValue: parsed.invoiceValue || undefined,
-        confidence: 100,
-        source: 'text',
-      };
+      return { ...spreadParsed(parsed), confidence: 100, source: 'text' };
     }
     const firstPageImage = await pdfFirstPageToImage(fileBuffer);
     const { text, confidence } = await extractTextFromImage(firstPageImage);
     const parsed = parseCustomsDocument(text);
     return {
-      beNumber: parsed.beNumber || undefined,
-      sbNumber: parsed.sbNumber || undefined,
-      date: parsed.date || undefined,
-      portCode: parsed.portCode || undefined,
-      invoiceValue: parsed.invoiceValue || undefined,
+      ...spreadParsed(parsed),
       confidence: confidence != null ? Math.round(confidence) : undefined,
       source: 'ocr',
     };
@@ -158,20 +206,24 @@ async function scanAndParse(fileBuffer, opts = {}) {
   const { text, confidence } = await extractTextFromImage(fileBuffer);
   const parsed = parseCustomsDocument(text);
   return {
-    beNumber: parsed.beNumber || undefined,
-    sbNumber: parsed.sbNumber || undefined,
-    date: parsed.date || undefined,
-    portCode: parsed.portCode || undefined,
-    invoiceValue: parsed.invoiceValue || undefined,
+    ...spreadParsed(parsed),
     confidence: confidence != null ? Math.round(confidence) : undefined,
     source: 'ocr',
   };
 }
 
+/** Extract first number (with optional decimals) from a line/string; returns string without commas. */
+function extractNumberFromLine(str) {
+  if (!str || typeof str !== 'string') return undefined;
+  const m = str.match(/[\d,]+(?:\.\d{2})?/);
+  return m ? m[0].replace(/,/g, '') : undefined;
+}
+
 /**
  * Parse customs document text (BOE / Shipping Bill) using regex patterns.
+ * Extracts all columns that appear on BOE/SB and map to shipment fields.
  * @param {string} text - Raw OCR text
- * @returns {{ beNumber?: string, sbNumber?: string, date?: string, invoiceValue?: string, portCode?: string, rawText: string }}
+ * @returns {{ beNumber?, sbNumber?, date?, invoiceValue?, portCode?, containerNumber?, blNumber?, blDate?, shippingLine?, dutyBCD?, dutySWS?, dutyINT?, gst?, rawText }}
  */
 function parseCustomsDocument(text) {
   const result = { rawText: text || '' };
@@ -218,30 +270,128 @@ function parseCustomsDocument(text) {
     }
   }
 
-  // Total Invoice Value: "Total Value", "Assessable Value", "Asses. Value" (typo), "Invoice Value"
+  // Total Invoice Value / Assessable Value
   const invoiceValuePatterns = [
     /Total\s+Value\s*:?\s*(?:Rs\.?|INR|USD|EUR)?\s*[\d,]+(?:\.\d{2})?/i,
     /Asses\.?\s*Value\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i,
     /Assessable\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i,
     /Invoice\s+Value\s*:?\s*(?:Rs\.?|INR|USD|EUR)?\s*[\d,]+(?:\.\d{2})?/i,
   ];
-  const numberInLine = /[\d,]+(?:\.\d{2})?/;
   for (const re of invoiceValuePatterns) {
     const m = t.match(re);
     if (m && m[0]) {
-      const numMatch = m[0].match(numberInLine);
-      if (numMatch) {
-        result.invoiceValue = numMatch[0].replace(/,/g, '');
+      const num = extractNumberFromLine(m[0]);
+      if (num) {
+        result.invoiceValue = num;
         break;
       }
     }
   }
 
-  // Port Code: 6-character uppercase like INNSA1, INAMD4 (IN + 3 letters + 1–2 digits)
+  // Port Code: IN + 3 letters + 1–2 digits (e.g. INNSA1)
   const portPattern = /IN[A-Z]{3}\d{1,2}\b/g;
   const portMatch = t.match(portPattern);
   if (portMatch && portMatch.length > 0) {
     result.portCode = portMatch[0];
+  }
+
+  // Container Number (e.g. ABCD1234567, MSCU1234567)
+  const containerPatterns = [
+    /Container\s*(?:No\.?|Number)\s*:?\s*([A-Z]{4}\d{7})/i,
+    /Container\s*:?\s*([A-Z]{4}\d{7})/i,
+    /(?:Container\s*No\.?|Cntr)\s*:?\s*([A-Z0-9]{10,12})/i,
+  ];
+  for (const re of containerPatterns) {
+    const m = t.match(re);
+    if (m && m[1]) {
+      result.containerNumber = m[1].trim();
+      break;
+    }
+  }
+
+  // Bill of Lading number and date
+  const blPatterns = [
+    /B\.?L\.?\s*No\.?\s*:?\s*([A-Z0-9\-]+)/i,
+    /Bill\s+of\s+Lading\s*(?:No\.?)?\s*:?\s*([A-Z0-9\-]+)/i,
+    /B\/L\s*:?\s*([A-Z0-9\-]+)/i,
+  ];
+  for (const re of blPatterns) {
+    const m = t.match(re);
+    if (m && m[1]) {
+      result.blNumber = m[1].trim();
+      break;
+    }
+  }
+  const blDatePattern = /(?:B\.?L\.?\s*Date|Bill\s+of\s+Lading\s*Date)\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i;
+  const blDateMatch = t.match(blDatePattern);
+  if (blDateMatch && blDateMatch[1]) {
+    result.blDate = normalizeDate(blDateMatch[1]);
+  }
+
+  // Shipping Line / Steamer / Vessel
+  const shippingLinePatterns = [
+    /Shipping\s+Line\s*:?\s*([^\n]+?)(?=\n|$)/i,
+    /Steamer\s*:?\s*([^\n]+?)(?=\n|$)/i,
+    /Vessel\s*:?\s*([^\n]+?)(?=\n|$)/i,
+    /Carrier\s*:?\s*([^\n]+?)(?=\n|$)/i,
+  ];
+  for (const re of shippingLinePatterns) {
+    const m = t.match(re);
+    if (m && m[1]) {
+      const line = m[1].trim().replace(/\s+/g, ' ').slice(0, 200);
+      if (line.length > 0) {
+        result.shippingLine = line;
+        break;
+      }
+    }
+  }
+
+  // Duty BCD (Basic Customs Duty)
+  const dutyBcdPatterns = [
+    /(?:BCD|Basic\s+Customs\s+Duty)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i,
+    /Duty\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i,
+  ];
+  for (const re of dutyBcdPatterns) {
+    const m = t.match(re);
+    if (m && m[0]) {
+      const num = extractNumberFromLine(m[0]);
+      if (num) {
+        result.dutyBCD = num;
+        break;
+      }
+    }
+  }
+
+  // SWS (Social Welfare Surcharge)
+  const swsPattern = /(?:SWS|Social\s+Welfare\s+Surcharge)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i;
+  const swsMatch = t.match(swsPattern);
+  if (swsMatch && swsMatch[0]) {
+    const num = extractNumberFromLine(swsMatch[0]);
+    if (num) result.dutySWS = num;
+  }
+
+  // IGST / Integrated Tax / dutyINT
+  const igstPatterns = [
+    /(?:IGST|Integrated\s+Tax|INT)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i,
+    /GST\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i,
+  ];
+  for (const re of igstPatterns) {
+    const m = t.match(re);
+    if (m && m[0]) {
+      const num = extractNumberFromLine(m[0]);
+      if (num) {
+        result.gst = num;
+        break;
+      }
+    }
+  }
+  if (result.gst == null) {
+    const dutyIntPattern = /(?:Duty\s+INT|Integrated)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i;
+    const dutyIntMatch = t.match(dutyIntPattern);
+    if (dutyIntMatch && dutyIntMatch[0]) {
+      const num = extractNumberFromLine(dutyIntMatch[0]);
+      if (num) result.dutyINT = num;
+    }
   }
 
   return result;

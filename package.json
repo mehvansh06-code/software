@@ -17,6 +17,7 @@
     "number-to-words": "^1.2.4",
     "pdf-img-convert": "^2.0.0",
     "pdf-parse": "^2.4.5",
+    "pdf-parse-legacy": "npm:pdf-parse@1.1.1",
     "react-router-dom": "^7.13.0",
     "tailwindcss": "^4.1.18",
     "tesseract.js": "^7.0.0",

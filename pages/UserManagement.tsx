@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { UserPlus, Users, X } from 'lucide-react';
 import { api } from '../api';
 import { usePermissions } from '../hooks/usePermissions';
-import type { User } from '../types';
 
 interface PermissionGroup {
   id: string;
@@ -48,6 +48,10 @@ export default function UserManagement() {
   const [modalUser, setModalUser] = useState<ApiUser | null>(null);
   const [modalPerms, setModalPerms] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createForm, setCreateForm] = useState({ username: '', password: '', name: '', role: 'VIEWER' as string });
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -126,10 +130,40 @@ export default function UserManagement() {
 
   const canManage = hasPermission('users.manage_permissions');
   const canView = hasPermission('users.view');
+  const canCreate = hasPermission('users.create');
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError(null);
+    if (!createForm.username.trim()) {
+      setCreateError('Username is required');
+      return;
+    }
+    if (!createForm.password) {
+      setCreateError('Password is required');
+      return;
+    }
+    setCreating(true);
+    try {
+      await api.users.create({
+        username: createForm.username.trim(),
+        password: createForm.password,
+        name: createForm.name.trim() || createForm.username.trim(),
+        role: createForm.role,
+      });
+      await loadUsers();
+      setShowCreateModal(false);
+      setCreateForm({ username: '', password: '', name: '', role: 'VIEWER' });
+    } catch (err: any) {
+      setCreateError(err?.message || 'Failed to create user');
+    } finally {
+      setCreating(false);
+    }
+  };
 
   if (!canView) {
     return (
-      <div className="rounded-xl bg-white border border-slate-200 p-6 text-center text-gray-500">
+      <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-8 text-center text-slate-500 font-medium">
         You do not have permission to view user management.
       </div>
     );
@@ -137,7 +171,7 @@ export default function UserManagement() {
 
   if (loading) {
     return (
-      <div className="rounded-xl bg-white border border-slate-200 p-8 text-center text-gray-500">
+      <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-12 text-center text-slate-500 font-medium">
         Loading users…
       </div>
     );
@@ -146,40 +180,66 @@ export default function UserManagement() {
   const presetLabel = presetName(modalPerms, presets);
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-semibold text-slate-800">User Management</h2>
-          <p className="text-sm text-gray-500 mt-0.5">View and manage user permissions.</p>
+    <div className="space-y-8 animate-in fade-in duration-500 pb-24">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+            <Users size={28} className="text-indigo-500" /> User Management
+          </h1>
+          <p className="text-slate-500 font-medium mt-1">View and manage users and permissions.</p>
         </div>
-        {error && (
-          <div className="mx-6 mt-4 px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-            {error}
-          </div>
+        {canCreate && (
+          <button
+            type="button"
+            onClick={() => { setShowCreateModal(true); setCreateError(null); setCreateForm({ username: '', password: '', name: '', role: 'VIEWER' }); }}
+            className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+          >
+            <UserPlus size={18} /> New User
+          </button>
         )}
+      </header>
+
+      {error && (
+        <div className="px-6 py-3 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-sm font-medium">
+          {error}
+        </div>
+      )}
+
+      <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
+          <table className="w-full">
             <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
-                <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
-                <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">User</th>
+                <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">Role</th>
+                <th className="px-6 py-5 text-right text-xs font-black text-slate-400 uppercase tracking-widest">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-100">
               {users.map((u) => (
-                <tr key={u.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                  <td className="px-6 py-3">
-                    <span className="font-medium text-slate-800">{u.name || u.username}</span>
-                    <span className="text-gray-500 text-sm ml-2">({u.username})</span>
+                <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="px-6 py-5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center rounded-xl">
+                        {(u.name || u.username).charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <span className="font-bold text-slate-900">{u.name || u.username}</span>
+                        <span className="text-slate-500 text-sm ml-2">({u.username})</span>
+                      </div>
+                    </div>
                   </td>
-                  <td className="px-6 py-3 text-gray-600">{u.role}</td>
-                  <td className="px-6 py-3">
+                  <td className="px-6 py-5">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase bg-slate-100 text-slate-700">
+                      {u.role}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-right">
                     {canManage && (
                       <button
                         type="button"
                         onClick={() => openModal(u)}
-                        className="text-blue-600 hover:text-blue-800 font-medium text-sm"
+                        className="px-4 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 font-bold text-sm hover:bg-indigo-100 transition-colors"
                       >
                         Manage Permissions
                       </button>
@@ -193,56 +253,57 @@ export default function UserManagement() {
       </div>
 
       {modalUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setModalUser(null)}>
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setModalUser(null)}>
           <div
-            className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+            className="bg-white rounded-[2.5rem] shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-800">
+            <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between">
+              <h2 className="text-xl font-black text-slate-900">
                 Permissions: {modalUser.name || modalUser.username}
-              </h3>
+              </h2>
               <button
                 type="button"
                 onClick={() => setModalUser(null)}
-                className="text-gray-500 hover:text-gray-700 p-1"
+                className="p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors"
+                aria-label="Close"
               >
-                ×
+                <X size={22} />
               </button>
             </div>
-            <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap gap-2">
-              <span className="text-sm text-gray-500">Presets:</span>
+            <div className="px-8 py-4 border-b border-slate-100 flex flex-wrap items-center gap-3">
+              <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Presets</span>
               <button
                 type="button"
                 onClick={() => applyPreset('VIEWER')}
-                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-gray-700 text-sm"
+                className="px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-bold transition-colors"
               >
                 Viewer
               </button>
               <button
                 type="button"
                 onClick={() => applyPreset('CHECKER')}
-                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-gray-700 text-sm"
+                className="px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-bold transition-colors"
               >
                 Checker
               </button>
               <button
                 type="button"
                 onClick={() => applyPreset('MANAGEMENT')}
-                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-gray-700 text-sm"
+                className="px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-bold transition-colors"
               >
                 Management
               </button>
               {presetLabel ? (
-                <span className="text-sm text-gray-500 ml-2">Applied: {presetLabel}</span>
+                <span className="text-xs font-bold text-slate-500 ml-2">Applied: {presetLabel}</span>
               ) : (
-                <span className="text-sm text-amber-600 ml-2">Custom</span>
+                <span className="text-xs font-bold text-amber-600 ml-2">Custom</span>
               )}
             </div>
-            <div className="overflow-y-auto flex-1 p-6 space-y-6">
+            <div className="overflow-y-auto flex-1 p-8 space-y-6">
               {groups.map((g) => (
                 <div key={g.id}>
-                  <h4 className="text-sm font-semibold text-slate-700 mb-2">{g.label}</h4>
+                  <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">{g.label}</h3>
                   <div className="flex flex-wrap gap-4">
                     {g.permissions.map((perm) => (
                       <label key={perm} className="flex items-center gap-2 cursor-pointer">
@@ -250,24 +311,114 @@ export default function UserManagement() {
                           type="checkbox"
                           checked={modalPerms.includes(perm)}
                           onChange={() => handleCheckboxChange(perm)}
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                         />
-                        <span className="text-sm text-gray-700">{perm}</span>
+                        <span className="text-sm font-medium text-slate-700">{perm}</span>
                       </label>
                     ))}
                   </div>
                 </div>
               ))}
             </div>
-            <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-2">
+            <div className="px-8 py-6 border-t border-slate-100 flex justify-end">
               <button
                 type="button"
                 onClick={() => setModalUser(null)}
-                className="px-4 py-2 rounded-lg border border-slate-300 text-gray-700 hover:bg-slate-50"
+                className="px-6 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-50 transition-colors"
               >
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => !creating && setShowCreateModal(false)}>
+          <div
+            className="bg-white rounded-[2.5rem] shadow-2xl max-w-md w-full p-8 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => !creating && setShowCreateModal(false)}
+              className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors"
+              aria-label="Close"
+            >
+              <X size={22} />
+            </button>
+            <h2 className="text-xl font-black text-slate-900 mb-6">Create new user</h2>
+            {createError && (
+              <div className="mb-6 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm font-medium">
+                {createError}
+              </div>
+            )}
+            <form onSubmit={handleCreateUser} className="space-y-5">
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Username *</label>
+                <input
+                  type="text"
+                  value={createForm.username}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, username: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  placeholder="e.g. jane.doe"
+                  autoComplete="username"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Password *</label>
+                <input
+                  type="password"
+                  value={createForm.password}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  placeholder="••••••••"
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Display name</label>
+                <input
+                  type="text"
+                  value={createForm.name}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  placeholder="e.g. Jane Doe"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Role</label>
+                <select
+                  value={createForm.role}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, role: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white"
+                >
+                  <option value="VIEWER">Viewer</option>
+                  <option value="CHECKER">Checker</option>
+                  <option value="EXECUTIONER">Executioner</option>
+                  <option value="MANAGEMENT">Management</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => !creating && setShowCreateModal(false)}
+                  className="px-6 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-50 transition-colors"
+                  disabled={creating}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creating}
+                  className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-50 transition-colors shadow-lg shadow-indigo-100"
+                >
+                  {creating ? 'Creating…' : 'Create user'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

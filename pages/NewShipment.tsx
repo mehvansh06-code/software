@@ -1,12 +1,11 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, Consignee, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material } from '../types';
-import { UploadCloud, Award, CreditCard, Package, Zap, Trash2, CheckCircle } from 'lucide-react';
+import { UploadCloud, Award, CreditCard, Package, Zap, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatCurrency, formatINR, formatDate, COMPANY_OPTIONS } from '../constants';
 import { api } from '../api';
 import { MASTER_PRODUCTS } from '../sampleData';
-import OcrReviewModal from '../components/OcrReviewModal';
 
 interface NewShipmentProps {
   suppliers?: Supplier[];
@@ -28,11 +27,6 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [invoiceUploaded, setInvoiceUploaded] = useState(false);
-  const [ocrLoading, setOcrLoading] = useState(false);
-  const [ocrToast, setOcrToast] = useState<string | null>(null);
-  const [ocrHighConfidence, setOcrHighConfidence] = useState(false);
-  const [pendingOcrData, setPendingOcrData] = useState<{ data: any; file?: File; mode: 'boe' | 'sb' } | null>(null);
-  const ocrFileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState<any>({
     currency: isExport ? 'USD' : 'USD',
@@ -158,68 +152,6 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     setFormData((prev: any) => ({ ...prev, [field]: value }));
   };
 
-  const OCR_TOAST_DISMISS_MS = 5000;
-  type ScanMode = 'boe' | 'sb';
-  const handleSmartImportClick = (mode: ScanMode) => {
-    ocrFileInputRef.current?.click();
-    (ocrFileInputRef.current as any)._scanMode = mode;
-  };
-
-  const handleOcrFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    const mode: ScanMode = (ocrFileInputRef.current as any)?._scanMode || 'boe';
-    e.target.value = '';
-    if (!file) return;
-    setOcrLoading(true);
-    setOcrToast(null);
-    setOcrHighConfidence(false);
-    try {
-      const formDataToSend = new FormData();
-      formDataToSend.append('file', file);
-      formDataToSend.append('docType', mode === 'sb' ? 'SB' : 'BOE');
-      formDataToSend.append('company', formData.company || 'GFPL');
-      const result = await api.ocr.uploadAndScan(formDataToSend);
-      if (!result.success || !result.data) {
-        setOcrToast(result.error || 'Could not extract data or save document.');
-        setTimeout(() => setOcrToast(null), OCR_TOAST_DISMISS_MS);
-        return;
-      }
-      setPendingOcrData({ data: result.data, file, mode });
-      setOcrToast('Data extracted. Review and confirm below.');
-      setTimeout(() => setOcrToast(null), OCR_TOAST_DISMISS_MS);
-    } catch (err: any) {
-      setOcrToast(err?.message || 'Scan or save failed.');
-      setTimeout(() => setOcrToast(null), OCR_TOAST_DISMISS_MS);
-    } finally {
-      setOcrLoading(false);
-    }
-  };
-
-  const handleOcrConfirm = (reviewed: { number: string; date: string; portCode: string; invoiceValue: string }) => {
-    if (!pendingOcrData) return;
-    const { mode } = pendingOcrData;
-    const updates: Partial<typeof formData> = {};
-    if (mode === 'boe') {
-      updates.invoiceNumber = reviewed.number;
-      updates.invoiceDate = reviewed.date;
-      updates.portOfDischarge = reviewed.portCode;
-      updates.fobValueFC = reviewed.invoiceValue;
-    } else {
-      updates.invoiceNumber = reviewed.number;
-      updates.invoiceDate = reviewed.date;
-      updates.expectedShipmentDate = reviewed.date;
-      updates.portOfLoading = reviewed.portCode;
-      updates.amountFC = reviewed.invoiceValue;
-    }
-    setFormData((prev: any) => ({ ...prev, ...updates }));
-    setOcrHighConfidence(pendingOcrData.data?.source === 'text' || pendingOcrData.data?.confidence === 100);
-    setPendingOcrData(null);
-  };
-
-  const handleOcrCancel = () => {
-    setPendingOcrData(null);
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isExport) {
@@ -286,7 +218,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
         dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0,
         invoiceValueINR: (isExport ? parseFloat(formData.amountFC) || 0 : totalAmount) * exchRate,
         portOfLoading: formData.portOfLoading,
-        portOfDischarge: formData.portOfDischarge
+        portOfDischarge: formData.portOfDischarge,
       };
 
       await onSubmit(newShipment);
@@ -308,72 +240,6 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
           {isExport ? 'Outbound shipment entry against sales orders.' : 'Inbound procurement from approved vendor list.'}
         </p>
       </header>
-
-      <input
-        ref={ocrFileInputRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
-        className="hidden"
-        onChange={handleOcrFileChange}
-      />
-
-      <div className="flex flex-wrap items-center gap-4">
-        {!isExport && (
-          <button
-            type="button"
-            onClick={() => handleSmartImportClick('boe')}
-            disabled={ocrLoading}
-            className="inline-flex items-center gap-3 px-8 py-5 rounded-2xl border-2 border-indigo-200 bg-indigo-50 text-indigo-800 font-black text-sm uppercase tracking-wide hover:border-indigo-400 hover:bg-indigo-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-          >
-            <span className="text-2xl" aria-hidden>🔍</span>
-            Scan Bill of Entry
-          </button>
-        )}
-        {isExport && (
-          <button
-            type="button"
-            onClick={() => handleSmartImportClick('sb')}
-            disabled={ocrLoading}
-            className="inline-flex items-center gap-3 px-8 py-5 rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-800 font-black text-sm uppercase tracking-wide hover:border-amber-400 hover:bg-amber-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-          >
-            <span className="text-2xl" aria-hidden>🔍</span>
-            Scan Shipping Bill
-          </button>
-        )}
-        {ocrHighConfidence && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wide border border-emerald-200">
-            <span aria-hidden>✓</span>
-            High Confidence
-          </span>
-        )}
-      </div>
-
-      {ocrLoading && (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
-          <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden mb-3">
-            <div className="h-full w-2/3 bg-indigo-500 rounded-full animate-pulse" style={{ animationDuration: '1.5s' }} />
-          </div>
-          <p className="text-sm font-bold text-slate-700">Reading document and filing it to the Z: Drive...</p>
-        </div>
-      )}
-
-      {ocrToast && (
-        <div
-          role="status"
-          className="rounded-xl px-4 py-3 text-sm font-medium text-white bg-indigo-600 border border-indigo-700 shadow-lg animate-in fade-in slide-in-from-bottom-2"
-        >
-          {ocrToast}
-        </div>
-      )}
-
-      <OcrReviewModal
-        open={!!pendingOcrData}
-        isExport={!!isExport}
-        initialData={pendingOcrData?.data ?? {}}
-        viewFile={pendingOcrData?.file}
-        onConfirm={handleOcrConfirm}
-        onCancel={handleOcrCancel}
-      />
 
       <form onSubmit={handleSubmit} className="space-y-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

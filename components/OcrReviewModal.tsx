@@ -7,8 +7,32 @@ export interface OcrReviewData {
   date?: string | null;
   portCode?: string | null;
   invoiceValue?: string | null;
+  containerNumber?: string | null;
+  blNumber?: string | null;
+  blDate?: string | null;
+  shippingLine?: string | null;
+  dutyBCD?: string | null;
+  dutySWS?: string | null;
+  dutyINT?: string | null;
+  gst?: string | null;
   source?: string | null;
   confidence?: number | null;
+}
+
+/**
+ * BOE (import only) and SB (export only) each contain only their own section data.
+ * Bill of Lading details (container, BL no/date, shipping line) and Invoice details are separate headers — not part of BOE/SB.
+ */
+export interface OcrReviewedPayload {
+  number: string;
+  date: string;
+  portCode: string;
+  invoiceValue: string;
+  /** BOE only: duty fields (not present on Shipping Bill) */
+  dutyBCD?: string;
+  dutySWS?: string;
+  dutyINT?: string;
+  gst?: string;
 }
 
 export interface OcrReviewModalProps {
@@ -16,7 +40,7 @@ export interface OcrReviewModalProps {
   isExport: boolean;
   initialData: OcrReviewData;
   viewFile?: File | null;
-  onConfirm: (reviewed: { number: string; date: string; portCode: string; invoiceValue: string }) => void;
+  onConfirm: (reviewed: OcrReviewedPayload) => void;
   onCancel: () => void;
 }
 
@@ -49,20 +73,29 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   onCancel,
 }) => {
   const numberKey = isExport ? 'sbNumber' : 'beNumber';
-  const initialNumber = (initialData[numberKey as keyof OcrReviewData] as string) || '';
-  const [number, setNumber] = useState(initialNumber);
-  const [date, setDate] = useState((initialData.date as string) || '');
-  const [portCode, setPortCode] = useState((initialData.portCode as string) || '');
-  const [invoiceValue, setInvoiceValue] = useState((initialData.invoiceValue as string) || '');
+  const getStr = (k: keyof OcrReviewData) => (initialData[k] as string) || '';
+  const [number, setNumber] = useState(getStr(numberKey));
+  const [date, setDate] = useState(getStr('date'));
+  const [portCode, setPortCode] = useState(getStr('portCode'));
+  const [invoiceValue, setInvoiceValue] = useState(getStr('invoiceValue'));
+  const [dutyBCD, setDutyBCD] = useState(getStr('dutyBCD'));
+  const [dutySWS, setDutySWS] = useState(getStr('dutySWS'));
+  const [dutyINT, setDutyINT] = useState(getStr('dutyINT'));
+  const [gst, setGst] = useState(getStr('gst'));
   const [touched, setTouched] = useState({ number: false, portCode: false });
 
   useEffect(() => {
     if (open) {
-      const num = (initialData[numberKey as keyof OcrReviewData] as string) || '';
+      const d = initialData;
+      const num = (d[numberKey as keyof OcrReviewData] as string) || '';
       setNumber(num);
-      setDate((initialData.date as string) || '');
-      setPortCode((initialData.portCode as string) || '');
-      setInvoiceValue((initialData.invoiceValue as string) || '');
+      setDate((d.date as string) || '');
+      setPortCode((d.portCode as string) || '');
+      setInvoiceValue((d.invoiceValue as string) || '');
+      setDutyBCD((d.dutyBCD as string) || '');
+      setDutySWS((d.dutySWS as string) || '');
+      setDutyINT((d.dutyINT as string) || '');
+      setGst((d.gst as string) || '');
       setTouched({ number: false, portCode: false });
     }
   }, [open, isExport, initialData, numberKey]);
@@ -73,15 +106,22 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const portCodeValidation = useMemo(() => validatePortCode(portCode), [portCode]);
   const canConfirm = numberValidation.valid && portCodeValidation.valid;
 
+  const trim = (s: string) => (s || '').trim();
   const handleConfirm = () => {
     if (!canConfirm) return;
-    const normalizedPort = (portCode || '').trim().toUpperCase();
-    onConfirm({
-      number: number.trim(),
-      date: (date || '').trim(),
-      portCode: normalizedPort,
-      invoiceValue: (invoiceValue || '').trim(),
-    });
+    const payload: OcrReviewedPayload = {
+      number: trim(number),
+      date: trim(date),
+      portCode: (portCode || '').trim().toUpperCase(),
+      invoiceValue: trim(invoiceValue),
+    };
+    if (!isExport) {
+      payload.dutyBCD = trim(dutyBCD);
+      payload.dutySWS = trim(dutySWS);
+      payload.dutyINT = trim(dutyINT);
+      payload.gst = trim(gst);
+    }
+    onConfirm(payload);
   };
 
   const handleViewOriginal = () => {
@@ -102,7 +142,7 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-900">Review & Confirm</h2>
+          <h2 className="text-lg font-bold text-slate-900">{isExport ? 'Shipping Bill (SB)' : 'Bill of Entry (BOE)'} — Review & Confirm</h2>
           {highConfidence && (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wide border border-emerald-200">
               <CheckCircle size={12} /> High Confidence (Digital PDF)
@@ -118,10 +158,10 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-4">
+        <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
           <div>
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
-              Document Number (BE/SB)
+              {isExport ? 'Shipping Bill No.' : 'Bill of Entry No.'}
             </label>
             <input
               type="text"
@@ -175,7 +215,7 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
-              Invoice Value
+              {isExport ? 'Invoice / FOB Value' : 'Assessable Value'}
             </label>
             <input
               type="text"
@@ -186,6 +226,61 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               placeholder="e.g. 50000"
             />
           </div>
+
+          {/* Bill of Entry (import) only: duty fields. SB (export) and BL/Invoice details are separate sections. */}
+          {!isExport && (
+            <div className="space-y-3 pt-2 border-t border-slate-100">
+              <p className="text-[10px] font-bold uppercase text-slate-400">Duty (BOE only)</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Duty BCD</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={dutyBCD}
+                    onChange={(e) => setDutyBCD(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="Rs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">SWS</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={dutySWS}
+                    onChange={(e) => setDutySWS(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="Rs"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Duty INT / IGST</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={dutyINT}
+                    onChange={(e) => setDutyINT(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="Rs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">GST</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={gst}
+                    onChange={(e) => setGst(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="Rs"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {viewFile && (
             <button

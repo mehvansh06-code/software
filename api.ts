@@ -243,9 +243,10 @@ export const api = {
       }
     },
     delete: (id: string) => fetchApi(`shipments/${id}`, { method: 'DELETE' }),
-    uploadFiles: (id: string, formData: FormData): Promise<{ success: boolean; filename?: string; error?: string }> => {
+    uploadFiles: (id: string, formData: FormData, documentType?: string): Promise<{ success: boolean; filename?: string; error?: string }> => {
       if (!id || String(id) === 'undefined') return Promise.reject(new Error('Invalid shipment ID'));
-      const url = `${API_BASE}/shipments/${id}/files`;
+      const qs = documentType && documentType !== 'Other' ? `?documentType=${encodeURIComponent(documentType)}` : '';
+      const url = `${API_BASE}/shipments/${id}/files${qs}`;
       const headers: Record<string, string> = {};
       if (typeof window !== 'undefined') {
         const token = localStorage.getItem('token');
@@ -352,13 +353,18 @@ export const api = {
       }
       return fetch(`${API_BASE}/ocr/extract`, { method: 'POST', headers, body: formData }).then((r) => r.json());
     },
-    uploadAndScan: (formData: FormData): Promise<{ success: boolean; data?: any; error?: string }> => {
+    uploadAndScan: (formData: FormData, opts?: { docType?: 'BOE' | 'SB'; company?: string }): Promise<{ success: boolean; data?: any; error?: string }> => {
       const headers: Record<string, string> = {};
       if (typeof window !== 'undefined') {
         const token = localStorage.getItem('token');
         if (token) headers['Authorization'] = `Bearer ${token}`;
       }
-      return fetch(`${API_BASE}/ocr/upload-and-scan`, { method: 'POST', headers, body: formData }).then((r) => r.json());
+      const q = new URLSearchParams();
+      if (opts?.docType) q.set('docType', opts.docType);
+      if (opts?.company) q.set('company', opts.company);
+      const qs = q.toString() ? '?' + q.toString() : '';
+      const url = `${API_BASE}/ocr/upload-and-scan${qs}`;
+      return fetch(url, { method: 'POST', headers, body: formData }).then((r) => r.json());
     },
   },
   system: {

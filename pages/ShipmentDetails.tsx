@@ -31,6 +31,7 @@ import {
 import { api } from '../api';
 import { usePermissions } from '../hooks/usePermissions';
 import { ShipmentUpload } from '../components/ShipmentUpload';
+import OcrReviewModal, { type OcrReviewedPayload } from '../components/OcrReviewModal';
 
 interface ShipmentDetailsProps {
   shipments: Shipment[];
@@ -42,9 +43,11 @@ interface ShipmentDetailsProps {
   onDelete?: (id: string) => Promise<void>;
   onUpdateLC?: (updated: LetterOfCredit) => Promise<void>;
   user: User;
+  /** When 'OFFLINE', document upload may fail with "Shipment not found"; we show a hint to refresh after reconnecting. */
+  connectionMode?: 'SQL' | 'OFFLINE';
 }
 
-const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], onUpdate, onDelete, onUpdateLC, user }) => {
+const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], onUpdate, onDelete, onUpdateLC, user, connectionMode }) => {
   const { id } = useParams();
   const navigate = useNavigate();
   const shipment = shipments.find(s => s.id === id);
@@ -62,7 +65,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [editDuties, setEditDuties] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
-  
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<'error' | 'success'>('error');
+
   const [newUpdate, setNewUpdate] = useState<{status: ShipmentStatus, location: string, remarks: string}>({
       status: shipment?.status || ShipmentStatus.INITIATED,
       location: '',
@@ -120,8 +125,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   });
 
   const [documentsFolderPath, setDocumentsFolderPath] = useState<string | null>(shipment?.documentsFolderPath ?? null);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [folderFiles, setFolderFiles] = useState<string[]>([]);
   const [loadingDocFiles, setLoadingDocFiles] = useState(false);
+  const [pendingOcrPayload, setPendingOcrPayload] = useState<{ file: File; data: any; docType: 'BOE' | 'SB' } | null>(null);
   const [editExportDoc, setEditExportDoc] = useState(false);
   const [editLodgementOnly, setEditLodgementOnly] = useState(false);
   const [lodgementValue, setLodgementValue] = useState('');
@@ -152,6 +159,61 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       setFolderFiles(list.map((f: any) => (typeof f === 'string' ? f : f?.name)).filter(Boolean));
     }).catch(() => setFolderFiles([])).finally(() => setLoadingDocFiles(false));
   }, [shipment?.id]);
+
+  const parseNum = (s: string): number | undefined => {
+    if (!s || typeof s !== 'string') return undefined;
+    const val = parseFloat(s.replace(/,/g, ''));
+    return Number.isNaN(val) ? undefined : val;
+  };
+
+  const handleOcrConfirm = useCallback(async (reviewed: OcrReviewedPayload) => {
+    const payload = pendingOcrPayload;
+    if (!payload || !shipment) return;
+    const formData = new FormData();
+    formData.append('file', payload.file);
+    try {
+      await api.shipments.uploadFiles(shipment.id, formData, payload.docType);
+      const update: any = { ...shipment, version: shipment.version };
+      // BOE = import only; SB = export only. Each document contains only data under its own header.
+      // Bill of Lading details (container, BL no/date, shipping line) and Invoice details are separate sections — not applied from BOE/SB.
+      if (reviewed.portCode !== undefined) update.portCode = reviewed.portCode || null;
+
+      if (payload.docType === 'BOE') {
+        // Bill of Entry (import): only BOE-section fields
+        update.beNumber = reviewed.number || null;
+        update.beDate = reviewed.date || null;
+        update.portOfDischarge = reviewed.portCode || null;
+        const val = parseNum(reviewed.invoiceValue);
+        if (val !== undefined) update.assessedValue = val;
+        const dutyBCD = parseNum(reviewed.dutyBCD);
+        const dutySWS = parseNum(reviewed.dutySWS);
+        const dutyINT = parseNum(reviewed.dutyINT);
+        const gstVal = parseNum(reviewed.gst);
+        if (dutyBCD !== undefined) update.dutyBCD = dutyBCD;
+        if (dutySWS !== undefined) update.dutySWS = dutySWS;
+        if (dutyINT !== undefined) update.dutyINT = dutyINT;
+        if (gstVal !== undefined) update.gst = gstVal;
+      } else {
+        // Shipping Bill (export): only SB-section fields (no duty fields)
+        update.invoiceNumber = reviewed.number || null;
+        update.invoiceDate = reviewed.date || null;
+        update.expectedShipmentDate = reviewed.date || null;
+        update.portOfLoading = reviewed.portCode || null;
+        const val = parseNum(reviewed.invoiceValue);
+        if (val !== undefined) update.fobValueFC = val;
+      }
+      const { status, data } = await api.shipments.updateWithResponse(shipment.id, update);
+      if (status === 200) {
+        const merged = { ...update, version: (data && (data as any).version) ?? update.version };
+        onUpdate(merged);
+      }
+      refetchFolderFiles();
+    } catch (e: any) {
+      alert(e?.message || 'Failed to save');
+    } finally {
+      setPendingOcrPayload(null);
+    }
+  }, [pendingOcrPayload, shipment, onUpdate, refetchFolderFiles]);
 
   useEffect(() => {
     if (!shipment?.id) {
@@ -655,6 +717,20 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   return (
     <>
+    {toastMessage && (
+      <div
+        className={`fixed top-4 left-1/2 -translate-x-1/2 z-[110] max-w-md w-full mx-4 px-4 py-3 rounded-xl shadow-lg border flex items-center gap-3 ${
+          toastVariant === 'error' ? 'bg-red-50 border-red-200 text-red-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+        }`}
+        role="alert"
+      >
+        <AlertCircle size={20} className={toastVariant === 'error' ? 'text-red-600' : 'text-emerald-600'} />
+        <p className="text-sm font-medium flex-1">{toastMessage}</p>
+        <button type="button" onClick={() => setToastMessage(null)} className="p-1 rounded hover:bg-black/10" aria-label="Dismiss">
+          <X size={18} />
+        </button>
+      </div>
+    )}
     <div className="space-y-6 pb-24 animate-in fade-in">
       <header className="flex items-center justify-between bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
         <div className="flex items-center gap-6">
@@ -1430,11 +1506,24 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </div>
            </div>
 
-           {/* Documents: upload and file list — or Access Restricted */}
+           {/* Documents: upload, file list, and checker in one section */}
            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
-             <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
-               <FileText size={16} className="text-indigo-500" /> Documents
-             </h2>
+             <div className="flex items-center justify-between gap-4">
+               <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
+                 <FileText size={16} className="text-indigo-500" /> Documents
+               </h2>
+               {canViewDocuments && (
+                 <button
+                   type="button"
+                   onClick={refetchFolderFiles}
+                   disabled={loadingDocFiles}
+                   className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 disabled:opacity-50 transition-colors"
+                   title="Refresh list from folder"
+                 >
+                   <RefreshCw size={16} className={loadingDocFiles ? 'animate-spin' : ''} />
+                 </button>
+               )}
+             </div>
              {!canViewDocuments ? (
                <div className="flex flex-col items-center justify-center py-12 px-6 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
                  <div className="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center mb-4">
@@ -1445,12 +1534,26 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </div>
              ) : (
                <>
+                 {connectionMode === 'OFFLINE' && (
+                   <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+                     Document upload is available when connected to the server. If you see &quot;Shipment not found&quot; after uploading, refresh the page to sync, then try again.
+                   </p>
+                 )}
                  {canUploadDocuments && (
                    <div>
                      <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Upload file</h3>
                      <ShipmentUpload
                        shipmentId={shipment.id}
                        onUploadSuccess={refetchFolderFiles}
+                       onShipmentNotFound={async () => {
+                         try {
+                           await api.shipments.create(shipment);
+                           return true;
+                         } catch {
+                           return false;
+                         }
+                       }}
+                       onOcrDataExtracted={(payload) => setPendingOcrPayload(payload)}
                      />
                    </div>
                  )}
@@ -1534,62 +1637,47 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      </ul>
                    )}
                  </div>
+                 <div className="border-t border-slate-100 pt-6">
+                   <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3 flex items-center gap-2">
+                     <FileCheck size={14} className="text-indigo-500" /> Document checker
+                   </h3>
+                   <p className="text-[10px] text-slate-500 mb-3">Status is read from the shipment documents folder.</p>
+                   {loadingDocFiles ? (
+                     <p className="text-sm text-slate-400 italic">Loading…</p>
+                   ) : (
+                     <div className="space-y-2">
+                       {documentCheckerRows.map((row, idx) => {
+                         const isPending = !row.found;
+                         const showRed = allShipmentDetailsFilled && isPending;
+                         const showGreen = row.found;
+                         return (
+                           <div
+                             key={`${row.expectedName}-${idx}`}
+                             className={`flex items-center justify-between gap-4 py-2.5 px-4 rounded-xl border-2 ${
+                               showGreen
+                                 ? 'border-emerald-200 bg-emerald-50'
+                                 : showRed
+                                   ? 'border-red-200 bg-red-50'
+                                   : 'border-slate-100 bg-slate-50'
+                             }`}
+                           >
+                             <div className="flex items-center gap-2">
+                               {showGreen ? (
+                                 <CheckCircle size={18} className="text-emerald-600 shrink-0" />
+                               ) : (
+                                 <span className={`w-[18px] h-[18px] rounded-full border-2 shrink-0 ${showRed ? 'border-red-400' : 'border-slate-300'}`} />
+                               )}
+                               <span className={`text-sm font-bold ${showRed ? 'text-red-900' : 'text-slate-800'}`}>{row.label}</span>
+                             </div>
+                           </div>
+                         );
+                       })}
+                     </div>
+                   )}
+                 </div>
                </>
              )}
            </div>
-
-           {/* Document Checker — visible only with documents.view */}
-           {canViewDocuments && (
-             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-               <div className="flex items-center justify-between gap-4 mb-2">
-                 <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
-                   <FileCheck size={16} className="text-indigo-500" /> Document Checker
-                 </h2>
-                 <button
-                   type="button"
-                   onClick={refetchFolderFiles}
-                   disabled={loadingDocFiles}
-                   className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 disabled:opacity-50 transition-colors"
-                   title="Refresh list from folder"
-                 >
-                   <RefreshCw size={16} className={loadingDocFiles ? 'animate-spin' : ''} />
-                 </button>
-               </div>
-               <p className="text-[10px] text-slate-500 mb-4">Status is read from the shipment documents folder.</p>
-               {loadingDocFiles ? (
-                 <p className="text-sm text-slate-400 italic">Loading folder…</p>
-               ) : (
-                 <div className="space-y-2">
-                   {documentCheckerRows.map((row, idx) => {
-                     const isPending = !row.found;
-                     const showRed = allShipmentDetailsFilled && isPending;
-                     const showGreen = row.found;
-                     return (
-                       <div
-                         key={`${row.expectedName}-${idx}`}
-                         className={`flex items-center justify-between gap-4 py-2.5 px-4 rounded-xl border-2 ${
-                           showGreen
-                             ? 'border-emerald-200 bg-emerald-50'
-                             : showRed
-                               ? 'border-red-200 bg-red-50'
-                               : 'border-slate-100 bg-slate-50'
-                         }`}
-                       >
-                         <div className="flex items-center gap-2">
-                           {showGreen ? (
-                             <CheckCircle size={18} className="text-emerald-600 shrink-0" />
-                           ) : (
-                             <span className={`w-[18px] h-[18px] rounded-full border-2 shrink-0 ${showRed ? 'border-red-400' : 'border-slate-300'}`} />
-                           )}
-                           <span className={`text-sm font-bold ${showRed ? 'text-red-900' : 'text-slate-800'}`}>{row.label}</span>
-                         </div>
-                       </div>
-                     );
-                   })}
-                 </div>
-               )}
-             </div>
-           )}
         </div>
       </div>
 
@@ -1632,7 +1720,26 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
           </div>
       )}
 
-      {showPaymentModal && (
+      <OcrReviewModal
+        open={!!pendingOcrPayload}
+        isExport={pendingOcrPayload?.docType === 'SB'}
+        initialData={pendingOcrPayload?.data ?? {}}
+        viewFile={pendingOcrPayload?.file ?? null}
+        onConfirm={handleOcrConfirm}
+        onCancel={() => setPendingOcrPayload(null)}
+      />
+
+      {showPaymentModal && (() => {
+        const toFC = (p: PaymentLog) => {
+          if (p.currency === shipment.currency) return p.amount;
+          if (p.currency === 'INR') return p.amount / (shipment.exchangeRate || 1);
+          return 0;
+        };
+        const existingTotalFC = (shipment.payments || []).reduce((sum, p) => sum + toFC(p), 0);
+        const remainingFC = Math.max(0, paymentSummary.totalFC - existingTotalFC);
+        const enteredAmount = Number(newPayment.amount) || 0;
+        const exceedsInvoice = enteredAmount > 0 && enteredAmount > remainingFC;
+        return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 relative">
               <button onClick={() => setShowPaymentModal(false)} className="absolute top-6 right-6 p-2 text-slate-400 hover:text-slate-600"><X size={20} /></button>
@@ -1640,7 +1747,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
               <div className="space-y-4">
                  <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Amount</label>
-                    <input type="number" className="w-full px-4 py-2 rounded-xl border font-bold" value={newPayment.amount} onChange={e => setNewPayment({...newPayment, amount: parseFloat(e.target.value)})} />
+                    <input type="number" className={`w-full px-4 py-2 rounded-xl border font-bold ${exceedsInvoice ? 'border-red-400 bg-red-50/50' : ''}`} value={newPayment.amount ?? ''} onChange={e => setNewPayment({...newPayment, amount: e.target.value === '' ? undefined : parseFloat(e.target.value)})} />
+                    {exceedsInvoice && (
+                      <p className="mt-2 text-xs font-medium text-red-700 flex items-center gap-1.5">
+                        <AlertCircle size={14} /> Total payments cannot exceed invoice amount ({formatCurrency(paymentSummary.totalFC, shipment.currency)}). You can add up to {formatCurrency(remainingFC, shipment.currency)}.
+                      </p>
+                    )}
                  </div>
                  <div className="grid grid-cols-2 gap-4">
                    <div>
@@ -1665,13 +1777,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                        <option value="LC">Letter of Credit</option>
                     </select>
                  </div>
-                 <button onClick={handleAddPayment} className="w-full py-3 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-700 mt-2">
+                 <button onClick={handleAddPayment} className="w-full py-3 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-700 mt-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled={exceedsInvoice}>
                     Save Transaction
                  </button>
               </div>
            </div>
         </div>
-      )}
+        );
+      })()}
     </div>
     </>
   );
