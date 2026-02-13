@@ -322,32 +322,41 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     return { totalFC: totalFC ?? 0, receivedFC, pendingFC };
   }, [shipment, isExport]);
 
-  const documentCheckerRows = useMemo(() => {
+  const { documentCheckerRows, otherFiles } = useMemo(() => {
     const invRef = (shipment?.invoiceNumber || '')
       .replace(/[/\\:*?"<>|]/g, '_')
       .replace(/\s+/g, '_')
       .trim() || 'ref';
     const lodgementRef = ((shipment as any)?.lodgement || invRef).replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim() || 'ref';
     const baseName = (f: string) => f.replace(/\.[^/.]+$/, '').trim();
-    const hasFile = (expected: string) =>
-      folderFiles.some((f) => baseName(f).toUpperCase() === expected.toUpperCase());
-    const rows: { label: string; expectedName: string; found: boolean }[] = [];
+    const findMatch = (expected: string) =>
+      folderFiles.find((f) => baseName(f).toUpperCase() === expected.toUpperCase()) ?? null;
+    const rows: { label: string; expectedName: string; found: boolean; matchedFileName: string | null }[] = [];
     const staticList = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
+    const matchedNames = new Set<string>();
     staticList.forEach((doc) => {
       const prefix = (doc as { prefix?: string }).prefix || doc.id + '_';
       const ref = doc.id === 'LODGE' ? lodgementRef : invRef;
-      rows.push({ label: doc.label, expectedName: prefix + ref, found: hasFile(prefix + ref) });
+      const expected = prefix + ref;
+      const matched = findMatch(expected);
+      if (matched) matchedNames.add(matched);
+      rows.push({ label: doc.label, expectedName: expected, found: !!matched, matchedFileName: matched });
     });
     (shipment?.payments || []).forEach((pay) => {
       const amount = Number(pay.amount);
       const currency = (pay.currency || 'USD').toUpperCase();
+      const expected = `PAY_ADV_${amount}_${currency}`;
+      const matched = findMatch(expected);
+      if (matched) matchedNames.add(matched);
       rows.push({
         label: `Payment Advise — ${formatCurrency(amount, currency)}`,
-        expectedName: `PAY_ADV_${amount}_${currency}`,
-        found: hasFile(`PAY_ADV_${amount}_${currency}`)
+        expectedName: expected,
+        found: !!matched,
+        matchedFileName: matched
       });
     });
-    return rows;
+    const other = folderFiles.filter((f) => !matchedNames.has(f));
+    return { documentCheckerRows: rows, otherFiles: other };
   }, [shipment?.invoiceNumber, shipment?.payments, (shipment as any)?.lodgement, isExport, folderFiles]);
 
   const allShipmentDetailsFilled = useMemo(() => {
@@ -1558,98 +1567,19 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                    </div>
                  )}
                  <div className="border-t border-slate-100 pt-6">
-                   <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Existing files</h3>
+                   <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3 flex items-center gap-2">
+                     <FileCheck size={14} className="text-indigo-500" /> Checklist
+                   </h3>
+                   <p className="text-[10px] text-slate-500 mb-3">Upload a file with the matching type to turn the row green. View, download, or delete from the row.</p>
                    {loadingDocFiles ? (
                      <p className="text-sm text-slate-400 italic flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading…</p>
-                   ) : folderFiles.length === 0 ? (
-                     <p className="text-sm text-slate-500">No files yet.{canUploadDocuments ? ' Upload one above.' : ''}</p>
-                   ) : (
-                     <ul className="space-y-2">
-                       {folderFiles.map((name) => (
-                         <li key={name} className="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-slate-50 hover:bg-slate-100">
-                           <span className="flex items-center gap-2 text-sm text-slate-800 truncate min-w-0">
-                             <FileText size={14} className="text-slate-400 shrink-0" />
-                             {name}
-                           </span>
-                           <div className="flex items-center gap-1.5 shrink-0">
-                             {isViewableInBrowser(name) && (
-                               <button
-                                 type="button"
-                                 title="View in new tab"
-                                 onClick={async () => {
-                                   try {
-                                     const blob = await api.shipments.downloadFile(shipment.id, name);
-                                     const url = URL.createObjectURL(blob);
-                                     window.open(url, '_blank', 'noopener');
-                                     setTimeout(() => URL.revokeObjectURL(url), 60000);
-                                   } catch (e: any) {
-                                     alert(e?.message || 'View failed');
-                                   }
-                                 }}
-                                 className="inline-flex items-center gap-1 rounded-md bg-slate-100 hover:bg-slate-200 px-2 py-1.5 text-xs font-medium text-slate-700"
-                               >
-                                 <Eye size={14} /> View
-                               </button>
-                             )}
-                             <button
-                               type="button"
-                               title="Download"
-                               onClick={async () => {
-                                 try {
-                                   const blob = await api.shipments.downloadFile(shipment.id, name);
-                                   const url = URL.createObjectURL(blob);
-                                   const a = document.createElement('a');
-                                   a.href = url;
-                                   a.download = name;
-                                   document.body.appendChild(a);
-                                   a.click();
-                                   document.body.removeChild(a);
-                                   URL.revokeObjectURL(url);
-                                 } catch (e: any) {
-                                   alert(e?.message || 'Download failed');
-                                 }
-                               }}
-                               className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
-                             >
-                               <Download size={14} /> Download
-                             </button>
-                             {canDeleteDocuments && (
-                               <button
-                                 type="button"
-                                 title="Delete file"
-                                 onClick={async () => {
-                                   if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
-                                   try {
-                                     await api.shipments.deleteFile(shipment.id, name);
-                                     refetchFolderFiles();
-                                   } catch (e: any) {
-                                     alert(e?.message || 'Delete failed');
-                                   }
-                                 }}
-                                 className="inline-flex items-center gap-1 rounded-md bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1.5 text-xs font-medium"
-                               >
-                                 <Trash2 size={14} /> Delete
-                               </button>
-                             )}
-                           </div>
-                         </li>
-                       ))}
-                     </ul>
-                   )}
-                 </div>
-                 <div className="border-t border-slate-100 pt-6">
-                   <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3 flex items-center gap-2">
-                     <FileCheck size={14} className="text-indigo-500" /> Document checker
-                   </h3>
-                   <p className="text-[10px] text-slate-500 mb-3">Status is read from the shipment documents folder.</p>
-                   {loadingDocFiles ? (
-                     <p className="text-sm text-slate-400 italic">Loading…</p>
                    ) : (
                      <div className="space-y-2">
                        {documentCheckerRows.map((row, idx) => {
                          const isPending = !row.found;
                          const showRed = allShipmentDetailsFilled && isPending;
                          const showGreen = row.found;
+                         const fileName = row.matchedFileName;
                          return (
                            <div
                              key={`${row.expectedName}-${idx}`}
@@ -1661,20 +1591,112 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                                    : 'border-slate-100 bg-slate-50'
                              }`}
                            >
-                             <div className="flex items-center gap-2">
+                             <div className="flex items-center gap-2 min-w-0">
                                {showGreen ? (
                                  <CheckCircle size={18} className="text-emerald-600 shrink-0" />
                                ) : (
                                  <span className={`w-[18px] h-[18px] rounded-full border-2 shrink-0 ${showRed ? 'border-red-400' : 'border-slate-300'}`} />
                                )}
-                               <span className={`text-sm font-bold ${showRed ? 'text-red-900' : 'text-slate-800'}`}>{row.label}</span>
+                               <span className={`text-sm font-bold truncate ${showRed ? 'text-red-900' : 'text-slate-800'}`}>{row.label}</span>
                              </div>
+                             {fileName && (
+                               <div className="flex items-center gap-1 shrink-0">
+                                 {canViewDocuments && isViewableInBrowser(fileName) && (
+                                   <button
+                                     type="button"
+                                     title="View in new tab"
+                                     onClick={async () => {
+                                       try {
+                                         const blob = await api.shipments.downloadFile(shipment.id, fileName);
+                                         const url = URL.createObjectURL(blob);
+                                         window.open(url, '_blank', 'noopener');
+                                         setTimeout(() => URL.revokeObjectURL(url), 60000);
+                                       } catch (e: any) {
+                                         alert(e?.message || 'View failed');
+                                       }
+                                     }}
+                                     className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors"
+                                   >
+                                     <Eye size={16} />
+                                   </button>
+                                 )}
+                                 {canViewDocuments && (
+                                   <button
+                                     type="button"
+                                     title="Download"
+                                     onClick={async () => {
+                                       try {
+                                         const blob = await api.shipments.downloadFile(shipment.id, fileName);
+                                         const url = URL.createObjectURL(blob);
+                                         const a = document.createElement('a');
+                                         a.href = url;
+                                         a.download = fileName;
+                                         document.body.appendChild(a);
+                                         a.click();
+                                         document.body.removeChild(a);
+                                         URL.revokeObjectURL(url);
+                                       } catch (e: any) {
+                                         alert(e?.message || 'Download failed');
+                                       }
+                                     }}
+                                     className="p-2 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700 transition-colors"
+                                   >
+                                     <Download size={16} />
+                                   </button>
+                                 )}
+                                 {canDeleteDocuments && (
+                                   <button
+                                     type="button"
+                                     title="Delete file"
+                                     onClick={async () => {
+                                       if (!window.confirm(`Delete "${fileName}"? This cannot be undone.`)) return;
+                                       try {
+                                         await api.shipments.deleteFile(shipment.id, fileName);
+                                         refetchFolderFiles();
+                                       } catch (e: any) {
+                                         alert(e?.message || 'Delete failed');
+                                       }
+                                     }}
+                                     className="p-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"
+                                   >
+                                     <Trash2 size={16} />
+                                   </button>
+                                 )}
+                               </div>
+                             )}
                            </div>
                          );
                        })}
                      </div>
                    )}
                  </div>
+                 {otherFiles.length > 0 && (
+                   <div className="border-t border-slate-100 pt-6">
+                     <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Other files</h3>
+                     <p className="text-[10px] text-slate-500 mb-2">Files that don’t match a checklist item.</p>
+                     <ul className="space-y-2">
+                       {otherFiles.map((name) => (
+                         <li key={name} className="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-slate-50 hover:bg-slate-100">
+                           <span className="flex items-center gap-2 text-sm text-slate-800 truncate min-w-0">
+                             <FileText size={14} className="text-slate-400 shrink-0" />
+                             {name}
+                           </span>
+                           <div className="flex items-center gap-1 shrink-0">
+                             {canViewDocuments && isViewableInBrowser(name) && (
+                               <button type="button" title="View" onClick={async () => { try { const blob = await api.shipments.downloadFile(shipment.id, name); const url = URL.createObjectURL(blob); window.open(url, '_blank', 'noopener'); setTimeout(() => URL.revokeObjectURL(url), 60000); } catch (e: any) { alert(e?.message || 'View failed'); } }} className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"><Eye size={16} /></button>
+                             )}
+                             {canViewDocuments && (
+                               <button type="button" title="Download" onClick={async () => { try { const blob = await api.shipments.downloadFile(shipment.id, name); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); } catch (e: any) { alert(e?.message || 'Download failed'); } }} className="p-2 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700"><Download size={16} /></button>
+                             )}
+                             {canDeleteDocuments && (
+                               <button type="button" title="Delete" onClick={async () => { if (!window.confirm(`Delete "${name}"?`)) return; try { await api.shipments.deleteFile(shipment.id, name); refetchFolderFiles(); } catch (e: any) { alert(e?.message || 'Delete failed'); } }} className="p-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"><Trash2 size={16} /></button>
+                             )}
+                           </div>
+                         </li>
+                       ))}
+                     </ul>
+                   </div>
+                 )}
                </>
              )}
            </div>

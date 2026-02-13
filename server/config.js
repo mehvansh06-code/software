@@ -14,11 +14,19 @@ function normalizeUncBase(envValue) {
   return s.length === 0 ? null : s;
 }
 
-// UNC base paths for Open Folder: strictly prefer IP-based paths from .env (e.g. \\192.168.1.70\Import Shipment Documents)
+/** If path is relative (no leading \ or drive), resolve against PROJECT_ROOT. */
+function resolveDocBase(envValue) {
+  const s = normalizeUncBase(envValue);
+  if (!s) return null;
+  if (s.startsWith('\\\\') || /^[A-Za-z]:/.test(s)) return s; // UNC or absolute Windows path
+  return path.resolve(PROJECT_ROOT, s);
+}
+
+// UNC or local paths from .env (e.g. \\192.168.1.70\Import Shipment Documents or ./documents/Import Shipment Documents)
 const IMPORT_BASE_RAW = process.env.SHIPMENT_DOCS_BASE || process.env.IMPORT_BASE;
 const EXPORT_BASE_RAW = process.env.EXPORT_SHIPMENT_DOCS_BASE || process.env.EXPORT_BASE;
-const IMPORT_DOCS_BASE = IMPORT_BASE_RAW ? normalizeUncBase(IMPORT_BASE_RAW) : '\\\\LAPTOP-RMPRPKLJ\\Import Shipment Documents';
-const EXPORT_DOCS_BASE = EXPORT_BASE_RAW ? normalizeUncBase(EXPORT_BASE_RAW) : '\\\\LAPTOP-RMPRPKLJ\\Export Shipment Documents';
+const IMPORT_DOCS_BASE = IMPORT_BASE_RAW ? resolveDocBase(IMPORT_BASE_RAW) : path.join(PROJECT_ROOT, 'documents', 'Import Shipment Documents');
+const EXPORT_DOCS_BASE = EXPORT_BASE_RAW ? resolveDocBase(EXPORT_BASE_RAW) : path.join(PROJECT_ROOT, 'documents', 'Export Shipment Documents');
 const COMPANY_FOLDER = { GFPL: 'Gujarat Flotex Pvt Ltd', GTEX: 'GTEX Fabrics Pvt Ltd' };
 
 /** Sales Indent: company master (name, address, GSTIN, IEC, bank details) */
