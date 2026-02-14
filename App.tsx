@@ -17,6 +17,7 @@ const App: React.FC = () => {
     lcs,
     connectionMode,
     isLoading,
+    refreshingUserForSelector,
   } = data;
   const {
     setDomain,
@@ -52,11 +53,22 @@ const App: React.FC = () => {
   }
 
   if (!domain) {
+    if (refreshingUserForSelector) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div className="text-center">
+            <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-slate-600 font-medium">Loading your hubs…</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <DomainSelector
         onSelect={selectDomain}
         userName={user.name}
         role={user.role}
+        allowedDomains={user.allowedDomains}
         onLogout={handleLogout}
       />
     );

@@ -108,21 +108,25 @@ function handleLogin(req, res) {
     if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
       return res.status(401).json({ success: false, error: 'Invalid username or password' });
     }
-    const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [] };
+    const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [], allowedDomains: ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'] };
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions: user.permissions } });
+    return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions: user.permissions, allowedDomains: user.allowedDomains } });
   }
   // 2) DB users (from permission migration)
   try {
-    const row = db.prepare('SELECT id, username, name, role, permissions, passwordHash FROM users WHERE username = ?').get(username);
+    const row = db.prepare('SELECT id, username, name, role, permissions, passwordHash, allowedDomains FROM users WHERE username = ?').get(username);
     if (row && row.passwordHash && bcrypt.compareSync(password, row.passwordHash)) {
       let permissions = [];
+      let allowedDomains = [];
       try {
         permissions = JSON.parse(row.permissions || '[]');
       } catch (_) {}
-      const user = { id: row.id, username: row.username, name: row.name, role: row.role, permissions };
+      try {
+        allowedDomains = JSON.parse(row.allowedDomains || '[]');
+      } catch (_) {}
+      const user = { id: row.id, username: row.username, name: row.name, role: row.role, permissions, allowedDomains };
       const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-      return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions } });
+      return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
     }
   } catch (_) {}
   // 3) Legacy in-memory fallback (no users table or no matching DB user)
@@ -131,8 +135,9 @@ function handleLogin(req, res) {
     return res.status(401).json({ success: false, error: 'Invalid username or password' });
   }
   const permissions = PRESETS[user.role] || PRESETS.VIEWER || [];
+  const allowedDomains = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
   const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions } });
+  res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
 }
 
 app.post('/api/auth/login', handleLogin);
@@ -162,11 +167,15 @@ app.get('/api/auth/me', (req, res) => {
   const id = req.user && req.user.id;
   if (!id) return res.status(401).json({ success: false, error: 'Not authenticated' });
   try {
-    const row = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(id);
+    const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(id);
     if (row) {
       let permissions = [];
+      let allowedDomains = [];
       try {
         permissions = JSON.parse(row.permissions || '[]');
+      } catch (_) {}
+      try {
+        allowedDomains = JSON.parse(row.allowedDomains || '[]');
       } catch (_) {}
       return res.json({
         id: row.id,
@@ -174,17 +183,20 @@ app.get('/api/auth/me', (req, res) => {
         name: row.name,
         role: row.role,
         permissions,
+        allowedDomains,
       });
     }
   } catch (_) {}
   // Not in DB (env admin or legacy): return from token + preset permissions
   const name = req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id;
+  const allowedDomains = req.user.allowedDomains || ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
   res.json({
     id: req.user.id,
     username: req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id,
     name: req.user.id === 'admin' ? 'Admin' : name,
     role: req.user.role || 'VIEWER',
     permissions: req.user.permissions || [],
+    allowedDomains,
   });
 });
 

@@ -1,27 +1,13 @@
-import React, { useState, useRef } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import { Upload, Loader2, FileUp, RefreshCw } from 'lucide-react';
 import { api } from '../api';
-
-/** Optional document type: saved as prefix before filename so "3bhfcbifc" becomes "Invoice_3bhfcbifc". */
-const DOCUMENT_TYPE_OPTIONS = [
-  { value: '', label: 'Select document type' },
-  { value: 'CI', label: 'Commercial Invoice (CI)' },
-  { value: 'PL', label: 'Packing List (PL)' },
-  { value: 'BL', label: 'Bill of Lading (BL)' },
-  { value: 'BOE', label: 'Bill of Entry (BOE)' },
-  { value: 'SB', label: 'Shipping Bill (SB)' },
-  { value: 'COO', label: 'Certificate of Origin (COO)' },
-  { value: 'EWAY', label: 'E-Way Bill' },
-  { value: 'GP', label: 'Gate Pass (GP)' },
-  { value: 'INS', label: 'Insurance' },
-  { value: 'LODGE', label: 'Lodgement' },
-  { value: 'SI', label: 'Sales Indent (SI)' },
-  { value: 'Other', label: 'Other' },
-];
+import { IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST } from '../types';
 
 export interface ShipmentUploadProps {
   /** Shipment ID to upload files to. */
   shipmentId: string;
+  /** True for export shipments: use export document checklist. False for import: use import document checklist. */
+  isExport?: boolean;
   /** Called after a successful upload so the parent can refresh the file list. */
   onUploadSuccess?: () => void;
   /** When upload fails with "Shipment not found", call this to sync the shipment to the server. Return true if sync succeeded so upload can retry. */
@@ -33,7 +19,7 @@ export interface ShipmentUploadProps {
 /**
  * Simple file uploader for a shipment: POSTs to /api/shipments/:id/files using FormData.
  */
-export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, onUploadSuccess, onShipmentNotFound, onOcrDataExtracted }) => {
+export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isExport = false, onUploadSuccess, onShipmentNotFound, onOcrDataExtracted }) => {
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showSyncPrompt, setShowSyncPrompt] = useState(false);
@@ -41,6 +27,12 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, onUp
   const [syncing, setSyncing] = useState(false);
   const [documentType, setDocumentType] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const documentTypeOptions = useMemo(() => {
+    const checklist = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
+    const list = checklist.map((doc) => ({ value: doc.id, label: doc.label }));
+    return [{ value: '', label: 'Select document type' }, ...list, { value: 'Other', label: 'Other' }];
+  }, [isExport]);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -172,7 +164,7 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, onUp
             onChange={(e) => setDocumentType(e.target.value)}
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
-            {DOCUMENT_TYPE_OPTIONS.map((opt) => (
+            {documentTypeOptions.map((opt) => (
               <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
             ))}
           </select>

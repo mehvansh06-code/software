@@ -176,10 +176,14 @@ runMigration('ALTER TABLE shipments ADD COLUMN lcSettled INTEGER', 'shipments.lc
 runMigration('ALTER TABLE shipments ADD COLUMN licenceObligationQuantity REAL', 'shipments.licenceObligationQuantity');
 runMigration('ALTER TABLE shipments ADD COLUMN shipperSealNumber TEXT', 'shipments.shipperSealNumber');
 runMigration('ALTER TABLE shipments ADD COLUMN lineSealNumber TEXT', 'shipments.lineSealNumber');
+runMigration('ALTER TABLE shipments ADD COLUMN sbNo TEXT', 'shipments.sbNo');
+runMigration('ALTER TABLE shipments ADD COLUMN sbDate TEXT', 'shipments.sbDate');
 runMigration('ALTER TABLE licences ADD COLUMN importValidityDate TEXT', 'licences.importValidityDate');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_lc_reference ON shipments(lcReferenceNumber) WHERE lcReferenceNumber IS NOT NULL', 'idx_shipments_lc_reference');
 runMigration('ALTER TABLE buyers ADD COLUMN consignees_json TEXT', 'buyers.consignees_json');
 runMigration('ALTER TABLE shipments ADD COLUMN version INTEGER DEFAULT 1', 'shipments.version');
+runMigration('ALTER TABLE shipments ADD COLUMN epcgLicenceId TEXT', 'shipments.epcgLicenceId');
+runMigration('ALTER TABLE shipments ADD COLUMN advLicenceId TEXT', 'shipments.advLicenceId');
 runMigration('ALTER TABLE lcs ADD COLUMN buyerId TEXT', 'lcs.buyerId');
 runMigration('ALTER TABLE lcs ADD COLUMN shipments_json TEXT', 'lcs.shipments_json');
 runMigration('ALTER TABLE lcs ADD COLUMN balanceAmount REAL', 'lcs.balanceAmount');
@@ -288,36 +292,8 @@ runMigration(`
 runMigration('CREATE INDEX IF NOT EXISTS idx_documents_invoiceNumber ON documents(invoiceNumber)', 'idx_documents_invoice');
 runMigration('CREATE INDEX IF NOT EXISTS idx_documents_shipmentId ON documents(shipmentId)', 'idx_documents_shipment');
 
-function migrateJsonToNormalized() {
-  try {
-    const rows = db.prepare('SELECT id, items_json, history_json FROM shipments').all();
-    const insItem = db.prepare('INSERT OR IGNORE INTO shipment_items (shipmentId, productId, productName, description, hsnCode, quantity, unit, rate, amount, productType, sortOrder) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
-    const insHist = db.prepare('INSERT OR IGNORE INTO shipment_history (shipmentId, status, date, location, remarks, updatedBy, sortOrder) VALUES (?,?,?,?,?,?,?)');
-    for (const r of rows) {
-      const hasItems = db.prepare('SELECT 1 FROM shipment_items WHERE shipmentId = ?').get(r.id);
-      if (!hasItems && r.items_json) {
-        try {
-          const items = JSON.parse(r.items_json);
-          if (Array.isArray(items)) items.forEach((it, i) => {
-            insItem.run(r.id, it.productId || null, it.productName || null, it.description || null, it.hsnCode || null, it.quantity ?? null, it.unit || null, it.rate ?? null, it.amount ?? null, it.productType || null, i);
-          });
-        } catch (_) {}
-      }
-      const hasHist = db.prepare('SELECT 1 FROM shipment_history WHERE shipmentId = ?').get(r.id);
-      if (!hasHist && r.history_json) {
-        try {
-          const hist = JSON.parse(r.history_json);
-          if (Array.isArray(hist)) hist.forEach((h, i) => {
-            insHist.run(r.id, h.status || null, h.date || null, h.location || null, h.remarks || null, h.updatedBy || null, i);
-          });
-        } catch (_) {}
-      }
-    }
-  } catch (e) {
-    console.warn('migrateJsonToNormalized:', e.message);
-  }
-}
-migrateJsonToNormalized();
+// Removed: migrateJsonToNormalized() — no longer syncing items_json/history_json into normalized tables on startup.
+// Items and history are written only to shipment_items and shipment_history; items_json is no longer used.
 
 function runMany(sql, rows) {
   rows.forEach((row) => db.prepare(sql).run(...row));
@@ -327,65 +303,93 @@ function getShipmentValues(s, folderPath) {
   const productId = (s.items && s.items[0]) ? s.items[0].productId : s.productId;
   const rate = (s.items && s.items[0]) ? s.items[0].rate : s.rate;
   const quantity = (s.items && s.items[0]) ? s.items[0].quantity : s.quantity;
-  return [
-    s.id,
-    s.supplierId || null,
-    s.buyerId || null,
-    productId ?? null,
-    s.invoiceNumber ?? null,
-    s.company ?? null,
-    s.amount ?? null,
-    s.currency ?? null,
-    (s.exchangeRate != null && s.exchangeRate !== '') ? s.exchangeRate : 1,
-    rate ?? null,
-    quantity ?? null,
-    s.status ?? null,
-    s.expectedShipmentDate ?? null,
-    s.createdAt ?? null,
-    s.fobValueFC ?? 0,
-    s.fobValueINR ?? 0,
-    s.invoiceValueINR ?? 0,
-    s.isUnderLC ? 1 : 0,
-    s.lcNumber || null,
-    s.lcAmount ?? 0,
-    s.lcDate || null,
-    s.isUnderLicence ? 1 : 0,
-    s.linkedLicenceId || null,
-    s.licenceObligationAmount ?? 0,
-    s.licenceObligationQuantity ?? null,
-    s.containerNumber || null,
-    s.blNumber || null,
-    s.blDate || null,
-    s.beNumber || null,
-    s.beDate || null,
-    s.shippingLine || null,
-    s.portCode || null,
-    s.portOfLoading || null,
-    s.portOfDischarge || null,
-    s.assessedValue ?? 0,
-    s.dutyBCD ?? 0,
-    s.dutySWS ?? 0,
-    s.dutyINT ?? 0,
-    s.gst ?? 0,
-    s.trackingUrl || null,
-    s.incoTerm || 'FOB',
-    s.paymentDueDate || null,
-    s.expectedArrivalDate ?? null,
-    s.invoiceDate ?? null,
-    s.freightCharges ?? null,
-    s.otherCharges ?? null,
-    typeof s.documents === 'string' ? s.documents : JSON.stringify(s.documents || {}),
-    typeof s.history === 'string' ? s.history : JSON.stringify(s.history || []),
-    typeof s.payments === 'string' ? s.payments : JSON.stringify(s.payments || []),
-    typeof s.items === 'string' ? s.items : JSON.stringify(s.items || []),
-    folderPath ?? null,
-    s.remarks ?? null,
-    s.consigneeId ?? null,
-    s.lcSettled ? 1 : 0,
-    s.shipperSealNumber || null,
-    s.lineSealNumber || null
-  ];
+  return {
+    id: s.id,
+    supplierId: s.supplierId || null,
+    buyerId: s.buyerId || null,
+    productId: productId ?? null,
+    invoiceNumber: s.invoiceNumber ?? null,
+    company: s.company ?? null,
+    amount: s.amount ?? null,
+    currency: s.currency ?? null,
+    exchangeRate: (s.exchangeRate != null && s.exchangeRate !== '') ? s.exchangeRate : 1,
+    rate: rate ?? null,
+    quantity: quantity ?? null,
+    status: s.status ?? null,
+    expectedShipmentDate: s.expectedShipmentDate ?? null,
+    createdAt: s.createdAt ?? null,
+    fobValueFC: s.fobValueFC ?? 0,
+    fobValueINR: s.fobValueINR ?? 0,
+    invoiceValueINR: s.invoiceValueINR ?? 0,
+    isUnderLC: s.isUnderLC ? 1 : 0,
+    lcNumber: s.lcNumber || null,
+    lcAmount: s.lcAmount ?? 0,
+    lcDate: s.lcDate || null,
+    isUnderLicence: s.isUnderLicence ? 1 : 0,
+    linkedLicenceId: s.linkedLicenceId || null,
+    epcgLicenceId: s.epcgLicenceId || null,
+    advLicenceId: s.advLicenceId || null,
+    licenceObligationAmount: s.licenceObligationAmount ?? 0,
+    licenceObligationQuantity: s.licenceObligationQuantity ?? null,
+    containerNumber: s.containerNumber || null,
+    blNumber: s.blNumber || null,
+    blDate: s.blDate || null,
+    beNumber: s.beNumber || null,
+    beDate: s.beDate || null,
+    shippingLine: s.shippingLine || null,
+    portCode: s.portCode || null,
+    portOfLoading: s.portOfLoading || null,
+    portOfDischarge: s.portOfDischarge || null,
+    assessedValue: s.assessedValue ?? 0,
+    dutyBCD: s.dutyBCD ?? 0,
+    dutySWS: s.dutySWS ?? 0,
+    dutyINT: s.dutyINT ?? 0,
+    gst: s.gst ?? 0,
+    trackingUrl: s.trackingUrl || null,
+    incoTerm: s.incoTerm || 'FOB',
+    paymentDueDate: s.paymentDueDate || null,
+    expectedArrivalDate: s.expectedArrivalDate ?? null,
+    invoiceDate: s.invoiceDate || null,
+    freightCharges: s.freightCharges ?? null,
+    otherCharges: s.otherCharges ?? null,
+    documents_json: typeof s.documents === 'string' ? s.documents : JSON.stringify(s.documents || {}),
+    history_json: typeof s.history === 'string' ? s.history : JSON.stringify(s.history || []),
+    payments_json: typeof s.payments === 'string' ? s.payments : JSON.stringify(s.payments || []),
+    items_json: null,
+    documentsFolderPath: folderPath ?? null,
+    remarks: s.remarks ?? null,
+    consigneeId: s.consigneeId ?? null,
+    lcSettled: s.lcSettled ? 1 : 0,
+    shipperSealNumber: s.shipperSealNumber || null,
+    lineSealNumber: s.lineSealNumber || null,
+    sbNo: s.sbNo || null,
+    sbDate: s.sbDate || null,
+  };
 }
+
+/** Named-parameter INSERT for shipments; use with .run(getShipmentValues(s, folderPath)). */
+const SHIPMENT_INSERT_SQL = `
+  INSERT INTO shipments (
+    id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
+    status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
+    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId, epcgLicenceId, advLicenceId,
+    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
+    incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
+    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
+    shipperSealNumber, lineSealNumber, sbNo, sbDate
+  ) VALUES (
+    :id, :supplierId, :buyerId, :productId, :invoiceNumber, :company, :amount, :currency, :exchangeRate, :rate, :quantity,
+    :status, :expectedShipmentDate, :createdAt, :fobValueFC, :fobValueINR, :invoiceValueINR,
+    :isUnderLC, :lcNumber, :lcAmount, :lcDate, :isUnderLicence, :linkedLicenceId, :epcgLicenceId, :advLicenceId,
+    :licenceObligationAmount, :licenceObligationQuantity, :containerNumber, :blNumber, :blDate, :beNumber, :beDate, :shippingLine,
+    :portCode, :portOfLoading, :portOfDischarge, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :gst, :trackingUrl,
+    :incoTerm, :paymentDueDate, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
+    :documents_json, :history_json, :payments_json, :items_json, :documentsFolderPath, :remarks, :consigneeId, :lcSettled,
+    :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate
+  )`;
+
+const SHIPMENT_INSERT_OR_REPLACE_SQL = SHIPMENT_INSERT_SQL.replace('INSERT INTO', 'INSERT OR REPLACE INTO');
 
 function seedDummyData() {
   const hasSuppliers = db.prepare('SELECT COUNT(*) as c FROM suppliers').get().c > 0;
@@ -439,16 +443,6 @@ function seedDummyData() {
   const item3 = [{ productId: 'mp1', productName: 'Cotton Yarn 40s', hsnCode: '5205', quantity: 2000, unit: 'KGS', rate: 5, amount: 10000, productType: 'RAW_MATERIAL' }];
   const item4 = [{ productId: 'mp1', productName: 'Cotton Yarn 40s', hsnCode: '5205', quantity: 3000, unit: 'KGS', rate: 5, amount: 15000, productType: 'RAW_MATERIAL' }];
   const hist = [{ status: 'ORDERED', date: now, location: 'System Origin', remarks: 'Order placed' }];
-  const shipSql = `INSERT INTO shipments (
-    id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
-    status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
-    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
-    portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
-    incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-    shipperSealNumber, lineSealNumber
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const shipRows = [
     { id: 'sh1', supplierId: 's1', buyerId: null, productId: 'm1', invoiceNumber: 'INV/IMP/24/001', company: 'GFPL', amount: 17500, currency: 'USD', exchangeRate: 84, rate: 3.5, quantity: 5000, status: 'IN_TRANSIT', expectedShipmentDate: daysAgo(5), createdAt: now, fobValueFC: 17500, fobValueINR: 1470000, invoiceValueINR: 1470000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0100', lcAmount: 0, lcDate: daysAgo(30), isUnderLicence: 1, linkedLicenceId: 'lic1', licenceObligationAmount: 50000, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Shanghai', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(30), expectedArrivalDate: daysFuture(25), invoiceDate: daysAgo(10), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item1 },
     { id: 'sh2', supplierId: 's2', buyerId: null, productId: 'm2', invoiceNumber: 'INV/IMP/24/002', company: 'GFPL', amount: 12000, currency: 'EUR', exchangeRate: 90, rate: 1.2, quantity: 10000, status: 'ORDERED', expectedShipmentDate: null, createdAt: now, fobValueFC: 12000, fobValueINR: 1080000, invoiceValueINR: 1080000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0101', lcAmount: 0, lcDate: daysAgo(15), isUnderLicence: 1, linkedLicenceId: 'lic2', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Hamburg', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(45), expectedArrivalDate: null, invoiceDate: daysAgo(3), freightCharges: 500, otherCharges: 200, documents: {}, history: hist, payments: [], items: item2 },
@@ -456,7 +450,7 @@ function seedDummyData() {
     { id: 'sh4', supplierId: null, buyerId: 'b2', productId: 'mp1', invoiceNumber: 'INV/EXP/24/002', company: 'GTEX', amount: 15000, currency: 'USD', exchangeRate: 84, rate: 5, quantity: 3000, status: 'LOADING', expectedShipmentDate: null, createdAt: now, fobValueFC: 15000, fobValueINR: 1260000, invoiceValueINR: 1260000, isUnderLC: 0, lcNumber: null, lcAmount: 0, lcDate: null, isUnderLicence: 1, linkedLicenceId: 'lic3', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Mundra', portOfLoading: 'New York', portOfDischarge: 'New York', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(21), expectedArrivalDate: null, invoiceDate: daysAgo(1), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item4 },
   ];
   shipRows.forEach((s) => {
-    db.prepare(shipSql).run(...getShipmentValues(s, null));
+    db.prepare(SHIPMENT_INSERT_SQL).run(getShipmentValues(s, null));
   });
   console.log('Seeded sample data: vendors, materials, buyers, licences, LCs, shipments.');
 }
@@ -493,16 +487,26 @@ function seedAdditionalData() {
     ['lc11', 'LC/IMP/24/0104', 'Kotak Bank', 's11', 32000, 'USD', daysAgo(5), daysFuture(45), daysFuture(75), 'GTEX', 'OPEN', 'Pakistan yarn'],
   ]);
   const hist = [{ status: 'ORDERED', date: now, location: 'System Origin', remarks: 'Order placed' }];
-  const shipSqlAdd = `INSERT OR IGNORE INTO shipments (
+  const shipSqlAdd = `
+  INSERT OR IGNORE INTO shipments (
     id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
     status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
-    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
+    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId, epcgLicenceId, advLicenceId,
     licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
     shipperSealNumber, lineSealNumber
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  ) VALUES (
+    :id, :supplierId, :buyerId, :productId, :invoiceNumber, :company, :amount, :currency, :exchangeRate, :rate, :quantity,
+    :status, :expectedShipmentDate, :createdAt, :fobValueFC, :fobValueINR, :invoiceValueINR,
+    :isUnderLC, :lcNumber, :lcAmount, :lcDate, :isUnderLicence, :linkedLicenceId, :epcgLicenceId, :advLicenceId,
+    :licenceObligationAmount, :licenceObligationQuantity, :containerNumber, :blNumber, :blDate, :beNumber, :beDate, :shippingLine,
+    :portCode, :portOfLoading, :portOfDischarge, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :gst, :trackingUrl,
+    :incoTerm, :paymentDueDate, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
+    :documents_json, :history_json, :payments_json, :items_json, :documentsFolderPath, :remarks, :consigneeId, :lcSettled,
+    :shipperSealNumber, :lineSealNumber
+  )`;
   const item5 = [{ productId: 'm10', productName: 'Combed Cotton 30s', hsnCode: '5205', quantity: 8000, unit: 'KGS', rate: 3.2, amount: 25600, productType: 'RAW_MATERIAL' }];
   const item6 = [{ productId: 'm11', productName: 'Ring Spun Yarn 40s', hsnCode: '5206', quantity: 5000, unit: 'KGS', rate: 4.0, amount: 20000, productType: 'RAW_MATERIAL' }];
   const item7 = [{ productId: 'mp2', productName: 'Polyester Staple Fiber', hsnCode: '5503', quantity: 4000, unit: 'KGS', rate: 1.5, amount: 6000, productType: 'RAW_MATERIAL' }];
@@ -511,7 +515,7 @@ function seedAdditionalData() {
     { id: 'sh11', supplierId: 's11', buyerId: null, productId: 'm11', invoiceNumber: 'INV/IMP/24/011', company: 'GTEX', amount: 20000, currency: 'USD', exchangeRate: 84, rate: 4, quantity: 5000, status: 'ORDERED', expectedShipmentDate: null, createdAt: now, fobValueFC: 20000, fobValueINR: 1680000, invoiceValueINR: 1680000, isUnderLC: 1, lcNumber: 'LC/IMP/24/0104', lcAmount: 0, lcDate: daysAgo(5), isUnderLicence: 1, linkedLicenceId: 'lic11', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Karachi', portOfLoading: 'Mundra', portOfDischarge: 'Mundra', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'CIF', paymentDueDate: daysFuture(35), expectedArrivalDate: null, invoiceDate: daysAgo(1), freightCharges: 300, otherCharges: 100, documents: {}, history: hist, payments: [], items: item6 },
     { id: 'sh12', supplierId: null, buyerId: 'b1', productId: 'mp2', invoiceNumber: 'INV/EXP/24/010', company: 'GFPL', amount: 6000, currency: 'USD', exchangeRate: 84, rate: 1.5, quantity: 4000, status: 'LOADING', expectedShipmentDate: null, createdAt: now, fobValueFC: 6000, fobValueINR: 504000, invoiceValueINR: 504000, isUnderLC: 0, lcNumber: null, lcAmount: 0, lcDate: null, isUnderLicence: 1, linkedLicenceId: 'lic1', licenceObligationAmount: 0, containerNumber: null, blNumber: null, blDate: null, beNumber: null, beDate: null, shippingLine: null, portCode: 'Mundra', portOfLoading: 'London', portOfDischarge: 'London', assessedValue: 0, dutyBCD: 0, dutySWS: 0, dutyINT: 0, gst: 0, trackingUrl: null, incoTerm: 'FOB', paymentDueDate: daysFuture(10), expectedArrivalDate: null, invoiceDate: daysAgo(0), freightCharges: null, otherCharges: null, documents: {}, history: hist, payments: [], items: item7 },
   ].forEach((s) => {
-    db.prepare(shipSqlAdd).run(...getShipmentValues(s, null));
+    db.prepare(shipSqlAdd).run(getShipmentValues(s, null));
   });
   console.log('Added extra sample data (vendors, LCs, licences, shipments).');
 }
@@ -529,16 +533,6 @@ function ensureMinimalShipments() {
   const daysFuture = (d) => new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const hist = [{ status: 'ORDERED', date: now, location: 'System Origin', remarks: 'Order placed' }];
   const linkedLic = (lic != null && lic.id != null) ? lic.id : null;
-  const shipSql = `INSERT INTO shipments (
-    id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
-    status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
-    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
-    portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
-    incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-    documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-    shipperSealNumber, lineSealNumber
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   const item1 = [{ productId: mat.id, productName: mat.name, hsnCode: mat.hsnCode || '', quantity: 1000, unit: 'KGS', rate: 5, amount: 5000, productType: 'RAW_MATERIAL' }];
   const s1 = {
     id: 'shseed1', supplierId: sup.id, buyerId: null, productId: mat.id, invoiceNumber: 'INV/IMP/SEED/001', company: 'GFPL',
@@ -551,7 +545,7 @@ function ensureMinimalShipments() {
     incoTerm: 'FOB', paymentDueDate: daysFuture(14), expectedArrivalDate: daysFuture(12), invoiceDate: daysAgo(5), freightCharges: null, otherCharges: null,
     documents: {}, history: hist, payments: [], items: item1
   };
-  db.prepare(shipSql).run(...getShipmentValues(s1, null));
+  db.prepare(SHIPMENT_INSERT_SQL).run(getShipmentValues(s1, null));
   if (buy) {
     const item2 = [{ productId: mat.id, productName: mat.name, hsnCode: mat.hsnCode || '', quantity: 500, unit: 'KGS', rate: 8, amount: 4000, productType: 'RAW_MATERIAL' }];
     const s2 = {
@@ -565,7 +559,7 @@ function ensureMinimalShipments() {
       incoTerm: 'FOB', paymentDueDate: daysFuture(7), expectedArrivalDate: null, invoiceDate: daysAgo(1), freightCharges: null, otherCharges: null,
       documents: {}, history: hist, payments: [], items: item2
     };
-    db.prepare(shipSql).run(...getShipmentValues(s2, null));
+    db.prepare(SHIPMENT_INSERT_SQL).run(getShipmentValues(s2, null));
   }
   console.log('Added minimal sample shipments (none existed).');
 }
@@ -585,3 +579,4 @@ try {
 
 module.exports = db;
 module.exports.getShipmentValues = getShipmentValues;
+module.exports.SHIPMENT_INSERT_OR_REPLACE_SQL = SHIPMENT_INSERT_OR_REPLACE_SQL;

@@ -24,13 +24,17 @@ function verifyToken(req, res, next) {
     const role = decoded.role;
 
     try {
-      const row = db.prepare('SELECT id, role, permissions FROM users WHERE id = ?').get(userId);
+      const row = db.prepare('SELECT id, role, permissions, allowedDomains FROM users WHERE id = ?').get(userId);
       if (row) {
         let permissions = [];
+        let allowedDomains = [];
         try {
           permissions = JSON.parse(row.permissions || '[]');
         } catch (_) {}
-        req.user = { id: row.id, role: row.role, permissions: Array.isArray(permissions) ? permissions : [] };
+        try {
+          allowedDomains = JSON.parse(row.allowedDomains || '[]');
+        } catch (_) {}
+        req.user = { id: row.id, role: row.role, permissions: Array.isArray(permissions) ? permissions : [], allowedDomains };
         return next();
       }
     } catch (_) {}

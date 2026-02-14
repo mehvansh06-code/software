@@ -4,6 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
+const SHIPMENT_INSERT_OR_REPLACE_SQL = db.SHIPMENT_INSERT_OR_REPLACE_SQL;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
 const { validateId, hasPermission } = require('../middleware');
 
@@ -138,6 +139,7 @@ function setShipmentHistory(shipmentId, history) {
   });
 }
 
+/** Build and create shipment folder: [Import|Export] / [Gujarat Flotex|GTEX Fabrics] / [PartnerName_InvoiceNo] (e.g. Reliance_87). */
 function ensureShipmentDocumentsFolder(shipment) {
   if (!shipment) return null;
   try {
@@ -293,8 +295,9 @@ function buildShipmentResponse(r) {
   const items = getShipmentItems(r.id) ?? (r.productId ? [{ productId: r.productId, productName: '', quantity: fromCents(r.quantity), rate: fromCents(r.rate), amount: fromCents(r.quantity) * fromCents(r.rate) }] : []);
   const history = getShipmentHistory(r.id) ?? [];
   const row = rowToClient(r);
+  const { items_json, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     isUnderLC: !!r.isUnderLC,
     isUnderLicence: !!r.isUnderLicence,
     linkedLicenceId: r.linkedLicenceId != null && r.linkedLicenceId !== '' ? String(r.linkedLicenceId) : null,
@@ -597,21 +600,10 @@ function createRouter(broadcast) {
       return res.status(e.statusCode || 400).json({ success: false, error: e.message });
     }
     const documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
-    const stmt = db.prepare(`
-      INSERT OR REPLACE INTO shipments (
-        id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
-        status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
-        isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-        licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
-        portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
-        incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-        shipperSealNumber, lineSealNumber
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `);
+    const stmt = db.prepare(SHIPMENT_INSERT_OR_REPLACE_SQL);
     try {
       const runTx = db.transaction(() => {
-        stmt.run(...getShipmentValues(sNorm, documentsFolderPath));
+        stmt.run(getShipmentValues(sNorm, documentsFolderPath));
         setShipmentItems(idCheck.value, s.items || []);
         setShipmentHistory(idCheck.value, s.history || []);
       });
@@ -648,18 +640,7 @@ function createRouter(broadcast) {
       return res.status(400).json({ success: false, error: 'Version is required for update' });
     }
 
-    const insertStmt = db.prepare(`
-      INSERT OR REPLACE INTO shipments (
-        id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
-        status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
-        isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId,
-        licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
-        portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
-        incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
-        documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-        shipperSealNumber, lineSealNumber
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `);
+    const insertStmt = db.prepare(SHIPMENT_INSERT_OR_REPLACE_SQL);
     const updateStmt = db.prepare(`
       UPDATE shipments SET
         status=?, containerNumber=?, blNumber=?, blDate=?, beNumber=?, beDate=?,
@@ -670,7 +651,7 @@ function createRouter(broadcast) {
         incoTerm=?, paymentDueDate=?, expectedArrivalDate=?,
         invoiceDate=?, freightCharges=?, otherCharges=?, exchangeRate=?, remarks=?,
         isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?, consigneeId=?, lcSettled=?,
-        shipperSealNumber=?, lineSealNumber=?,
+        shipperSealNumber=?, lineSealNumber=?, sbNo=?, sbDate=?,
         version = version + 1
       WHERE id=? AND version=?
     `);
@@ -680,7 +661,7 @@ function createRouter(broadcast) {
         const exists = db.prepare('SELECT 1 FROM shipments WHERE id = ?').get(id);
         if (!exists) {
           const documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
-          insertStmt.run(...getShipmentValues(sNorm, documentsFolderPath));
+          insertStmt.run(getShipmentValues(sNorm, documentsFolderPath));
           setShipmentItems(id, s.items || []);
           setShipmentHistory(id, s.history || []);
         } else {
@@ -693,7 +674,7 @@ function createRouter(broadcast) {
             s.status, sNorm.containerNumber, sNorm.blNumber, sNorm.blDate, sNorm.beNumber, sNorm.beDate,
             sNorm.shippingLine, sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
             sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, sNorm.gst, sNorm.trackingUrl,
-            JSON.stringify(s.documents || {}), '[]', JSON.stringify(s.payments || []), '[]',
+            JSON.stringify(s.documents || {}), '[]', JSON.stringify(s.payments || []), null,
             sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,
             sNorm.incoTerm, sNorm.paymentDueDate, sNorm.expectedArrivalDate || null,
             sNorm.invoiceDate || null, sNorm.freightCharges ?? null, sNorm.otherCharges ?? null,
@@ -705,6 +686,8 @@ function createRouter(broadcast) {
             lcSettledVal,
             sNorm.shipperSealNumber || null,
             sNorm.lineSealNumber || null,
+            sNorm.sbNo || null,
+            sNorm.sbDate || null,
             id,
             version
           );

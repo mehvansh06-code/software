@@ -5,9 +5,13 @@
  * Secondary: Persistent Browser Ledger (LocalStorage)
  */
 
-// Use VITE_API_HOST so localhost and local IP hit the same backend (same data). Set in .env to your machine's IP (e.g. 192.168.1.70).
+// In the browser, use the same host you opened the app from — so when WiFi/IP changes, no .env update needed.
+// (VITE_API_HOST in .env was causing "offline" after IP change; now we only use it outside the browser.)
 const _envHost = typeof (import.meta as any).env?.VITE_API_HOST === 'string' ? (import.meta as any).env.VITE_API_HOST.trim() : '';
-const API_HOST = _envHost || (typeof window !== 'undefined' ? window.location.hostname : 'localhost');
+const API_HOST =
+  typeof window !== 'undefined'
+    ? (window.location.hostname || 'localhost')
+    : (_envHost || 'localhost');
 const API_BASE = `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${API_HOST}:3001/api`;
 const FETCH_TIMEOUT = 8000;
 const SAFE_ENDPOINT_REGEX = /^[a-zA-Z0-9\/_\-\.]+$/;
@@ -75,6 +79,9 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
     });
 
     clearTimeout(timeoutId);
+    // Any HTTP response means the server is reachable (online)
+    serverAvailable = true;
+
     if (response.status === 401) {
       if (typeof window !== 'undefined') localStorage.removeItem('token');
       throw new Error('Session expired. Please log in again.');
@@ -85,11 +92,14 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
     }
     if (!response.ok) throw new Error('Offline');
 
-    serverAvailable = true;
     return await response.json();
-  } catch (error) {
+  } catch (error: any) {
     clearTimeout(timeoutId);
-    serverAvailable = false;
+    // Only mark offline on real network failure (timeout, connection refused, etc.), not on 4xx/5xx
+    const isNetworkFailure =
+      error?.name === 'AbortError' ||
+      /failed to fetch|network error|load failed|connection refused/i.test(error?.message || '');
+    if (isNetworkFailure) serverAvailable = false;
     return handleSimulatedRequest(safeEndpoint, options);
   }
 }
@@ -171,26 +181,31 @@ export const api = {
     fetchApi('permission-groups'),
   /** Current user and fresh permissions from DB. Call after login or to re-sync without logging out. */
   auth: {
-    me: (): Promise<{ id: string; username: string; name: string; role: string; permissions: string[] }> =>
+    me: (): Promise<{ id: string; username: string; name: string; role: string; permissions: string[]; allowedDomains?: string[] }> =>
       fetchApi('auth/me').then((data: any) => ({
         id: data.id,
         username: data.username,
         name: data.name,
         role: data.role,
         permissions: Array.isArray(data.permissions) ? data.permissions : [],
+        allowedDomains: Array.isArray(data.allowedDomains) ? data.allowedDomains : undefined,
       })),
   },
   users: {
-    list: (): Promise<Array<{ id: string; username: string; name: string; role: string; permissions: string[] }>> =>
+    list: (): Promise<Array<{ id: string; username: string; name: string; role: string; permissions: string[]; allowedDomains?: string[] }>> =>
       fetchApi('users'),
-    create: (data: { username: string; password: string; name?: string; role?: string }): Promise<any> =>
+    create: (data: { username: string; password: string; name?: string; role?: string; allowedDomains?: string[] }): Promise<any> =>
       fetchApi('users', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: { name?: string; role?: string }): Promise<any> =>
+    update: (id: string, data: { username?: string; name?: string; role?: string; allowedDomains?: string[] }): Promise<any> =>
       fetchApi(`users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    updatePassword: (id: string, password: string): Promise<{ success: boolean }> =>
+      fetchApi(`users/${id}/password`, { method: 'PATCH', body: JSON.stringify({ password }) }),
     delete: (id: string): Promise<void> =>
       fetchApi(`users/${id}`, { method: 'DELETE' }),
     updatePermissions: (id: string, permissions: string[]): Promise<any> =>
       fetchApi(`users/${id}/permissions`, { method: 'PATCH', body: JSON.stringify({ permissions }) }),
+    updateAllowedDomains: (id: string, allowedDomains: string[]): Promise<any> =>
+      fetchApi(`users/${id}/allowed-domains`, { method: 'PATCH', body: JSON.stringify({ allowedDomains }) }),
   },
   suppliers: {
     list: () => fetchApi('suppliers'),
@@ -343,7 +358,7 @@ export const api = {
       });
     },
   },
-  /** OCR: extract or upload-and-scan. Both use fetch with Authorization: Bearer <token> from localStorage. */
+  /** OCR: extract or upload-and-scan. Long timeout (2 min) so large PDFs/images can finish; do not set Content-Type (FormData sets boundary). */
   ocr: {
     extract: (formData: FormData): Promise<{ success: boolean; data?: any; error?: string }> => {
       const headers: Record<string, string> = {};
@@ -351,7 +366,25 @@ export const api = {
         const token = localStorage.getItem('token');
         if (token) headers['Authorization'] = `Bearer ${token}`;
       }
-      return fetch(`${API_BASE}/ocr/extract`, { method: 'POST', headers, body: formData }).then((r) => r.json());
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 min for OCR
+      return fetch(`${API_BASE}/ocr/extract`, { method: 'POST', headers, body: formData, signal: controller.signal })
+        .then(async (r) => {
+          clearTimeout(timeoutId);
+          let body: any;
+          try {
+            body = await r.json();
+          } catch {
+            throw new Error(r.ok ? 'Invalid response from server' : (r.status === 413 ? 'File too large (max 20 MB).' : `Server error (${r.status}).`));
+          }
+          if (!r.ok) throw new Error((body && body.error) || `Request failed (${r.status}).`);
+          return body;
+        })
+        .catch((err: any) => {
+          clearTimeout(timeoutId);
+          if (err.name === 'AbortError') throw new Error('Scan took too long. Try a smaller file or image.');
+          throw err;
+        });
     },
     uploadAndScan: (formData: FormData, opts?: { docType?: 'BOE' | 'SB'; company?: string }): Promise<{ success: boolean; data?: any; error?: string }> => {
       const headers: Record<string, string> = {};
@@ -364,10 +397,45 @@ export const api = {
       if (opts?.company) q.set('company', opts.company);
       const qs = q.toString() ? '?' + q.toString() : '';
       const url = `${API_BASE}/ocr/upload-and-scan${qs}`;
-      return fetch(url, { method: 'POST', headers, body: formData }).then((r) => r.json());
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
+      return fetch(url, { method: 'POST', headers, body: formData, signal: controller.signal })
+        .then(async (r) => {
+          clearTimeout(timeoutId);
+          let body: any;
+          try {
+            body = await r.json();
+          } catch {
+            throw new Error(r.ok ? 'Invalid response from server' : (r.status === 413 ? 'File too large (max 20 MB).' : `Server error (${r.status}).`));
+          }
+          if (!r.ok) throw new Error((body && body.error) || `Request failed (${r.status}).`);
+          return body;
+        })
+        .catch((err: any) => {
+          clearTimeout(timeoutId);
+          if (err.name === 'AbortError') throw new Error('Scan took too long. Try a smaller file or image.');
+          throw err;
+        });
     },
   },
   system: {
+    /** Ping /api/status (no auth) to set server online/offline before any data request. Call on app init. */
+    ping: (): Promise<boolean> => {
+      if (forceSimulated || typeof window === 'undefined') return Promise.resolve(false);
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 5000);
+      return fetch(`${API_BASE}/status`, { method: 'GET', signal: controller.signal })
+        .then((res) => {
+          clearTimeout(t);
+          serverAvailable = true;
+          return res.ok;
+        })
+        .catch(() => {
+          clearTimeout(t);
+          serverAvailable = false;
+          return false;
+        });
+    },
     getStats: () => fetchApi('stats'),
     setMode: (mode: 'SQL' | 'BROWSER') => { forceSimulated = mode === 'BROWSER'; },
     getMode: () => forceSimulated ? 'BROWSER' : (serverAvailable ? 'SQL' : 'OFFLINE'),

@@ -27,7 +27,7 @@ function sanitizeFolderName(str) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB (allow 10–12 MB scans)
   fileFilter: (req, file, cb) => {
     const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
     if (allowed.includes(file.mimetype)) {
@@ -87,23 +87,52 @@ router.post('/extract', verifyToken, (req, res, next) => {
       };
     }
 
-    const data = {
-      beNumber: parsed.beNumber ?? null,
-      sbNumber: parsed.sbNumber ?? null,
-      date: parsed.date ?? null,
-      invoiceValue: parsed.invoiceValue ?? null,
-      portCode: parsed.portCode ?? null,
-      containerNumber: parsed.containerNumber ?? null,
-      blNumber: parsed.blNumber ?? null,
-      blDate: parsed.blDate ?? null,
-      shippingLine: parsed.shippingLine ?? null,
-      dutyBCD: parsed.dutyBCD ?? null,
-      dutySWS: parsed.dutySWS ?? null,
-      dutyINT: parsed.dutyINT ?? null,
-      gst: parsed.gst ?? null,
-      confidence: parsed.confidence ?? null,
-      source: parsed.source ?? null,
-    };
+    // BOE = import only: return only BOE fields (BE No, date, port, BCD, SWS, IGST, assessable value). No SB/container/BL/shipping.
+    const isBOE = (parsed.beNumber != null || parsed.dutyBCD != null || parsed.dutySWS != null || parsed.gst != null) && parsed.sbNumber == null;
+    const isSB = parsed.sbNumber != null;
+
+    let data;
+    if (isBOE) {
+      data = {
+        beNumber: parsed.beNumber ?? null,
+        date: parsed.date ?? null,
+        portCode: parsed.portCode ?? null,
+        invoiceValue: parsed.invoiceValue ?? null,
+        dutyBCD: parsed.dutyBCD ?? null,
+        dutySWS: parsed.dutySWS ?? null,
+        dutyINT: parsed.dutyINT ?? null,
+        gst: parsed.gst ?? null,
+        confidence: parsed.confidence ?? null,
+        source: parsed.source ?? null,
+      };
+    } else if (isSB) {
+      data = {
+        sbNumber: parsed.sbNumber ?? null,
+        date: parsed.date ?? null,
+        portCode: parsed.portCode ?? null,
+        invoiceValue: parsed.invoiceValue ?? null,
+        confidence: parsed.confidence ?? null,
+        source: parsed.source ?? null,
+      };
+    } else {
+      data = {
+        beNumber: parsed.beNumber ?? null,
+        sbNumber: parsed.sbNumber ?? null,
+        date: parsed.date ?? null,
+        invoiceValue: parsed.invoiceValue ?? null,
+        portCode: parsed.portCode ?? null,
+        containerNumber: parsed.containerNumber ?? null,
+        blNumber: parsed.blNumber ?? null,
+        blDate: parsed.blDate ?? null,
+        shippingLine: parsed.shippingLine ?? null,
+        dutyBCD: parsed.dutyBCD ?? null,
+        dutySWS: parsed.dutySWS ?? null,
+        dutyINT: parsed.dutyINT ?? null,
+        gst: parsed.gst ?? null,
+        confidence: parsed.confidence ?? null,
+        source: parsed.source ?? null,
+      };
+    }
 
     res.json({ success: true, data });
   } catch (err) {

@@ -12,7 +12,7 @@ function createRouter() {
   /** List users (mask password). Requires users.view */
   router.get('/', hasPermission('users.view'), (req, res) => {
     try {
-      const rows = db.prepare('SELECT id, username, name, role, permissions FROM users ORDER BY username').all();
+      const rows = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users ORDER BY username').all();
       res.json(rows.map((r) => ({
         id: r.id,
         username: r.username,
@@ -21,6 +21,13 @@ function createRouter() {
         permissions: (() => {
           try {
             return JSON.parse(r.permissions || '[]');
+          } catch (_) {
+            return [];
+          }
+        })(),
+        allowedDomains: (() => {
+          try {
+            return JSON.parse(r.allowedDomains || '[]');
           } catch (_) {
             return [];
           }
@@ -39,6 +46,7 @@ function createRouter() {
     const password = b.password;
     const name = typeof b.name === 'string' ? b.name.trim() : b.username || '';
     const role = typeof b.role === 'string' ? b.role.toUpperCase() : 'VIEWER';
+    const allowedDomains = Array.isArray(b.allowedDomains) ? b.allowedDomains : [];
     if (!username) return res.status(400).json({ success: false, error: 'Username required' });
     if (!password || String(password).length < 1) return res.status(400).json({ success: false, error: 'Password required' });
     const id = b.id || 'u_' + Math.random().toString(36).slice(2, 11);
@@ -53,12 +61,16 @@ function createRouter() {
     }
     try {
       db.prepare(
-        'INSERT INTO users (id, username, passwordHash, name, role, permissions) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(idCheck.value, username, passwordHash, name, role, JSON.stringify(permissions));
-      const row = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(idCheck.value);
+        'INSERT INTO users (id, username, passwordHash, name, role, permissions, allowedDomains) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(idCheck.value, username, passwordHash, name, role, JSON.stringify(permissions), JSON.stringify(allowedDomains));
+      const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(idCheck.value);
       let perms = [];
+      let domains = [];
       try {
         perms = JSON.parse(row.permissions || '[]');
+      } catch (_) {}
+      try {
+        domains = JSON.parse(row.allowedDomains || '[]');
       } catch (_) {}
       res.status(201).json({
         id: row.id,
@@ -66,6 +78,7 @@ function createRouter() {
         name: row.name,
         role: row.role,
         permissions: perms,
+        allowedDomains: domains,
       });
     } catch (e) {
       if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message)) {
@@ -76,26 +89,40 @@ function createRouter() {
     }
   });
 
-  /** Update user details (not password/permissions). Requires users.edit */
+  /** Update user details (username, display name, role, allowedDomains; not password). Requires users.edit */
   router.put('/:id', hasPermission('users.edit'), (req, res) => {
     const idCheck = validateId(req.params?.id, 'User ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const b = req.body || {};
     const name = typeof b.name === 'string' ? b.name.trim() : undefined;
     const role = typeof b.role === 'string' ? b.role.toUpperCase() : undefined;
+    const username = typeof b.username === 'string' ? b.username.trim() : undefined;
+    const allowedDomains = Array.isArray(b.allowedDomains) ? b.allowedDomains : undefined;
     const existing = db.prepare('SELECT id, username, name, role FROM users WHERE id = ?').get(idCheck.value);
     if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
     try {
+      if (username !== undefined && username !== '') {
+        const conflict = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, idCheck.value);
+        if (conflict) return res.status(400).json({ success: false, error: 'Username already in use' });
+        db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, idCheck.value);
+      }
       if (name !== undefined) {
         db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, idCheck.value);
       }
       if (role !== undefined) {
         db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, idCheck.value);
       }
-      const row = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(idCheck.value);
+      if (allowedDomains !== undefined) {
+        db.prepare('UPDATE users SET allowedDomains = ? WHERE id = ?').run(JSON.stringify(allowedDomains), idCheck.value);
+      }
+      const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(idCheck.value);
       let perms = [];
+      let domains = [];
       try {
         perms = JSON.parse(row.permissions || '[]');
+      } catch (_) {}
+      try {
+        domains = JSON.parse(row.allowedDomains || '[]');
       } catch (_) {}
       res.json({
         id: row.id,
@@ -103,9 +130,35 @@ function createRouter() {
         name: row.name,
         role: row.role,
         permissions: perms,
+        allowedDomains: domains,
       });
     } catch (e) {
       console.error('PUT /users/:id:', e);
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  /** Set user password (admin reset). Requires users.edit */
+  router.patch('/:id/password', hasPermission('users.edit'), (req, res) => {
+    const idCheck = validateId(req.params?.id, 'User ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const newPassword = req.body?.password;
+    if (!newPassword || String(newPassword).length < 1) {
+      return res.status(400).json({ success: false, error: 'Password required' });
+    }
+    const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(idCheck.value);
+    if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
+    let passwordHash;
+    try {
+      passwordHash = bcrypt.hashSync(String(newPassword), 10);
+    } catch (e) {
+      return res.status(500).json({ success: false, error: 'Failed to hash password' });
+    }
+    try {
+      db.prepare('UPDATE users SET passwordHash = ? WHERE id = ?').run(passwordHash, idCheck.value);
+      res.json({ success: true });
+    } catch (e) {
+      console.error('PATCH /users/:id/password:', e);
       res.status(500).json({ success: false, error: e.message });
     }
   });
@@ -147,6 +200,41 @@ function createRouter() {
     }
   });
 
+  /** Update allowed domains (screens) for a user. Requires users.manage_permissions */
+  router.patch('/:id/allowed-domains', hasPermission('users.manage_permissions'), (req, res) => {
+    const idCheck = validateId(req.params?.id, 'User ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const allowedDomains = req.body?.allowedDomains;
+    if (!Array.isArray(allowedDomains)) {
+      return res.status(400).json({ success: false, error: 'Body must include allowedDomains array' });
+    }
+    const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(idCheck.value);
+    if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
+    try {
+      db.prepare('UPDATE users SET allowedDomains = ? WHERE id = ?').run(JSON.stringify(allowedDomains), idCheck.value);
+      const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(idCheck.value);
+      let perms = [];
+      let domains = [];
+      try {
+        perms = JSON.parse(row.permissions || '[]');
+      } catch (_) {}
+      try {
+        domains = JSON.parse(row.allowedDomains || '[]');
+      } catch (_) {}
+      res.json({
+        id: row.id,
+        username: row.username,
+        name: row.name,
+        role: row.role,
+        permissions: perms,
+        allowedDomains: domains,
+      });
+    } catch (e) {
+      console.error('PATCH /users/:id/allowed-domains:', e);
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
   /** Update permissions. Audit log. Anti-lockout: if target is self, reject removal of users.manage_permissions. Requires users.manage_permissions */
   router.patch('/:id/permissions', hasPermission('users.manage_permissions'), (req, res) => {
     const idCheck = validateId(req.params?.id, 'User ID');
@@ -175,7 +263,7 @@ function createRouter() {
     try {
       db.prepare('UPDATE users SET permissions = ? WHERE id = ?').run(JSON.stringify(permissions), targetId);
       const insLog = db.prepare(
-        'INSERT INTO audit_logs (userId, action, targetId, details, timestamp) VALUES (?, ?, ?, ?, datetime("now"))'
+        'INSERT INTO audit_logs (userId, action, targetId, details, timestamp) VALUES (?, ?, ?, ?, datetime(\'now\'))'
       );
       insLog.run(
         selfId || 'system',

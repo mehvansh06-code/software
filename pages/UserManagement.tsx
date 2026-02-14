@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserPlus, Users, X } from 'lucide-react';
+import { UserPlus, Users, X, Pencil } from 'lucide-react';
 import { api } from '../api';
 import { usePermissions } from '../hooks/usePermissions';
+import { AppDomain } from '../types';
 
 interface PermissionGroup {
   id: string;
@@ -22,7 +23,15 @@ interface ApiUser {
   name: string;
   role: string;
   permissions: string[];
+  allowedDomains?: string[];
 }
+
+const SCREEN_OPTIONS: { value: AppDomain; label: string }[] = [
+  { value: AppDomain.IMPORT, label: 'Import' },
+  { value: AppDomain.EXPORT, label: 'Export' },
+  { value: AppDomain.LICENCE, label: 'Licence' },
+  { value: AppDomain.SALES_INDENT, label: 'Sales Indent' },
+];
 
 function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
@@ -47,11 +56,30 @@ export default function UserManagement() {
   const [error, setError] = useState<string | null>(null);
   const [modalUser, setModalUser] = useState<ApiUser | null>(null);
   const [modalPerms, setModalPerms] = useState<string[]>([]);
+  const [modalAllowedDomains, setModalAllowedDomains] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [savingScreens, setSavingScreens] = useState(false);
+  const [screensSaveMessage, setScreensSaveMessage] = useState<'success' | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createForm, setCreateForm] = useState({ username: '', password: '', name: '', role: 'VIEWER' as string });
+  const [createForm, setCreateForm] = useState({
+    username: '',
+    password: '',
+    name: '',
+    role: 'VIEWER' as string,
+    allowedDomains: [] as string[],
+  });
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [editUser, setEditUser] = useState<ApiUser | null>(null);
+  const [editForm, setEditForm] = useState({
+    username: '',
+    name: '',
+    password: '',
+    role: 'VIEWER' as string,
+    allowedDomains: [] as string[],
+  });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -81,6 +109,9 @@ export default function UserManagement() {
   const openModal = (user: ApiUser) => {
     setModalUser(user);
     setModalPerms([...(user.permissions || [])]);
+    setModalAllowedDomains(Array.isArray(user.allowedDomains) ? [...user.allowedDomains] : []);
+    setError(null);
+    setScreensSaveMessage(null);
   };
 
   const applyPreset = (presetKey: keyof PresetsMap) => {
@@ -131,6 +162,7 @@ export default function UserManagement() {
   const canManage = hasPermission('users.manage_permissions');
   const canView = hasPermission('users.view');
   const canCreate = hasPermission('users.create');
+  const canEdit = hasPermission('users.edit');
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,6 +175,10 @@ export default function UserManagement() {
       setCreateError('Password is required');
       return;
     }
+    if (createForm.allowedDomains.length === 0) {
+      setCreateError('Select at least one screen the user can access.');
+      return;
+    }
     setCreating(true);
     try {
       await api.users.create({
@@ -150,15 +186,110 @@ export default function UserManagement() {
         password: createForm.password,
         name: createForm.name.trim() || createForm.username.trim(),
         role: createForm.role,
+        allowedDomains: createForm.allowedDomains,
       });
       await loadUsers();
       setShowCreateModal(false);
-      setCreateForm({ username: '', password: '', name: '', role: 'VIEWER' });
+      setCreateForm({ username: '', password: '', name: '', role: 'VIEWER', allowedDomains: [] });
     } catch (err: any) {
       setCreateError(err?.message || 'Failed to create user');
     } finally {
       setCreating(false);
     }
+  };
+
+  const openEditModal = (u: ApiUser) => {
+    setEditUser(u);
+    setEditForm({
+      username: u.username,
+      name: u.name || '',
+      password: '',
+      role: u.role,
+      allowedDomains: Array.isArray(u.allowedDomains) ? [...u.allowedDomains] : [],
+    });
+    setEditError(null);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editUser) return;
+    setEditError(null);
+    if (!editForm.username.trim()) {
+      setEditError('Username is required');
+      return;
+    }
+    if (editForm.allowedDomains.length === 0) {
+      setEditError('Select at least one screen the user can access.');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await api.users.update(editUser.id, {
+        username: editForm.username.trim(),
+        name: editForm.name.trim() || editForm.username.trim(),
+        role: editForm.role,
+        allowedDomains: editForm.allowedDomains,
+      });
+      if (editForm.password) {
+        await api.users.updatePassword(editUser.id, editForm.password);
+      }
+      await loadUsers();
+      setEditUser(null);
+    } catch (err: any) {
+      setEditError(err?.message || 'Failed to update user');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const toggleCreateScreen = (domain: string) => {
+    setCreateForm((f) => ({
+      ...f,
+      allowedDomains: f.allowedDomains.includes(domain)
+        ? f.allowedDomains.filter((d) => d !== domain)
+        : [...f.allowedDomains, domain],
+    }));
+  };
+
+  const toggleEditScreen = (domain: string) => {
+    setEditForm((f) => ({
+      ...f,
+      allowedDomains: f.allowedDomains.includes(domain)
+        ? f.allowedDomains.filter((d) => d !== domain)
+        : [...f.allowedDomains, domain],
+    }));
+  };
+
+  const toggleModalScreen = (domain: string) => {
+    setModalAllowedDomains((prev) =>
+      prev.includes(domain) ? prev.filter((d) => d !== domain) : [...prev, domain]
+    );
+  };
+
+  const handleSaveScreens = () => {
+    if (!modalUser) return;
+    if (modalAllowedDomains.length === 0) {
+      setError('Select at least one screen. To remove all access, use Edit user instead.');
+      return;
+    }
+    setSavingScreens(true);
+    setError(null);
+    api.users
+      .updateAllowedDomains(modalUser.id, modalAllowedDomains)
+      .then((updated: any) => {
+        const domains = updated.allowedDomains || modalAllowedDomains;
+        setModalUser((u) => (u ? { ...u, allowedDomains: domains } : null));
+        setUsers((list) =>
+          list.map((u) => (u.id === modalUser.id ? { ...u, allowedDomains: domains } : u))
+        );
+        setError(null);
+        setScreensSaveMessage('success');
+      })
+      .catch((e: any) => {
+        setError(e?.message || 'Failed to save screens');
+        setScreensSaveMessage(null);
+      })
+      .finally(() => setSavingScreens(false));
   };
 
   if (!canView) {
@@ -191,7 +322,7 @@ export default function UserManagement() {
         {canCreate && (
           <button
             type="button"
-            onClick={() => { setShowCreateModal(true); setCreateError(null); setCreateForm({ username: '', password: '', name: '', role: 'VIEWER' }); }}
+            onClick={() => { setShowCreateModal(true); setCreateError(null); setCreateForm({ username: '', password: '', name: '', role: 'VIEWER', allowedDomains: [] }); }}
             className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
           >
             <UserPlus size={18} /> New User
@@ -212,6 +343,7 @@ export default function UserManagement() {
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">User</th>
                 <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">Role</th>
+                <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">Screens</th>
                 <th className="px-6 py-5 text-right text-xs font-black text-slate-400 uppercase tracking-widest">Actions</th>
               </tr>
             </thead>
@@ -234,7 +366,23 @@ export default function UserManagement() {
                       {u.role}
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right">
+                  <td className="px-6 py-5">
+                    <span className="text-sm text-slate-600">
+                      {Array.isArray(u.allowedDomains) && u.allowedDomains.length > 0
+                        ? u.allowedDomains.map((d) => SCREEN_OPTIONS.find((s) => s.value === d)?.label || d).join(', ')
+                        : 'All'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-right flex items-center justify-end gap-2">
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(u)}
+                        className="px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 font-bold text-sm hover:bg-slate-100 transition-colors flex items-center gap-1.5"
+                      >
+                        <Pencil size={14} /> Edit
+                      </button>
+                    )}
                     {canManage && (
                       <button
                         type="button"
@@ -299,6 +447,37 @@ export default function UserManagement() {
               ) : (
                 <span className="text-xs font-bold text-amber-600 ml-2">Custom</span>
               )}
+            </div>
+            <div className="px-8 py-4 border-b border-slate-100 bg-slate-50/50">
+              <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">Screens this user can access</h3>
+              <p className="text-xs text-slate-500 mb-3">Choose which hubs (Import, Export, Licence, Sales Indent) this user sees after login. Click <strong>Save screens</strong> to apply. The user must log out and log back in (or use Switch Domain) to see the change.</p>
+              <div className="flex flex-wrap gap-4 mb-4">
+                {SCREEN_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={modalAllowedDomains.includes(opt.value)}
+                      onChange={() => toggleModalScreen(opt.value)}
+                      disabled={savingScreens}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm font-medium text-slate-700">{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleSaveScreens}
+                  disabled={savingScreens || modalAllowedDomains.length === 0}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  {savingScreens ? 'Saving…' : 'Save screens'}
+                </button>
+                {screensSaveMessage === 'success' && (
+                  <span className="text-sm font-medium text-emerald-600">Screens saved. User should log out and back in (or use Switch Domain) to see the change.</span>
+                )}
+              </div>
             </div>
             <div className="overflow-y-auto flex-1 p-8 space-y-6">
               {groups.map((g) => (
@@ -389,6 +568,23 @@ export default function UserManagement() {
                 />
               </div>
               <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Screens this user can access *</label>
+                <p className="text-xs text-slate-500 mb-2">Select which domains (Import, Export, Licence, Sales Indent) the user can see after login.</p>
+                <div className="flex flex-wrap gap-4">
+                  {SCREEN_OPTIONS.map((opt) => (
+                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={createForm.allowedDomains.includes(opt.value)}
+                        onChange={() => toggleCreateScreen(opt.value)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-sm font-medium text-slate-700">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Role</label>
                 <select
                   value={createForm.role}
@@ -416,6 +612,111 @@ export default function UserManagement() {
                   className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-50 transition-colors shadow-lg shadow-indigo-100"
                 >
                   {creating ? 'Creating…' : 'Create user'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editUser && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => !savingEdit && setEditUser(null)}>
+          <div
+            className="bg-white rounded-[2.5rem] shadow-2xl max-w-md w-full p-8 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => !savingEdit && setEditUser(null)}
+              className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors"
+              aria-label="Close"
+            >
+              <X size={22} />
+            </button>
+            <h2 className="text-xl font-black text-slate-900 mb-6">Edit user</h2>
+            {editError && (
+              <div className="mb-6 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm font-medium">
+                {editError}
+              </div>
+            )}
+            <form onSubmit={handleSaveEdit} className="space-y-5">
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Username *</label>
+                <input
+                  type="text"
+                  value={editForm.username}
+                  onChange={(e) => setEditForm((f) => ({ ...f, username: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  placeholder="e.g. jane.doe"
+                  autoComplete="username"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Display name *</label>
+                <input
+                  type="text"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  placeholder="e.g. Jane Doe"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">New password (leave blank to keep current)</label>
+                <input
+                  type="password"
+                  value={editForm.password}
+                  onChange={(e) => setEditForm((f) => ({ ...f, password: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  placeholder="••••••••"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Screens this user can access *</label>
+                <div className="flex flex-wrap gap-4">
+                  {SCREEN_OPTIONS.map((opt) => (
+                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editForm.allowedDomains.includes(opt.value)}
+                        onChange={() => toggleEditScreen(opt.value)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-sm font-medium text-slate-700">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Role</label>
+                <select
+                  value={editForm.role}
+                  onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white"
+                >
+                  <option value="VIEWER">Viewer</option>
+                  <option value="CHECKER">Checker</option>
+                  <option value="EXECUTIONER">Executioner</option>
+                  <option value="MANAGEMENT">Management</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => !savingEdit && setEditUser(null)}
+                  className="px-6 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-50 transition-colors"
+                  disabled={savingEdit}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEdit}
+                  className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-50 transition-colors shadow-lg shadow-indigo-100"
+                >
+                  {savingEdit ? 'Saving…' : 'Save changes'}
                 </button>
               </div>
             </form>

@@ -84,6 +84,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     portOfLoading: '',
     portOfDischarge: '',
     expectedArrivalDate: '',
+    expectedShipmentDate: '',
     shipperSealNumber: '',
     lineSealNumber: ''
   });
@@ -130,7 +131,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [loadingDocFiles, setLoadingDocFiles] = useState(false);
   const [pendingOcrPayload, setPendingOcrPayload] = useState<{ file: File; data: any; docType: 'BOE' | 'SB' } | null>(null);
   const [editExportDoc, setEditExportDoc] = useState(false);
-  const [editLodgementOnly, setEditLodgementOnly] = useState(false);
   const [lodgementValue, setLodgementValue] = useState('');
   const [lodgementDateValue, setLodgementDateValue] = useState('');
   const [exportDocData, setExportDocData] = useState({
@@ -194,10 +194,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         if (dutyINT !== undefined) update.dutyINT = dutyINT;
         if (gstVal !== undefined) update.gst = gstVal;
       } else {
-        // Shipping Bill (export): only SB-section fields (no duty fields)
-        update.invoiceNumber = reviewed.number || null;
-        update.invoiceDate = reviewed.date || null;
+        // Shipping Bill (export): SB details + port + FOB (from SB OCR)
+        (update as any).sbNo = reviewed.number || null;
+        (update as any).sbDate = reviewed.date || null;
         update.expectedShipmentDate = reviewed.date || null;
+        update.portCode = reviewed.portCode || null;
         update.portOfLoading = reviewed.portCode || null;
         const val = parseNum(reviewed.invoiceValue);
         if (val !== undefined) update.fobValueFC = val;
@@ -254,6 +255,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       portOfLoading: shipment.portOfLoading || '',
       portOfDischarge: shipment.portOfDischarge || '',
       expectedArrivalDate: shipment.expectedArrivalDate || '',
+      expectedShipmentDate: shipment.expectedShipmentDate || '',
       shipperSealNumber: (shipment as any).shipperSealNumber || '',
       lineSealNumber: (shipment as any).lineSealNumber || ''
     });
@@ -274,14 +276,15 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       licenceObligationAmount: shipment.licenceObligationAmount ?? 0,
       licenceObligationQuantity: shipment.licenceObligationQuantity ?? 0
     });
+    const linkedLic = shipment.linkedLicenceId ? licences.find(l => l.id === shipment.linkedLicenceId) : null;
     setExportDocData({
       sbNo: (shipment as any).sbNo || '',
       sbDate: (shipment as any).sbDate || '',
       dbk: (shipment as any).dbk ?? 0,
       rodtep: (shipment as any).rodtep ?? 0,
       scripNo: (shipment as any).scripNo || '',
-      epcg: (shipment as any).epcg || '',
-      advLic: (shipment as any).advLic || '',
+      epcg: (shipment as any).epcg || (linkedLic?.type === LicenceType.EPCG ? linkedLic.id : '') || '',
+      advLic: (shipment as any).advLic || (linkedLic?.type === LicenceType.ADVANCE ? linkedLic.id : '') || '',
       lodgement: (shipment as any).lodgement || '',
       lodgementDate: (shipment as any).lodgementDate || '',
       ebrcNo: (shipment as any).ebrcNo || '',
@@ -292,7 +295,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setLodgementValue((shipment as any).lodgement || '');
     setLodgementDateValue((shipment as any).lodgementDate || '');
     setNewUpdate(prev => ({ ...prev, status: shipment.status }));
-  }, [shipment, editAll]);
+  }, [shipment, editAll, licences]);
 
   const isExport = !!(shipment?.buyerId);
   const partnerName = shipment
@@ -537,6 +540,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       if (isExport) {
         (updated as any).lodgement = lodgementValue || undefined;
         (updated as any).lodgementDate = lodgementDateValue || undefined;
+        // Link export to licence when EPCG or Advance Licence is selected (so Licence Tracker shows fulfilment)
+        const exportLicenceId = exportDocData.epcg || exportDocData.advLic || undefined;
+        updated.linkedLicenceId = exportLicenceId;
+        updated.isUnderLicence = !!exportLicenceId;
       } else {
         updated.isUnderLicence = !!licenceImportData.linkedLicenceId;
         updated.linkedLicenceId = licenceImportData.linkedLicenceId || undefined;
@@ -590,6 +597,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       portOfLoading: shipment.portOfLoading || '',
       portOfDischarge: shipment.portOfDischarge || '',
       expectedArrivalDate: shipment.expectedArrivalDate || '',
+      expectedShipmentDate: shipment.expectedShipmentDate || '',
       shipperSealNumber: (shipment as any).shipperSealNumber || '',
       lineSealNumber: (shipment as any).lineSealNumber || ''
     });
@@ -618,18 +626,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setEditExportDoc(false);
     setEditLogistics(false);
     setEditDuties(false);
-  };
-
-  const handleSaveLodgement = async () => {
-    try {
-      await onUpdate({ ...shipment, lodgement: lodgementValue, lodgementDate: lodgementDateValue || undefined });
-      setExportDocData((prev) => ({ ...prev, lodgement: lodgementValue, lodgementDate: lodgementDateValue }));
-      setEditLodgementOnly(false);
-    } catch (e: any) {
-      setToastVariant('error');
-      setToastMessage(e?.message || 'Failed to save.');
-      setTimeout(() => setToastMessage(null), 5000);
-    }
   };
 
   const handleAddPayment = async () => {
@@ -952,11 +948,88 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
             </div>
           </div>
 
-          {/* Export: Shipping Bill — SB No., Date, Exchange Rate, FOB FC, FOB INR, Port Code, Inco Term, DBK, RODTEP, Scrip No. */}
+          {/* Export: Bill of Lading details — BL number, date, container, seals, ports, expected shipment date */}
+          {isExport && (
+          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+               <h2 className="text-xs font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><FileText size={16} /> Bill of Lading Details</h2>
+            </div>
+            <div className="p-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Bill of Lading No.</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.blNumber} onChange={e => setLogisticsData({...logisticsData, blNumber: e.target.value})} placeholder="e.g. BL123" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.blNumber || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">BL Date</label>
+                  {editAll ? (
+                    <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.blDate} onChange={e => setLogisticsData({...logisticsData, blDate: e.target.value})} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.blDate ? formatDate(logisticsData.blDate) : '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Container Number</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.containerNumber} onChange={e => setLogisticsData({...logisticsData, containerNumber: e.target.value})} placeholder="e.g. MSKU1234567" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.containerNumber || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipper / Custom Seal Number</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.shipperSealNumber} onChange={e => setLogisticsData({...logisticsData, shipperSealNumber: e.target.value})} placeholder="e.g. seal no." />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.shipperSealNumber || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Line Seal Number</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.lineSealNumber} onChange={e => setLogisticsData({...logisticsData, lineSealNumber: e.target.value})} placeholder="e.g. line seal" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.lineSealNumber || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port of Loading</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.portOfLoading} onChange={e => setLogisticsData({...logisticsData, portOfLoading: e.target.value})} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.portOfLoading || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port of Discharge</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.portOfDischarge} onChange={e => setLogisticsData({...logisticsData, portOfDischarge: e.target.value})} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.portOfDischarge || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Expected Shipment Date</label>
+                  {editAll ? (
+                    <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.expectedShipmentDate} onChange={e => setLogisticsData({...logisticsData, expectedShipmentDate: e.target.value})} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.expectedShipmentDate ? formatDate(logisticsData.expectedShipmentDate) : '—'}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* Export: Shipping Bill details — SB number, date, port code, inco term, exchange rate, FOB FC/INR, DBK, RODTEP, scrip, licence selection */}
           {isExport && (
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-amber-50/50">
-               <h2 className="text-xs font-black uppercase text-amber-700 tracking-widest flex items-center gap-2"><FileText size={16} /> Shipping Bill (Export)</h2>
+               <h2 className="text-xs font-black uppercase text-amber-700 tracking-widest flex items-center gap-2"><FileText size={16} /> Shipping Bill Details</h2>
             </div>
             <div className="p-8">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -977,6 +1050,27 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   )}
                 </div>
                 <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port Code</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.portCode} onChange={e => setLogisticsData({...logisticsData, portCode: e.target.value})} placeholder="e.g. INMUN" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.portCode || '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Inco Term</label>
+                  {editAll ? (
+                    <select className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.incoTerm} onChange={e => setExportDocData({...exportDocData, incoTerm: e.target.value})}>
+                      <option value="FOB">FOB</option>
+                      <option value="CIF">CIF</option>
+                      <option value="EXW">EXW</option>
+                      <option value="DDP">DDP</option>
+                    </select>
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{exportDocData.incoTerm || '—'}</p>
+                  )}
+                </div>
+                <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Exchange Rate (to INR)</label>
                   {editAll ? (
                     <input type="number" step="0.01" min="0" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.exchangeRate || ''} onChange={e => setExportDocData({...exportDocData, exchangeRate: parseFloat(e.target.value) || 0})} placeholder="e.g. 84" />
@@ -986,19 +1080,15 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 </div>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">FOB Value (FC)</label>
-                  <p className="text-sm font-bold text-slate-800">{formatCurrency(shipment.fobValueFC ?? shipment.amount, shipment.currency)}</p>
+                  {editAll ? (
+                    <input type="number" step="any" min="0" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={invoiceEditData.amountFC ?? shipment.fobValueFC ?? ''} onChange={e => setInvoiceEditData(prev => ({ ...prev, amountFC: parseFloat(e.target.value) || 0 }))} placeholder="0" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{formatCurrency(shipment.fobValueFC ?? shipment.amount, shipment.currency)}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">FOB Value (INR)</label>
                   <p className="text-sm font-bold text-slate-800">{formatINR(shipment.fobValueINR ?? (shipment.amount * (shipment.exchangeRate || 1)))}</p>
-                </div>
-                <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port Code</label>
-                  {editAll ? (
-                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.portCode} onChange={e => setLogisticsData({...logisticsData, portCode: e.target.value})} placeholder="e.g. INMUN" />
-                  ) : (
-                    <p className="text-sm font-bold text-slate-800">{logisticsData.portCode || '—'}</p>
-                  )}
                 </div>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">DBK</label>
@@ -1025,24 +1115,30 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   )}
                 </div>
                 <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Inco Term</label>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">EPCG Licence</label>
                   {editAll ? (
-                    <select className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={exportDocData.incoTerm} onChange={e => setExportDocData({...exportDocData, incoTerm: e.target.value})}>
-                      <option value="FOB">FOB</option>
-                      <option value="CIF">CIF</option>
-                      <option value="EXW">EXW</option>
-                      <option value="DDP">DDP</option>
+                    <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={exportDocData.epcg} onChange={e => setExportDocData({...exportDocData, epcg: e.target.value})}>
+                      <option value="">— Select EPCG —</option>
+                      {licences.filter(l => l.type === LicenceType.EPCG && l.company === shipment.company && l.status === 'ACTIVE').map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
                     </select>
-                  ) : (
-                    <p className="text-sm font-bold text-slate-800">{exportDocData.incoTerm || '—'}</p>
-                  )}
+                  ) : <p className="font-bold text-slate-800">{exportDocData.epcg ? (licences.find(l => l.id === exportDocData.epcg)?.number || exportDocData.epcg) : '—'}</p>}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Advance Licence</label>
+                  {editAll ? (
+                    <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={exportDocData.advLic} onChange={e => setExportDocData({...exportDocData, advLic: e.target.value})}>
+                      <option value="">— Select Advance —</option>
+                      {licences.filter(l => l.type === LicenceType.ADVANCE && l.company === shipment.company && l.status === 'ACTIVE').map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
+                    </select>
+                  ) : <p className="font-bold text-slate-800">{exportDocData.advLic ? (licences.find(l => l.id === exportDocData.advLic)?.number || exportDocData.advLic) : '—'}</p>}
                 </div>
               </div>
             </div>
           </div>
           )}
 
-          {/* 3. Shipment Details */}
+          {/* Shipment Details (Import only — export uses Invoice → Bill of Lading → Shipping Bill → Payment) */}
+          {!isExport && (
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
                <h2 className="text-xs font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Ship size={16} /> Shipment Details</h2>
@@ -1065,22 +1161,26 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                       <p className="text-sm font-bold text-slate-800">{logisticsData.containerNumber || '---'}</p>
                     )}
                   </div>
-                  <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipper / Custom Seal Number</label>
-                    {editAll ? (
-                      <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.shipperSealNumber} onChange={e => setLogisticsData({...logisticsData, shipperSealNumber: e.target.value})} placeholder="e.g. seal no." />
-                    ) : (
-                      <p className="text-sm font-bold text-slate-800">{logisticsData.shipperSealNumber || '—'}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Line Seal Number</label>
-                    {editAll ? (
-                      <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.lineSealNumber} onChange={e => setLogisticsData({...logisticsData, lineSealNumber: e.target.value})} placeholder="e.g. line seal" />
-                    ) : (
-                      <p className="text-sm font-bold text-slate-800">{logisticsData.lineSealNumber || '—'}</p>
-                    )}
-                  </div>
+                  {isExport && (
+                    <>
+                      <div>
+                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipper / Custom Seal Number</label>
+                        {editAll ? (
+                          <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.shipperSealNumber} onChange={e => setLogisticsData({...logisticsData, shipperSealNumber: e.target.value})} placeholder="e.g. seal no." />
+                        ) : (
+                          <p className="text-sm font-bold text-slate-800">{logisticsData.shipperSealNumber || '—'}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Line Seal Number</label>
+                        {editAll ? (
+                          <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.lineSealNumber} onChange={e => setLogisticsData({...logisticsData, lineSealNumber: e.target.value})} placeholder="e.g. line seal" />
+                        ) : (
+                          <p className="text-sm font-bold text-slate-800">{logisticsData.lineSealNumber || '—'}</p>
+                        )}
+                      </div>
+                    </>
+                  )}
                   <div className="grid grid-cols-2 gap-4">
                      <div>
                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port of Loading</label>
@@ -1140,41 +1240,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </div>
             </div>
           </div>
-
-          {/* Export: Further info — EPCG & Advance Licence only; e-BRC is in Payment Ledger */}
-          {isExport && (
-          <>
-          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
-               <h2 className="text-xs font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><FileText size={16} /> Further Info</h2>
-            </div>
-            <div className="p-8 space-y-6">
-              <div>
-                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">EPCG & Advance Licence</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase mb-1">EPCG Licence</label>
-                    {editAll ? (
-                      <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={exportDocData.epcg} onChange={e => setExportDocData({...exportDocData, epcg: e.target.value})}>
-                        <option value="">— Select EPCG —</option>
-                        {licences.filter(l => l.type === LicenceType.EPCG && l.status === 'ACTIVE').map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
-                      </select>
-                    ) : <p className="font-bold text-slate-800">{exportDocData.epcg ? (licences.find(l => l.id === exportDocData.epcg)?.number || exportDocData.epcg) : '—'}</p>}
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase mb-1">Advance Licence</label>
-                    {editAll ? (
-                      <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={exportDocData.advLic} onChange={e => setExportDocData({...exportDocData, advLic: e.target.value})}>
-                        <option value="">— Select Advance —</option>
-                        {licences.filter(l => l.type === LicenceType.ADVANCE && l.status === 'ACTIVE').map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
-                      </select>
-                    ) : <p className="font-bold text-slate-800">{exportDocData.advLic ? (licences.find(l => l.id === exportDocData.advLic)?.number || exportDocData.advLic) : '—'}</p>}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          </>
           )}
 
           {/* Bill of Entry (Import only) */}
@@ -1340,6 +1405,29 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                  <Plus size={14} /> Add Payment
                </button>
              </div>
+             {isExport && (
+             <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/30">
+               <p className="text-[10px] text-slate-500 mb-3">Lodgement is filed with the bank; the bank gives a lodgement number. Incoming payment is settled against this lodgement no.</p>
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 <div>
+                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Lodgement No.</label>
+                   {editAll ? (
+                     <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={lodgementValue} onChange={e => setLodgementValue(e.target.value)} placeholder="Bank lodgement number" />
+                   ) : (
+                     <p className="text-sm font-bold text-slate-800">{(shipment as any).lodgement || '—'}</p>
+                   )}
+                 </div>
+                 <div>
+                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Lodgement Date</label>
+                   {editAll ? (
+                     <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={lodgementDateValue} onChange={e => setLodgementDateValue(e.target.value)} />
+                   ) : (
+                     <p className="text-sm font-bold text-slate-800">{(shipment as any).lodgementDate ? formatDate((shipment as any).lodgementDate) : '—'}</p>
+                   )}
+                 </div>
+               </div>
+             </div>
+             )}
              <div className="px-6 py-4 grid grid-cols-2 gap-4 border-b border-slate-100 bg-slate-50/30">
                <div><p className="text-[9px] font-black uppercase text-slate-400">Total ({shipment.currency})</p><p className="text-sm font-black text-slate-800">{formatCurrency(paymentSummary.totalFC, shipment.currency)}</p></div>
                <div><p className="text-[9px] font-black uppercase text-amber-600">Pending</p><p className="text-sm font-black text-amber-700">{formatCurrency(paymentSummary.pendingFC, shipment.currency)}</p></div>
@@ -1373,34 +1461,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                ) : (
                  <button type="button" onClick={handleMarkLCSettled} className="mt-3 px-4 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-emerald-700">Mark LC as settled</button>
                )}
-             </div>
-             )}
-             {isExport && (
-             <div className="px-6 py-4 bg-amber-50/50 border-b border-slate-100">
-               <p className="text-[10px] text-slate-500 mb-2">Lodgement is filed with the bank; the bank gives a lodgement number. Incoming payment is settled against this lodgement no.</p>
-               <div className="flex items-center gap-4 flex-wrap mb-3">
-                 <span className="text-[10px] font-black uppercase text-slate-500">Lodgement No.</span>
-                 {canEdit && editLodgementOnly ? (
-                   <>
-                     <input className="flex-1 min-w-[200px] max-w-xs px-3 py-2 border rounded-lg font-bold text-sm" value={lodgementValue} onChange={e => setLodgementValue(e.target.value)} placeholder="Bank lodgement number" />
-                     <button type="button" onClick={handleSaveLodgement} className="text-[10px] font-black uppercase text-emerald-600 hover:text-emerald-700">Save</button>
-                     <button type="button" onClick={() => { setEditLodgementOnly(false); setLodgementValue((shipment as any).lodgement || ''); setLodgementDateValue((shipment as any).lodgementDate || ''); }} className="text-[10px] font-black uppercase text-slate-500">Cancel</button>
-                   </>
-                 ) : (
-                   <>
-                     <span className="font-bold text-slate-800">{(shipment as any).lodgement || '—'}</span>
-                     {canEdit && <button type="button" onClick={() => setEditLodgementOnly(true)} className="text-[10px] font-black uppercase text-amber-600 hover:text-amber-700">Edit</button>}
-                   </>
-                 )}
-               </div>
-               <div className="flex items-center gap-4 flex-wrap">
-                 <span className="text-[10px] font-black uppercase text-slate-500">Lodgement Date</span>
-                 {canEdit && editLodgementOnly ? (
-                   <input type="date" className="px-3 py-2 border rounded-lg font-bold text-sm" value={lodgementDateValue} onChange={e => setLodgementDateValue(e.target.value)} />
-                 ) : (
-                   <span className="font-bold text-slate-800">{(shipment as any).lodgementDate ? formatDate((shipment as any).lodgementDate) : '—'}</span>
-                 )}
-               </div>
              </div>
              )}
              <div className="p-6">
@@ -1553,6 +1613,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      <h3 className="text-[10px] font-black uppercase text-slate-500 mb-3">Upload file</h3>
                      <ShipmentUpload
                        shipmentId={shipment.id}
+                       isExport={isExport}
                        onUploadSuccess={refetchFolderFiles}
                        onShipmentNotFound={async () => {
                          try {
@@ -1745,7 +1806,22 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       <OcrReviewModal
         open={!!pendingOcrPayload}
         isExport={pendingOcrPayload?.docType === 'SB'}
-        initialData={pendingOcrPayload?.data ?? {}}
+        initialData={
+          pendingOcrPayload?.docType === 'BOE'
+            ? {
+                beNumber: pendingOcrPayload.data?.beNumber ?? null,
+                date: pendingOcrPayload.data?.date ?? null,
+                portCode: pendingOcrPayload.data?.portCode ?? null,
+                invoiceValue: pendingOcrPayload.data?.invoiceValue ?? null,
+                dutyBCD: pendingOcrPayload.data?.dutyBCD ?? null,
+                dutySWS: pendingOcrPayload.data?.dutySWS ?? null,
+                dutyINT: pendingOcrPayload.data?.dutyINT ?? null,
+                gst: pendingOcrPayload.data?.gst ?? null,
+                source: pendingOcrPayload.data?.source ?? null,
+                confidence: pendingOcrPayload.data?.confidence ?? null,
+              }
+            : (pendingOcrPayload?.data ?? {})
+        }
         viewFile={pendingOcrPayload?.file ?? null}
         onConfirm={handleOcrConfirm}
         onCancel={() => setPendingOcrPayload(null)}

@@ -118,6 +118,8 @@ export interface User {
   name: string;
   /** Granular permission strings (e.g. 'shipments.view'). Synced from /api/auth/me. */
   permissions?: string[];
+  /** Allowed app domains/screens (IMPORT, EXPORT, LICENCE, SALES_INDENT). Empty/undefined = all. */
+  allowedDomains?: AppDomain[];
 }
 
 export enum SupplierStatus {
@@ -449,6 +451,8 @@ export const EXPORT_DOCUMENT_CHECKLIST = [
   { id: 'SB', label: 'Shipping Bill', prefix: 'SB_' },
   { id: 'BL', label: 'Bill of Lading', prefix: 'BL_' },
   { id: 'LODGE', label: 'Lodgement', prefix: 'LODGE_' },
+  { id: 'LODGE_ADV', label: 'Lodgement Advise', prefix: 'LODGE_ADV_' },
+  { id: 'EBRC', label: 'E-BRC', prefix: 'EBRC_' },
 ];
 
 export const STANDARDISED_UNITS = [

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Supplier, Shipment, Licence, LetterOfCredit, AppDomain, Buyer } from '../types';
 import { api } from '../api';
 
@@ -13,6 +13,7 @@ export interface UseAppDataReturn {
     lcs: LetterOfCredit[];
     connectionMode: 'SQL' | 'OFFLINE';
     isLoading: boolean;
+    refreshingUserForSelector?: boolean;
   };
   actions: {
     setDomain: (domain: AppDomain | null) => void;
@@ -43,6 +44,8 @@ export function useAppData(): UseAppDataReturn {
   const [lcs, setLcs] = useState<LetterOfCredit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [connectionMode, setConnectionMode] = useState<'SQL' | 'OFFLINE'>('SQL');
+  const [refreshingUserForSelector, setRefreshingUserForSelector] = useState(false);
+  const selectorRefetchDone = useRef(false);
 
   const loadAllData = useCallback(async () => {
     try {
@@ -93,7 +96,11 @@ export function useAppData(): UseAppDataReturn {
     }
 
     const init = async () => {
+      // Set server online/offline from health check first (no auth), so UI shows correct status
+      await api.system.ping();
+      setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
       await loadAllData();
+      setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
       const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
       if (token) {
         try {
@@ -104,15 +111,52 @@ export function useAppData(): UseAppDataReturn {
             name: me.name,
             role: me.role as import('../types').UserRole,
             permissions: me.permissions,
+            allowedDomains: Array.isArray(me.allowedDomains) ? me.allowedDomains as AppDomain[] : undefined,
           };
           setUser(updated);
           localStorage.setItem('user', JSON.stringify(updated));
+          // If user has restricted screens, clear saved domain if it's no longer allowed
+          if (Array.isArray(updated.allowedDomains) && updated.allowedDomains.length > 0) {
+            const saved = typeof window !== 'undefined' ? localStorage.getItem('domain') : null;
+            if (saved && saved !== 'undefined' && saved !== 'null' && !updated.allowedDomains.includes(saved as AppDomain)) {
+              localStorage.removeItem('domain');
+              setDomain(null);
+            }
+          }
         } catch (_) {}
       }
       setIsLoading(false);
     };
     init();
   }, [loadAllData]);
+
+  // When domain is null (hub selector screen), refetch user so allowedDomains is always fresh
+  useEffect(() => {
+    if (!user || domain !== null) {
+      selectorRefetchDone.current = false;
+      return;
+    }
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (!token) return;
+    if (selectorRefetchDone.current) return;
+    selectorRefetchDone.current = true;
+    setRefreshingUserForSelector(true);
+    api.auth.me()
+      .then((me) => {
+        const updated: User = {
+          id: me.id,
+          username: me.username,
+          name: me.name,
+          role: me.role as import('../types').UserRole,
+          permissions: me.permissions,
+          allowedDomains: Array.isArray(me.allowedDomains) ? me.allowedDomains as AppDomain[] : undefined,
+        };
+        setUser(updated);
+        localStorage.setItem('user', JSON.stringify(updated));
+      })
+      .catch(() => {})
+      .finally(() => setRefreshingUserForSelector(false));
+  }, [user, domain]);
 
   useEffect(() => {
     if (!user || !domain) return;
@@ -216,25 +260,33 @@ export function useAppData(): UseAppDataReturn {
     localStorage.removeItem('token');
   }, []);
 
-  const selectDomain = useCallback((d: AppDomain) => {
+  const setDomainWithStorage = useCallback((d: AppDomain | null) => {
     setDomain(d);
-    localStorage.setItem('domain', d);
+    if (typeof window !== 'undefined') {
+      if (d === null) localStorage.removeItem('domain');
+      else localStorage.setItem('domain', d);
+    }
   }, []);
 
+  const selectDomain = useCallback((d: AppDomain) => {
+    setDomainWithStorage(d);
+  }, [setDomainWithStorage]);
+
   return {
-    data: {
-      user,
-      domain,
-      suppliers,
-      buyers,
-      shipments,
-      licences,
-      lcs,
-      connectionMode,
-      isLoading,
-    },
+  data: {
+    user,
+    domain,
+    suppliers,
+    buyers,
+    shipments,
+    licences,
+    lcs,
+    connectionMode,
+    isLoading,
+    refreshingUserForSelector,
+  },
     actions: {
-      setDomain,
+      setDomain: setDomainWithStorage,
       handleLogin,
       handleLogout,
       selectDomain,

@@ -2,7 +2,14 @@ const path = require('path');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 
-/** Local folder for scanned docs (Z: Drive / shared path): documents/[InvoiceNumber]/Scanned_Docs/ */
+/**
+ * Folder structure for shipment documents:
+ *   [Import Shipment Documents] or [Export Shipment Documents]   (two separate roots)
+ *     └── [Gujarat Flotex Pvt Ltd] or [GTEX Fabrics Pvt Ltd]    (company)
+ *           └── [PartnerName_InvoiceNo]                          (e.g. Reliance_87)
+ *                 └── uploaded/scanned files
+ * All uploads and scans for a shipment (from the shipment detail page) save into that shipment's folder.
+ */
 const DOCUMENTS_BASE = process.env.DOCUMENTS_BASE
   ? path.resolve(process.env.DOCUMENTS_BASE)
   : path.join(PROJECT_ROOT, 'documents');
@@ -22,11 +29,12 @@ function resolveDocBase(envValue) {
   return path.resolve(PROJECT_ROOT, s);
 }
 
-// UNC or local paths from .env (e.g. \\192.168.1.70\Import Shipment Documents or ./documents/Import Shipment Documents)
+// Two separate roots: Import and Export. Set via .env (e.g. IMPORT_BASE, EXPORT_BASE or SHIPMENT_DOCS_BASE / EXPORT_SHIPMENT_DOCS_BASE).
 const IMPORT_BASE_RAW = process.env.SHIPMENT_DOCS_BASE || process.env.IMPORT_BASE;
 const EXPORT_BASE_RAW = process.env.EXPORT_SHIPMENT_DOCS_BASE || process.env.EXPORT_BASE;
 const IMPORT_DOCS_BASE = IMPORT_BASE_RAW ? resolveDocBase(IMPORT_BASE_RAW) : path.join(PROJECT_ROOT, 'documents', 'Import Shipment Documents');
 const EXPORT_DOCS_BASE = EXPORT_BASE_RAW ? resolveDocBase(EXPORT_BASE_RAW) : path.join(PROJECT_ROOT, 'documents', 'Export Shipment Documents');
+// Under each root: one folder per company (Gujarat Flotex, GTEX Fabrics).
 const COMPANY_FOLDER = { GFPL: 'Gujarat Flotex Pvt Ltd', GTEX: 'GTEX Fabrics Pvt Ltd' };
 
 /** Sales Indent: company master (name, address, GSTIN, IEC, bank details) */

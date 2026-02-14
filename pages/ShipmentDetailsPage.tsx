@@ -145,6 +145,7 @@ const ShipmentDetailsPage: React.FC = () => {
           <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm space-y-6">
             <ShipmentUpload
               shipmentId={shipment.id}
+              isExport={!!shipment.buyerId}
               onUploadSuccess={handleUploadSuccess}
             />
 

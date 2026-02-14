@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
 import { Shipment, Supplier, Buyer, User, UserRole, Licence } from '../types';
-import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square } from 'lucide-react';
+import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square, Calendar } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
 import { usePermissions } from '../hooks/usePermissions';
@@ -21,6 +21,41 @@ interface ShipmentMasterProps {
 }
 
 type SortKey = 'date_new' | 'date_old' | 'value_high' | 'value_low';
+
+type DateRangePreset = '2m' | '3m' | '6m' | '1y' | 'all';
+
+const DATE_RANGE_OPTIONS: { value: DateRangePreset; label: string }[] = [
+  { value: '2m', label: 'Last 2 months' },
+  { value: '3m', label: 'Last 3 months' },
+  { value: '6m', label: 'Last 6 months' },
+  { value: '1y', label: 'Last 1 year' },
+  { value: 'all', label: 'All time' },
+];
+
+function getDateRangeForPreset(preset: DateRangePreset): { start: Date; end: Date } {
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  const start = new Date();
+  if (preset === 'all') {
+    start.setFullYear(2000, 0, 1);
+    start.setHours(0, 0, 0, 0);
+    return { start, end };
+  }
+  start.setHours(0, 0, 0, 0);
+  if (preset === '2m') start.setMonth(start.getMonth() - 2);
+  else if (preset === '3m') start.setMonth(start.getMonth() - 3);
+  else if (preset === '6m') start.setMonth(start.getMonth() - 6);
+  else if (preset === '1y') start.setFullYear(start.getFullYear() - 1);
+  return { start, end };
+}
+
+/** Shipment date used for range filter: invoice date when set, else created date. */
+function getShipmentDate(sh: Shipment): Date {
+  const raw = sh.invoiceDate || sh.createdAt;
+  if (!raw) return new Date(0);
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? new Date(0) : d;
+}
 
 /** Column key, label, and whether to include by default in Excel export. Excluded by default: tracking, file status, documents, JSON blobs. */
 const EXPORT_COLUMN_DEFS: { key: string; label: string; defaultSelected: boolean; exportOnly?: boolean }[] = [
@@ -94,6 +129,7 @@ const EXPORT_COLUMN_DEFS: { key: string; label: string; defaultSelected: boolean
 const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, buyers, licences = [], user, isExport = false, onAddShipment, onUpdateShipment, onDeleteShipment }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [companyFilter, setCompanyFilter] = useState('ALL');
+  const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>('2m');
   const [sortOrder, setSortOrder] = useState<SortKey>('date_new');
   const [showAddForm, setShowAddForm] = useState(false);
   const [showExportColumnsModal, setShowExportColumnsModal] = useState(false);
@@ -120,8 +156,20 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     return suppliers.find(s => s.id === sh.supplierId)?.name || sh.supplierId || 'Unknown Vendor';
   };
 
+  const { start: dateRangeStart, end: dateRangeEnd } = useMemo(
+    () => getDateRangeForPreset(dateRangePreset),
+    [dateRangePreset]
+  );
+
   const filteredAndSorted = useMemo(() => {
     let result = shipments.filter(sh => isExport ? !!sh.buyerId : !!sh.supplierId);
+
+    if (dateRangePreset !== 'all') {
+      result = result.filter(sh => {
+        const d = getShipmentDate(sh);
+        return d >= dateRangeStart && d <= dateRangeEnd;
+      });
+    }
 
     if (searchTerm) {
       result = result.filter(sh => 
@@ -145,7 +193,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     });
 
     return result;
-  }, [shipments, searchTerm, companyFilter, sortOrder, isExport]);
+  }, [shipments, searchTerm, companyFilter, sortOrder, isExport, dateRangePreset, dateRangeStart, dateRangeEnd]);
 
   const getProductNames = (sh: Shipment) => (sh.items && sh.items.length) ? sh.items.map(i => i.productName).join(', ') : (sh as any).productName || '—';
   /** Import: only payments marked as received count toward Paid/Partial */
@@ -374,7 +422,20 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
             onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Calendar size={16} className="text-slate-400 shrink-0" />
+            <select
+              className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
+              value={dateRangePreset}
+              onChange={e => setDateRangePreset(e.target.value as DateRangePreset)}
+              title="Show shipments by date range"
+            >
+              {DATE_RANGE_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
           <select className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold" value={companyFilter} onChange={e => setCompanyFilter(e.target.value)}>
             <option value="ALL">All Companies</option>
             {COMPANY_OPTIONS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}

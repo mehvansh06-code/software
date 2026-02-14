@@ -2,14 +2,28 @@ import React from 'react';
 import { AppDomain, UserRole } from '../types';
 import { Package, Ship, TrendingUp, LogOut, ArrowRight, Grid, ShieldCheck, Award, FileText } from 'lucide-react';
 
+const ALL_DOMAINS: { domain: AppDomain; label: string }[] = [
+  { domain: AppDomain.IMPORT, label: 'Import' },
+  { domain: AppDomain.EXPORT, label: 'Export' },
+  { domain: AppDomain.LICENCE, label: 'Licence' },
+  { domain: AppDomain.SALES_INDENT, label: 'Sales Indent' },
+];
+
 interface DomainSelectorProps {
   onSelect: (domain: AppDomain) => void;
   userName: string;
   role: UserRole;
+  /** If set, only these domains are shown. If empty/undefined, all domains are shown. */
+  allowedDomains?: AppDomain[] | null;
   onLogout: () => void;
 }
 
-const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName, role, onLogout }) => {
+const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName, role, allowedDomains, onLogout }) => {
+  const domainsToShow =
+    Array.isArray(allowedDomains) && allowedDomains.length > 0
+      ? ALL_DOMAINS.filter((d) => allowedDomains.includes(d.domain))
+      : ALL_DOMAINS;
+
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 sm:p-6 relative overflow-hidden">
       {/* Dynamic Background Elements */}
@@ -32,85 +46,47 @@ const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName, rol
         </header>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-          {/* Import Card */}
-          <button 
-            onClick={() => onSelect(AppDomain.IMPORT)}
-            className="group relative bg-white p-5 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] shadow-xl shadow-indigo-100 border border-indigo-50 text-left transition-all hover:-translate-y-1 sm:hover:-translate-y-2 hover:shadow-2xl hover:border-indigo-200 min-h-[120px] active:scale-[0.99]"
-          >
-            <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 group-hover:bg-indigo-600 group-hover:text-white transition-all duration-500">
-              <Ship size={28} />
-            </div>
-            <h2 className="text-xl font-black text-slate-900 mb-3 tracking-tight">Import</h2>
-            <p className="text-slate-500 font-medium text-sm leading-relaxed mb-6">
-              Supply chain, supplier audits, shipment logistics, and customs documentation.
-            </p>
-            <div className="flex items-center gap-2 text-indigo-600 font-black text-xs uppercase tracking-widest">
-              Enter <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" />
-            </div>
-            <div className="absolute top-4 right-4 opacity-5 group-hover:opacity-10 transition-opacity">
-              <Package size={60} />
-            </div>
-          </button>
-
-          {/* Export Card */}
-          <button 
-            onClick={() => onSelect(AppDomain.EXPORT)}
-            className="group relative bg-white p-5 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] shadow-xl shadow-amber-100 border border-amber-50 text-left transition-all hover:-translate-y-1 sm:hover:-translate-y-2 hover:shadow-2xl hover:border-amber-200 min-h-[120px] active:scale-[0.99]"
-          >
-            <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 group-hover:bg-amber-600 group-hover:text-white transition-all duration-500">
-              <TrendingUp size={28} />
-            </div>
-            <h2 className="text-xl font-black text-slate-900 mb-3 tracking-tight">Export</h2>
-            <p className="text-slate-500 font-medium text-sm leading-relaxed mb-6">
-              Buyer onboarding, export shipments, bank realizations, and compliance.
-            </p>
-            <div className="flex items-center gap-2 text-amber-600 font-black text-xs uppercase tracking-widest">
-              Enter <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" />
-            </div>
-            <div className="absolute top-4 right-4 opacity-5 group-hover:opacity-10 transition-opacity">
-              <TrendingUp size={60} />
-            </div>
-          </button>
-
-          {/* Licence Card */}
-          <button 
-            onClick={() => onSelect(AppDomain.LICENCE)}
-            className="group relative bg-white p-5 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] shadow-xl shadow-emerald-100 border border-emerald-50 text-left transition-all hover:-translate-y-1 sm:hover:-translate-y-2 hover:shadow-2xl hover:border-emerald-200 min-h-[120px] active:scale-[0.99]"
-          >
-            <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 group-hover:bg-emerald-600 group-hover:text-white transition-all duration-500">
-              <Award size={28} />
-            </div>
-            <h2 className="text-xl font-black text-slate-900 mb-3 tracking-tight">Licence</h2>
-            <p className="text-slate-500 font-medium text-sm leading-relaxed mb-6">
-              Advance & EPCG licences, export obligations, and import utilization.
-            </p>
-            <div className="flex items-center gap-2 text-emerald-600 font-black text-xs uppercase tracking-widest">
-              Enter <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" />
-            </div>
-            <div className="absolute top-4 right-4 opacity-5 group-hover:opacity-10 transition-opacity">
-              <Award size={60} />
-            </div>
-          </button>
-
-          {/* Sales Indent Card */}
-          <button 
-            onClick={() => onSelect(AppDomain.SALES_INDENT)}
-            className="group relative bg-white p-5 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] shadow-xl shadow-rose-100 border border-rose-50 text-left transition-all hover:-translate-y-1 sm:hover:-translate-y-2 hover:shadow-2xl hover:border-rose-200 min-h-[120px] active:scale-[0.99]"
-          >
-            <div className="w-14 h-14 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 group-hover:bg-rose-600 group-hover:text-white transition-all duration-500">
-              <FileText size={28} />
-            </div>
-            <h2 className="text-xl font-black text-slate-900 mb-3 tracking-tight">Sales Indent</h2>
-            <p className="text-slate-500 font-medium text-sm leading-relaxed mb-6">
-              Proforma indents, domestic & export buyers, and document generation.
-            </p>
-            <div className="flex items-center gap-2 text-rose-600 font-black text-xs uppercase tracking-widest">
-              Enter <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" />
-            </div>
-            <div className="absolute top-4 right-4 opacity-5 group-hover:opacity-10 transition-opacity">
-              <FileText size={60} />
-            </div>
-          </button>
+          {domainsToShow.map(({ domain, label }) => {
+            const isImport = domain === AppDomain.IMPORT;
+            const isExport = domain === AppDomain.EXPORT;
+            const isLicence = domain === AppDomain.LICENCE;
+            const isSalesIndent = domain === AppDomain.SALES_INDENT;
+            const cardClass = isImport
+              ? 'bg-white shadow-indigo-100 border-indigo-50 hover:border-indigo-200 text-indigo-600'
+              : isExport
+              ? 'bg-white shadow-amber-100 border-amber-50 hover:border-amber-200 text-amber-600'
+              : isLicence
+              ? 'bg-white shadow-emerald-100 border-emerald-50 hover:border-emerald-200 text-emerald-600'
+              : 'bg-white shadow-rose-100 border-rose-50 hover:border-rose-200 text-rose-600';
+            const iconBg = isImport ? 'bg-indigo-50 group-hover:bg-indigo-600' : isExport ? 'bg-amber-50 group-hover:bg-amber-600' : isLicence ? 'bg-emerald-50 group-hover:bg-emerald-600' : 'bg-rose-50 group-hover:bg-rose-600';
+            const Icon = isImport ? Ship : isExport ? TrendingUp : isLicence ? Award : FileText;
+            const desc = isImport
+              ? 'Supply chain, supplier audits, shipment logistics, and customs documentation.'
+              : isExport
+              ? 'Buyer onboarding, export shipments, bank realizations, and compliance.'
+              : isLicence
+              ? 'Advance & EPCG licences, export obligations, and import utilization.'
+              : 'Proforma indents, domestic & export buyers, and document generation.';
+            return (
+              <button
+                key={domain}
+                onClick={() => onSelect(domain)}
+                className={`group relative p-5 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] shadow-xl border text-left transition-all hover:-translate-y-1 sm:hover:-translate-y-2 hover:shadow-2xl min-h-[120px] active:scale-[0.99] ${cardClass}`}
+              >
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 group-hover:text-white transition-all duration-500 ${iconBg}`}>
+                  <Icon size={28} />
+                </div>
+                <h2 className="text-xl font-black text-slate-900 mb-3 tracking-tight">{label}</h2>
+                <p className="text-slate-500 font-medium text-sm leading-relaxed mb-6">{desc}</p>
+                <div className={`flex items-center gap-2 font-black text-xs uppercase tracking-widest ${isImport ? 'text-indigo-600' : isExport ? 'text-amber-600' : isLicence ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  Enter <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" />
+                </div>
+                <div className="absolute top-4 right-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                  <Icon size={60} />
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         <footer className="mt-10 sm:mt-16 text-center">

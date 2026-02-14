@@ -39,6 +39,12 @@ const PERMISSIONS = {
   BUYERS_CREATE: 'buyers.create',
   BUYERS_EDIT: 'buyers.edit',
   BUYERS_DELETE: 'buyers.delete',
+  // Sales Indent (hub)
+  INDENT_VIEW: 'indent.view',
+  INDENT_GENERATE: 'indent.generate',
+  INDENT_DOMESTIC_BUYERS: 'indent.domestic_buyers',
+  INDENT_PRODUCTS: 'indent.products',
+  INDENT_EXPORT_BUYERS: 'indent.export_buyers',
   // Reports
   REPORTS_VIEW: 'reports.view',
   REPORTS_EXPORT: 'reports.export',
@@ -61,7 +67,7 @@ const ALL_VIEW_PERMISSIONS = ALL_PERMISSION_VALUES.filter((p) => p.endsWith('.vi
 /** VIEWER: All *.view permissions. */
 const VIEWER = [...ALL_VIEW_PERMISSIONS];
 
-/** CHECKER: All *.view plus create/edit for Shipments, Payments, Licences, LC, Suppliers, Buyers. */
+/** CHECKER: All *.view plus create/edit for Shipments, Payments, Licences, LC, Suppliers, Buyers, Indent. */
 const CHECKER = [
   ...ALL_VIEW_PERMISSIONS,
   PERMISSIONS.SHIPMENTS_CREATE,
@@ -76,6 +82,11 @@ const CHECKER = [
   PERMISSIONS.SUPPLIERS_EDIT,
   PERMISSIONS.BUYERS_CREATE,
   PERMISSIONS.BUYERS_EDIT,
+  PERMISSIONS.INDENT_VIEW,
+  PERMISSIONS.INDENT_GENERATE,
+  PERMISSIONS.INDENT_DOMESTIC_BUYERS,
+  PERMISSIONS.INDENT_PRODUCTS,
+  PERMISSIONS.INDENT_EXPORT_BUYERS,
 ];
 
 /** MANAGEMENT: All permissions. */
@@ -159,6 +170,17 @@ const PERMISSION_GROUPS = [
       PERMISSIONS.BUYERS_CREATE,
       PERMISSIONS.BUYERS_EDIT,
       PERMISSIONS.BUYERS_DELETE,
+    ],
+  },
+  {
+    id: 'indent',
+    label: 'Sales Indent',
+    permissions: [
+      PERMISSIONS.INDENT_VIEW,
+      PERMISSIONS.INDENT_GENERATE,
+      PERMISSIONS.INDENT_DOMESTIC_BUYERS,
+      PERMISSIONS.INDENT_PRODUCTS,
+      PERMISSIONS.INDENT_EXPORT_BUYERS,
     ],
   },
   {

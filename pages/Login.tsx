@@ -27,6 +27,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           name: result.user.name,
           role: result.user.role as UserRole,
           permissions: Array.isArray(result.user.permissions) ? result.user.permissions : undefined,
+          allowedDomains: Array.isArray(result.user.allowedDomains) ? result.user.allowedDomains as import('../types').AppDomain[] : undefined,
         };
         onLogin(user);
       } else {
