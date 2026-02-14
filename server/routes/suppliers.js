@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
+const { log: auditLog } = require('../services/auditService');
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -28,6 +29,8 @@ function createRouter(broadcast) {
         if (pid.valid) prodStmt.run(pid.value, idCheck.value, p.name, p.description, p.hsnCode, p.unit, p.type);
       }
     }
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'SUPPLIER_CREATED', idCheck.value, { name: s.name });
     res.json({ success: true });
     broadcast();
   });
@@ -47,6 +50,8 @@ function createRouter(broadcast) {
         if (pid.valid) prodStmt.run(pid.value, idCheck.value, p.name, p.description, p.hsnCode, p.unit, p.type);
       }
     }
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'SUPPLIER_UPDATED', idCheck.value, { name: s.name });
     res.json({ success: true });
     broadcast();
   });

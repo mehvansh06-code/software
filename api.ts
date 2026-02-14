@@ -458,5 +458,18 @@ export const api = {
       localStorage.removeItem(SIM_KEY);
       window.location.reload();
     }
+  },
+  auditLogs: {
+    list: (params?: { userId?: string; action?: string; targetId?: string; from?: string; to?: string; limit?: number }): Promise<any[]> => {
+      const q = new URLSearchParams();
+      if (params?.userId) q.set('userId', params.userId);
+      if (params?.action) q.set('action', params.action);
+      if (params?.targetId) q.set('targetId', params.targetId);
+      if (params?.from) q.set('from', params.from);
+      if (params?.to) q.set('to', params.to);
+      if (params?.limit != null) q.set('limit', String(params.limit));
+      const qs = q.toString();
+      return fetchApi('audit-logs' + (qs ? '?' + qs : ''));
+    },
   }
 };

@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
+const { log: auditLog } = require('../services/auditService');
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -23,6 +24,8 @@ function createRouter(broadcast) {
     const consigneesJson = (b.consignees && Array.isArray(b.consignees)) ? JSON.stringify(b.consignees) : null;
     const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'BUYER_CREATED', idCheck.value, { name: b.name });
     res.json({ success: true });
     broadcast();
   });
@@ -60,6 +63,8 @@ function createRouter(broadcast) {
         );
         count++;
       }
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'BUYERS_IMPORTED', null, { count, message: `Imported ${count} buyer(s)` });
       broadcast();
       res.json({ success: true, imported: count });
     } catch (e) {
@@ -76,6 +81,8 @@ function createRouter(broadcast) {
     const consigneesJson = (b.consignees && Array.isArray(b.consignees)) ? JSON.stringify(b.consignees) : null;
     const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'BUYER_UPDATED', idCheck.value, { name: b.name });
     res.json({ success: true });
     broadcast();
   });

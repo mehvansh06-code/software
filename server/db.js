@@ -187,6 +187,8 @@ runMigration('ALTER TABLE shipments ADD COLUMN advLicenceId TEXT', 'shipments.ad
 runMigration('ALTER TABLE lcs ADD COLUMN buyerId TEXT', 'lcs.buyerId');
 runMigration('ALTER TABLE lcs ADD COLUMN shipments_json TEXT', 'lcs.shipments_json');
 runMigration('ALTER TABLE lcs ADD COLUMN balanceAmount REAL', 'lcs.balanceAmount');
+runMigration('ALTER TABLE shipments ADD COLUMN dbk REAL', 'shipments.dbk');
+runMigration('ALTER TABLE shipments ADD COLUMN rodtep REAL', 'shipments.rodtep');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS lc_transactions (
@@ -364,6 +366,8 @@ function getShipmentValues(s, folderPath) {
     lineSealNumber: s.lineSealNumber || null,
     sbNo: s.sbNo || null,
     sbDate: s.sbDate || null,
+    dbk: s.dbk ?? null,
+    rodtep: s.rodtep ?? null,
   };
 }
 
@@ -377,7 +381,7 @@ const SHIPMENT_INSERT_SQL = `
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-    shipperSealNumber, lineSealNumber, sbNo, sbDate
+    shipperSealNumber, lineSealNumber, sbNo, sbDate, dbk, rodtep
   ) VALUES (
     :id, :supplierId, :buyerId, :productId, :invoiceNumber, :company, :amount, :currency, :exchangeRate, :rate, :quantity,
     :status, :expectedShipmentDate, :createdAt, :fobValueFC, :fobValueINR, :invoiceValueINR,
@@ -386,7 +390,7 @@ const SHIPMENT_INSERT_SQL = `
     :portCode, :portOfLoading, :portOfDischarge, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :gst, :trackingUrl,
     :incoTerm, :paymentDueDate, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
     :documents_json, :history_json, :payments_json, :items_json, :documentsFolderPath, :remarks, :consigneeId, :lcSettled,
-    :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate
+    :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate, :dbk, :rodtep
   )`;
 
 const SHIPMENT_INSERT_OR_REPLACE_SQL = SHIPMENT_INSERT_SQL.replace('INSERT INTO', 'INSERT OR REPLACE INTO');

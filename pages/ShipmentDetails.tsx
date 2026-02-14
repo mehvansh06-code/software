@@ -134,8 +134,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [lodgementValue, setLodgementValue] = useState('');
   const [lodgementDateValue, setLodgementDateValue] = useState('');
   const [exportDocData, setExportDocData] = useState({
-    sbNo: '', sbDate: '', dbk: 0, rodtep: 0, scripNo: '', epcg: '', advLic: '', lodgement: '', lodgementDate: '', ebrcNo: '', ebrcValue: 0, exchangeRate: Number(shipment?.exchangeRate) || 0, incoTerm: (shipment as any)?.incoTerm || 'FOB'
+    sbNo: '', sbDate: '', dbk: 0, rodtep: 0, scripNo: '', lodgement: '', lodgementDate: '', ebrcNo: '', ebrcValue: 0, exchangeRate: Number(shipment?.exchangeRate) || 0, incoTerm: (shipment as any)?.incoTerm || 'FOB'
   });
+  const [epcgLicenceId, setEpcgLicenceId] = useState('');
+  const [advLicenceId, setAdvLicenceId] = useState('');
   useEffect(() => {
     if (!shipment) return;
     if (shipment.documentsFolderPath) {
@@ -185,23 +187,38 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         update.portOfDischarge = reviewed.portCode || null;
         const val = parseNum(reviewed.invoiceValue);
         if (val !== undefined) update.assessedValue = val;
+        const exch = parseNum(reviewed.exchangeRate);
+        if (exch !== undefined) update.exchangeRate = exch;
+        if (reviewed.incoTerm !== undefined) (update as any).incoTerm = reviewed.incoTerm || null;
         const dutyBCD = parseNum(reviewed.dutyBCD);
         const dutySWS = parseNum(reviewed.dutySWS);
-        const dutyINT = parseNum(reviewed.dutyINT);
+        const intVal = parseNum(reviewed.dutyINT) ?? 0;
+        const penaltyVal = parseNum(reviewed.penalty) ?? 0;
+        const fineVal = parseNum(reviewed.fine) ?? 0;
+        const dutyINT = intVal + penaltyVal + fineVal;
         const gstVal = parseNum(reviewed.gst);
         if (dutyBCD !== undefined) update.dutyBCD = dutyBCD;
         if (dutySWS !== undefined) update.dutySWS = dutySWS;
-        if (dutyINT !== undefined) update.dutyINT = dutyINT;
+        update.dutyINT = dutyINT;
         if (gstVal !== undefined) update.gst = gstVal;
       } else {
-        // Shipping Bill (export): SB details + port + FOB (from SB OCR)
+        // Shipping Bill (export): SB number, date, port, inco term, FOB FC/INR, exchange rate, DBK, RODTEP
         (update as any).sbNo = reviewed.number || null;
         (update as any).sbDate = reviewed.date || null;
         update.expectedShipmentDate = reviewed.date || null;
         update.portCode = reviewed.portCode || null;
         update.portOfLoading = reviewed.portCode || null;
+        if (reviewed.incoTerm !== undefined) (update as any).incoTerm = reviewed.incoTerm || null;
+        const exch = parseNum(reviewed.exchangeRate);
+        if (exch !== undefined) update.exchangeRate = exch;
         const val = parseNum(reviewed.invoiceValue);
         if (val !== undefined) update.fobValueFC = val;
+        const fobInr = parseNum(reviewed.fobValueINR);
+        if (fobInr !== undefined) (update as any).fobValueINR = fobInr;
+        const dbkVal = parseNum(reviewed.dbk);
+        if (dbkVal !== undefined) (update as any).dbk = dbkVal;
+        const rodtepVal = parseNum(reviewed.rodtep);
+        if (rodtepVal !== undefined) (update as any).rodtep = rodtepVal;
       }
       const { status, data } = await api.shipments.updateWithResponse(shipment.id, update);
       if (status === 200) {
@@ -283,8 +300,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       dbk: (shipment as any).dbk ?? 0,
       rodtep: (shipment as any).rodtep ?? 0,
       scripNo: (shipment as any).scripNo || '',
-      epcg: (shipment as any).epcg || (linkedLic?.type === LicenceType.EPCG ? linkedLic.id : '') || '',
-      advLic: (shipment as any).advLic || (linkedLic?.type === LicenceType.ADVANCE ? linkedLic.id : '') || '',
       lodgement: (shipment as any).lodgement || '',
       lodgementDate: (shipment as any).lodgementDate || '',
       ebrcNo: (shipment as any).ebrcNo || '',
@@ -292,6 +307,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       exchangeRate: Number(shipment.exchangeRate) || 0,
       incoTerm: (shipment as any).incoTerm || 'FOB'
     });
+    setEpcgLicenceId((shipment as any).epcgLicenceId || (shipment as any).epcg || (linkedLic?.type === LicenceType.EPCG ? linkedLic.id : '') || '');
+    setAdvLicenceId((shipment as any).advLicenceId || (shipment as any).advLic || (linkedLic?.type === LicenceType.ADVANCE ? linkedLic.id : '') || '');
     setLodgementValue((shipment as any).lodgement || '');
     setLodgementDateValue((shipment as any).lodgementDate || '');
     setNewUpdate(prev => ({ ...prev, status: shipment.status }));
@@ -540,9 +557,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       if (isExport) {
         (updated as any).lodgement = lodgementValue || undefined;
         (updated as any).lodgementDate = lodgementDateValue || undefined;
-        // Link export to licence when EPCG or Advance Licence is selected (so Licence Tracker shows fulfilment)
-        const exportLicenceId = exportDocData.epcg || exportDocData.advLic || undefined;
-        updated.linkedLicenceId = exportLicenceId;
+        // Link export to one or both licences (EPCG and/or Advance) for Licence Tracker
+        updated.epcgLicenceId = epcgLicenceId || undefined;
+        updated.advLicenceId = advLicenceId || undefined;
+        const exportLicenceId = epcgLicenceId || advLicenceId || undefined;
+        updated.linkedLicenceId = exportLicenceId; // backward compat: first selected
         updated.isUnderLicence = !!exportLicenceId;
       } else {
         updated.isUnderLicence = !!licenceImportData.linkedLicenceId;
@@ -578,8 +597,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       dbk: (shipment as any).dbk ?? 0,
       rodtep: (shipment as any).rodtep ?? 0,
       scripNo: (shipment as any).scripNo || '',
-      epcg: (shipment as any).epcg || '',
-      advLic: (shipment as any).advLic || '',
       lodgement: (shipment as any).lodgement || '',
       lodgementDate: (shipment as any).lodgementDate || '',
       ebrcNo: (shipment as any).ebrcNo || '',
@@ -587,6 +604,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       exchangeRate: Number(shipment.exchangeRate) || 0,
       incoTerm: (shipment as any).incoTerm || 'FOB'
     });
+    setEpcgLicenceId((shipment as any).epcgLicenceId || (shipment as any).epcg || '');
+    setAdvLicenceId((shipment as any).advLicenceId || (shipment as any).advLic || '');
     setLogisticsData({
       blNumber: shipment.blNumber || '',
       blDate: shipment.blDate || '',
@@ -1117,20 +1136,20 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">EPCG Licence</label>
                   {editAll ? (
-                    <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={exportDocData.epcg} onChange={e => setExportDocData({...exportDocData, epcg: e.target.value})}>
+                    <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={epcgLicenceId} onChange={e => setEpcgLicenceId(e.target.value)}>
                       <option value="">— Select EPCG —</option>
                       {licences.filter(l => l.type === LicenceType.EPCG && l.company === shipment.company && l.status === 'ACTIVE').map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
                     </select>
-                  ) : <p className="font-bold text-slate-800">{exportDocData.epcg ? (licences.find(l => l.id === exportDocData.epcg)?.number || exportDocData.epcg) : '—'}</p>}
+                  ) : <p className="font-bold text-slate-800">{epcgLicenceId ? (licences.find(l => l.id === epcgLicenceId)?.number || epcgLicenceId) : '—'}</p>}
                 </div>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Advance Licence</label>
                   {editAll ? (
-                    <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={exportDocData.advLic} onChange={e => setExportDocData({...exportDocData, advLic: e.target.value})}>
+                    <select className="w-full px-3 py-2 border rounded-lg font-bold bg-white" value={advLicenceId} onChange={e => setAdvLicenceId(e.target.value)}>
                       <option value="">— Select Advance —</option>
                       {licences.filter(l => l.type === LicenceType.ADVANCE && l.company === shipment.company && l.status === 'ACTIVE').map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
                     </select>
-                  ) : <p className="font-bold text-slate-800">{exportDocData.advLic ? (licences.find(l => l.id === exportDocData.advLic)?.number || exportDocData.advLic) : '—'}</p>}
+                  ) : <p className="font-bold text-slate-800">{advLicenceId ? (licences.find(l => l.id === advLicenceId)?.number || advLicenceId) : '—'}</p>}
                 </div>
               </div>
             </div>
@@ -1367,7 +1386,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutySWS)}</p>}
                   </div>
                   <div>
-                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Interest</label>
+                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">INT+PNLTY+FINE</label>
                      {editAll ? <input type="number" className="w-full px-2 py-1 border rounded font-bold" value={dutiesData.dutyINT} onChange={e => setDutiesData({...dutiesData, dutyINT: parseFloat(e.target.value)})} /> 
                      : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutyINT)}</p>}
                   </div>
@@ -1813,14 +1832,31 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 date: pendingOcrPayload.data?.date ?? null,
                 portCode: pendingOcrPayload.data?.portCode ?? null,
                 invoiceValue: pendingOcrPayload.data?.invoiceValue ?? null,
+                exchangeRate: pendingOcrPayload.data?.exchangeRate ?? null,
+                incoTerm: pendingOcrPayload.data?.incoTerm ?? null,
                 dutyBCD: pendingOcrPayload.data?.dutyBCD ?? null,
                 dutySWS: pendingOcrPayload.data?.dutySWS ?? null,
                 dutyINT: pendingOcrPayload.data?.dutyINT ?? null,
+                penalty: pendingOcrPayload.data?.penalty ?? null,
+                fine: pendingOcrPayload.data?.fine ?? null,
                 gst: pendingOcrPayload.data?.gst ?? null,
                 source: pendingOcrPayload.data?.source ?? null,
                 confidence: pendingOcrPayload.data?.confidence ?? null,
               }
-            : (pendingOcrPayload?.data ?? {})
+            : {
+                sbNumber: pendingOcrPayload?.data?.sbNumber ?? null,
+                date: pendingOcrPayload?.data?.date ?? null,
+                portCode: pendingOcrPayload?.data?.portCode ?? null,
+                invoiceValue: pendingOcrPayload?.data?.fobValueFC ?? pendingOcrPayload?.data?.invoiceValue ?? null,
+                fobValueFC: pendingOcrPayload?.data?.fobValueFC ?? null,
+                fobValueINR: pendingOcrPayload?.data?.fobValueINR ?? null,
+                exchangeRate: pendingOcrPayload?.data?.exchangeRate ?? null,
+                incoTerm: pendingOcrPayload?.data?.incoTerm ?? null,
+                dbk: pendingOcrPayload?.data?.dbk ?? null,
+                rodtep: pendingOcrPayload?.data?.rodtep ?? null,
+                source: pendingOcrPayload?.data?.source ?? null,
+                confidence: pendingOcrPayload?.data?.confidence ?? null,
+              }
         }
         viewFile={pendingOcrPayload?.file ?? null}
         onConfirm={handleOcrConfirm}

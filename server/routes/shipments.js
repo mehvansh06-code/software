@@ -7,6 +7,7 @@ const getShipmentValues = db.getShipmentValues;
 const SHIPMENT_INSERT_OR_REPLACE_SQL = db.SHIPMENT_INSERT_OR_REPLACE_SQL;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER } = require('../config');
 const { validateId, hasPermission } = require('../middleware');
+const { log: auditLog, getUserName } = require('../services/auditService');
 
 function safeParseJson(str, fallback) {
   if (str == null || str === '') return fallback;
@@ -52,6 +53,8 @@ function rowToClient(r) {
     dutySWS: fromCents(r.dutySWS),
     dutyINT: fromCents(r.dutyINT),
     gst: fromCents(r.gst),
+    dbk: r.dbk != null ? fromCents(r.dbk) : 0,
+    rodtep: r.rodtep != null ? fromCents(r.rodtep) : 0,
     freightCharges: r.freightCharges != null ? fromCents(r.freightCharges) : null,
     otherCharges: r.otherCharges != null ? fromCents(r.otherCharges) : null,
     version: r.version != null ? r.version : 1,
@@ -76,6 +79,8 @@ function clientToCents(s) {
     dutySWS: toCents(s.dutySWS) ?? 0,
     dutyINT: toCents(s.dutyINT) ?? 0,
     gst: toCents(s.gst) ?? 0,
+    dbk: toCents(s.dbk) ?? 0,
+    rodtep: toCents(s.rodtep) ?? 0,
     freightCharges: toCents(s.freightCharges),
     otherCharges: toCents(s.otherCharges),
   };
@@ -301,6 +306,8 @@ function buildShipmentResponse(r) {
     isUnderLC: !!r.isUnderLC,
     isUnderLicence: !!r.isUnderLicence,
     linkedLicenceId: r.linkedLicenceId != null && r.linkedLicenceId !== '' ? String(r.linkedLicenceId) : null,
+    epcgLicenceId: r.epcgLicenceId != null && r.epcgLicenceId !== '' ? String(r.epcgLicenceId) : null,
+    advLicenceId: r.advLicenceId != null && r.advLicenceId !== '' ? String(r.advLicenceId) : null,
     lcSettled: !!r.lcSettled,
     documents: safeParseJson(r.documents_json, {}),
     history,
@@ -519,17 +526,8 @@ function createRouter(broadcast) {
         return res.status(500).json({ error: 'Failed to save file' });
       }
       const userId = req.user && req.user.id;
-      const userName = (userId && (() => { try { const r = db.prepare('SELECT name FROM users WHERE id = ?').get(userId); return r && r.name; } catch (_) { return null; } })()) || userId || 'System';
-      try {
-        db.prepare('INSERT INTO audit_logs (userId, action, targetId, details, timestamp) VALUES (?, ?, ?, ?, datetime("now"))').run(
-          userId || 'system',
-          'DOCUMENT_UPLOADED',
-          id,
-          JSON.stringify({ filename, userName, message: `User ${userName} uploaded '${filename}' for Shipment #${id}` })
-        );
-      } catch (logErr) {
-        console.warn('Audit log insert (upload):', logErr.message);
-      }
+      const userName = getUserName(db, userId) || userId || 'System';
+      auditLog(db, userId, 'DOCUMENT_UPLOADED', id, { filename, userName, message: `User ${userName} uploaded '${filename}' for Shipment #${id}` });
       broadcast();
       res.status(201).json({ success: true, filename });
     } catch (err) {
@@ -569,17 +567,8 @@ function createRouter(broadcast) {
         return res.status(500).json({ error: 'Failed to delete file' });
       }
       const userId = req.user && req.user.id;
-      const userName = (userId && (() => { try { const r = db.prepare('SELECT name FROM users WHERE id = ?').get(userId); return r && r.name; } catch (_) { return null; } })()) || userId || 'System';
-      try {
-        db.prepare('INSERT INTO audit_logs (userId, action, targetId, details, timestamp) VALUES (?, ?, ?, ?, datetime("now"))').run(
-          userId || 'system',
-          'DOCUMENT_DELETED',
-          id,
-          JSON.stringify({ filename, userName, message: `User ${userName} deleted '${filename}' for Shipment #${id}` })
-        );
-      } catch (logErr) {
-        console.warn('Audit log insert (delete):', logErr.message);
-      }
+      const userName = getUserName(db, userId) || userId || 'System';
+      auditLog(db, userId, 'DOCUMENT_DELETED', id, { filename, userName, message: `User ${userName} deleted '${filename}' for Shipment #${id}` });
       broadcast();
       res.json({ success: true });
     } catch (err) {
@@ -617,6 +606,8 @@ function createRouter(broadcast) {
     } catch (lcErr) {
       return res.status(lcErr.statusCode || 400).json({ success: false, error: lcErr.message });
     }
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'SHIPMENT_CREATED', idCheck.value, { invoiceNumber: sNorm.invoiceNumber });
     res.json({ success: true });
     broadcast();
   });
@@ -647,11 +638,12 @@ function createRouter(broadcast) {
         shippingLine=?, portCode=?, portOfLoading=?, portOfDischarge=?,
         assessedValue=?, dutyBCD=?, dutySWS=?, dutyINT=?, gst=?, trackingUrl=?,
         documents_json=?, history_json=?, payments_json=?, items_json=?,
-        isUnderLicence=?, linkedLicenceId=?, licenceObligationAmount=?, licenceObligationQuantity=?,
+        isUnderLicence=?, linkedLicenceId=?, epcgLicenceId=?, advLicenceId=?, licenceObligationAmount=?, licenceObligationQuantity=?,
         incoTerm=?, paymentDueDate=?, expectedArrivalDate=?,
         invoiceDate=?, freightCharges=?, otherCharges=?, exchangeRate=?, remarks=?,
+        fobValueFC=?, fobValueINR=?,
         isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, fileStatus=?, consigneeId=?, lcSettled=?,
-        shipperSealNumber=?, lineSealNumber=?, sbNo=?, sbDate=?,
+        shipperSealNumber=?, lineSealNumber=?, sbNo=?, sbDate=?, dbk=?, rodtep=?,
         version = version + 1
       WHERE id=? AND version=?
     `);
@@ -675,11 +667,12 @@ function createRouter(broadcast) {
             sNorm.shippingLine, sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
             sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, sNorm.gst, sNorm.trackingUrl,
             JSON.stringify(s.documents || {}), '[]', JSON.stringify(s.payments || []), null,
-            sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,
+            sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.epcgLicenceId || null, sNorm.advLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,
             sNorm.incoTerm, sNorm.paymentDueDate, sNorm.expectedArrivalDate || null,
             sNorm.invoiceDate || null, sNorm.freightCharges ?? null, sNorm.otherCharges ?? null,
             s.exchangeRate !== undefined && s.exchangeRate !== null ? s.exchangeRate : (existing?.exchangeRate ?? null),
             s.remarks !== undefined ? s.remarks : (existing?.remarks ?? null),
+            sNorm.fobValueFC ?? null, sNorm.fobValueINR ?? null,
             sNorm.isUnderLC ? 1 : 0, sNorm.lcNumber || null, sNorm.lcAmount ?? null, sNorm.lcDate || null,
             allowedFileStatus,
             consigneeIdVal,
@@ -688,6 +681,8 @@ function createRouter(broadcast) {
             sNorm.lineSealNumber || null,
             sNorm.sbNo || null,
             sNorm.sbDate || null,
+            sNorm.dbk ?? null,
+            sNorm.rodtep ?? null,
             id,
             version
           );
@@ -711,6 +706,8 @@ function createRouter(broadcast) {
     } catch (lcErr) {
       return res.status(lcErr.statusCode || 400).json({ success: false, error: lcErr.message });
     }
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'SHIPMENT_UPDATED', id, { invoiceNumber: sNorm.invoiceNumber });
     const updated = db.prepare('SELECT version FROM shipments WHERE id = ?').get(id);
     res.json({ success: true, version: updated ? updated.version : undefined });
     broadcast();
@@ -721,12 +718,15 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const id = idCheck.value;
     try {
+      const row = db.prepare('SELECT invoiceNumber FROM shipments WHERE id = ?').get(id);
       const runTx = db.transaction(() => {
         db.prepare('DELETE FROM shipment_items WHERE shipmentId = ?').run(id);
         db.prepare('DELETE FROM shipment_history WHERE shipmentId = ?').run(id);
         db.prepare('DELETE FROM shipments WHERE id = ?').run(id);
       });
       runTx();
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'SHIPMENT_DELETED', id, { invoiceNumber: row ? row.invoiceNumber : null });
       broadcast();
       res.json({ success: true });
     } catch (e) {

@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
 const { PRESETS, PERMISSIONS } = require('../constants/permissions');
+const { log: auditLog } = require('../services/auditService');
 
 const MANAGE_PERM = PERMISSIONS.USERS_MANAGE_PERMISSIONS;
 
@@ -72,6 +73,8 @@ function createRouter() {
       try {
         domains = JSON.parse(row.allowedDomains || '[]');
       } catch (_) {}
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'USER_CREATED', idCheck.value, { username: row.username, name: row.name, role: row.role });
       res.status(201).json({
         id: row.id,
         username: row.username,
@@ -124,6 +127,8 @@ function createRouter() {
       try {
         domains = JSON.parse(row.allowedDomains || '[]');
       } catch (_) {}
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'USER_UPDATED', idCheck.value, { username: row.username, name: row.name, role: row.role });
       res.json({
         id: row.id,
         username: row.username,
@@ -172,7 +177,7 @@ function createRouter() {
     if (selfId && targetId === selfId) {
       return res.status(400).json({ success: false, error: 'Cannot delete your own account' });
     }
-    const existing = db.prepare('SELECT id, permissions FROM users WHERE id = ?').get(targetId);
+    const existing = db.prepare('SELECT id, username, name, permissions FROM users WHERE id = ?').get(targetId);
     if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
     let targetPerms = [];
     try {
@@ -193,6 +198,7 @@ function createRouter() {
     }
     try {
       db.prepare('DELETE FROM users WHERE id = ?').run(targetId);
+      auditLog(db, selfId, 'USER_DELETED', targetId, { username: existing.username, name: existing.name });
       res.json({ success: true });
     } catch (e) {
       console.error('DELETE /users/:id:', e);
@@ -262,19 +268,7 @@ function createRouter() {
     })();
     try {
       db.prepare('UPDATE users SET permissions = ? WHERE id = ?').run(JSON.stringify(permissions), targetId);
-      const insLog = db.prepare(
-        'INSERT INTO audit_logs (userId, action, targetId, details, timestamp) VALUES (?, ?, ?, ?, datetime(\'now\'))'
-      );
-      insLog.run(
-        selfId || 'system',
-        'PERMISSIONS_UPDATED',
-        targetId,
-        JSON.stringify({
-          updatedBy: selfId,
-          previousPermissions: previous,
-          newPermissions: permissions,
-        })
-      );
+      auditLog(db, selfId, 'PERMISSIONS_UPDATED', targetId, { updatedBy: selfId, previousPermissions: previous, newPermissions: permissions });
       const row = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(targetId);
       let perms = [];
       try {

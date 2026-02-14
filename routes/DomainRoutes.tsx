@@ -17,15 +17,16 @@ import IndentGenerator from '../pages/IndentGenerator';
 import DomesticBuyerMaster from '../pages/DomesticBuyerMaster';
 import IndentProductsMaster from '../pages/IndentProductsMaster';
 import UserManagement from '../pages/UserManagement';
+import AuditLogs from '../pages/AuditLogs';
 
 export const exportPathMatch = (path: string) =>
-  ['/', '/buyers', '/export-shipments', '/export-lcs', '/shipments', '/users'].includes(path) ||
+  ['/', '/buyers', '/export-shipments', '/export-lcs', '/shipments', '/users', '/audit-logs'].includes(path) ||
   /^\/shipments\/[^/]+$/.test(path);
 
-export const licencePathMatch = (path: string) => path === '/' || path === '/users';
+export const licencePathMatch = (path: string) => path === '/' || path === '/users' || path === '/audit-logs';
 
 export const salesIndentPathMatch = (path: string) =>
-  path === '/' || path === '/domestic-buyers' || path === '/indent-buyers' || path === '/indent-products' || path === '/users';
+  path === '/' || path === '/domestic-buyers' || path === '/indent-buyers' || path === '/indent-products' || path === '/users' || path === '/audit-logs';
 
 export interface DomainRoutesProps {
   domain: AppDomain;
@@ -100,6 +101,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
         <>
           <Route path="/" element={<Layout {...layoutProps}><LicenceTracker licences={licences} shipments={shipments} user={user} onAddItem={handleAddLicence} onUpdateItem={handleUpdateLicence} onUpdateShipment={handleUpdateShipment} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
+          <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </>
       ) : domain === AppDomain.SALES_INDENT ? (
@@ -109,6 +111,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
           <Route path="/indent-buyers" element={<Layout {...layoutProps}><BuyerMaster buyers={buyers} user={user} onUpdateItem={handleUpdateBuyer} onAddItem={handleAddBuyer} /></Layout>} />
           <Route path="/indent-products" element={<Layout {...layoutProps}><IndentProductsMaster /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
+          <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </>
       ) : domain === AppDomain.IMPORT ? (
@@ -120,6 +123,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
           <Route path="/shipments/:id" element={<Layout {...layoutProps}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} connectionMode={connectionMode} /></Layout>} />
           <Route path="/lcs" element={<Layout {...layoutProps}><LCTracker lcs={lcs} suppliers={suppliers} onUpdateItem={handleUpdateLC} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
+          <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
           <Route path="/export-shipments" element={<Navigate to="/shipments" replace />} />
         </>
       ) : (
@@ -131,6 +135,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
           <Route path="/export-lcs" element={<Layout {...layoutProps}><ExportLCTracker lcs={lcs} buyers={buyers} onUpdateItem={handleUpdateLC} /></Layout>} />
           <Route path="/shipments/:id" element={<Layout {...layoutProps}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} connectionMode={connectionMode} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
+          <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
         </>
       )}
     </Routes>

@@ -95,6 +95,8 @@ async function extractDataFromPDF(buffer) {
     date: p.date || undefined,
     portCode: p.portCode || undefined,
     invoiceValue: p.invoiceValue || undefined,
+    exchangeRate: p.exchangeRate || undefined,
+    incoTerm: p.incoTerm || undefined,
     containerNumber: p.containerNumber || undefined,
     blNumber: p.blNumber || undefined,
     blDate: p.blDate || undefined,
@@ -102,6 +104,8 @@ async function extractDataFromPDF(buffer) {
     dutyBCD: p.dutyBCD || undefined,
     dutySWS: p.dutySWS || undefined,
     dutyINT: p.dutyINT || undefined,
+    penalty: p.penalty || undefined,
+    fine: p.fine || undefined,
     gst: p.gst || undefined,
   });
 
@@ -192,6 +196,8 @@ async function scanAndParse(fileBuffer, opts = {}) {
     date: p.date || undefined,
     portCode: p.portCode || undefined,
     invoiceValue: p.invoiceValue || undefined,
+    exchangeRate: p.exchangeRate || undefined,
+    incoTerm: p.incoTerm || undefined,
     containerNumber: p.containerNumber || undefined,
     blNumber: p.blNumber || undefined,
     blDate: p.blDate || undefined,
@@ -199,6 +205,8 @@ async function scanAndParse(fileBuffer, opts = {}) {
     dutyBCD: p.dutyBCD || undefined,
     dutySWS: p.dutySWS || undefined,
     dutyINT: p.dutyINT || undefined,
+    penalty: p.penalty || undefined,
+    fine: p.fine || undefined,
     gst: p.gst || undefined,
   });
 
@@ -239,24 +247,63 @@ async function scanAndParse(fileBuffer, opts = {}) {
 /** Extract first number (with optional decimals) from a line/string; returns string without commas or spaces. */
 function extractNumberFromLine(str) {
   if (!str || typeof str !== 'string') return undefined;
-  const m = str.match(/[\d,\s]+(?:\.\d{2})?/);
-  return m ? m[0].replace(/[,\s]/g, '') : undefined;
+  const m = str.match(/[\d,\s]+(?:\.\d+)?/);
+  return m ? m[0].replace(/[,\s]/g, '').replace(/^0+(\d)/, '$1') : undefined;
+}
+
+/**
+ * Shipping Bill table layout: label in header row, value in next row (or same line).
+ * Match "Label\nValue" or "Label Value" and return the value (capture group 1 from valueRegex).
+ */
+function valueAfterLabel(text, labelRegex, valueRegex) {
+  if (!text || typeof text !== 'string') return null;
+  const re = new RegExp(labelRegex.source + '[\\s\\n]*' + valueRegex.source, 'im');
+  const m = text.match(re);
+  return m && m[1] ? m[1].trim() : null;
+}
+
+/**
+ * Find first number (with optional decimals) that appears after a keyword within maxChars.
+ * OCR often splits label and value across lines; this grabs the next number after the label.
+ */
+function numberAfterKeyword(text, keywordRegex, maxChars) {
+  if (!text || typeof text !== 'string') return null;
+  const m = text.match(keywordRegex);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const chunk = text.slice(start, start + (maxChars || 400));
+  const numMatch = chunk.match(/[\d,]+(?:\.\d+)?/);
+  return numMatch ? numMatch[0].replace(/[,]/g, '') : null;
+}
+
+/**
+ * Find first match of (FOB|CIF|...) after keyword within maxChars. For INVTERM.
+ */
+function incoTermAfterKeyword(text, keywordRegex, maxChars) {
+  if (!text || typeof text !== 'string') return null;
+  const m = text.match(keywordRegex);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const chunk = text.slice(start, start + (maxChars || 200));
+  const termMatch = chunk.match(/\b(FOB|CIF|EXW|DDP|CFR|DAP|DPU|C\s*&\s*F)\b/i);
+  return termMatch ? termMatch[1].replace(/\s+/g, '').toUpperCase() : null;
 }
 
 /**
  * Parse customs document text (BOE / Shipping Bill) using regex patterns.
- * BOE (Bill of Entry) = import only: BE No, BE Date, port, BCD, SWS, IGST, total assessable value.
+ * BOE (Bill of Entry) = import only: BE No, BE Date, port, BCD, SWS, IGST, exchange rate, inco term. Do NOT extract assessable value from BOE (assessable = BCD + SWS + INT + (exchange rate × amount in FC)).
  *   BOE does NOT contain: SB number, container number, BL number, BL date, shipping line (those are on export/shipment docs).
  * SB (Shipping Bill) = export only: SB number and optionally BL/container/shipping fields.
  * @param {string} text - Raw OCR text
- * @returns {{ beNumber?, sbNumber?, date?, invoiceValue?, portCode?, containerNumber?, blNumber?, blDate?, shippingLine?, dutyBCD?, dutySWS?, dutyINT?, gst?, rawText }}
+ * @returns {{ beNumber?, sbNumber?, date?, invoiceValue?, portCode?, exchangeRate?, incoTerm?, dutyBCD?, dutySWS?, dutyINT?, gst?, rawText }}
  */
 function parseCustomsDocument(text) {
   const result = { rawText: text || '' };
   const t = (result.rawText || '').replace(/\r\n/g, '\n');
 
   const isBOE = /Bill\s+of\s+Entry/i.test(t) && !/Shipping\s+Bill\s+No\.?\s*:?\s*\d/i.test(t);
-  const isSB = /Shipping\s+Bill/i.test(t);
+  // Treat as SB if title says so, or if we see typical SB fields (SB No, FOB VALUE, RODTEP, etc.)
+  const isSB = /Shipping\s+Bill/i.test(t) || (/SB\s+No\.?/i.test(t) && /FOB\s+VALUE|RODTEP|INVTERM|EXCHANGE\s+RATE/i.test(t));
 
   // Bill of Entry (import only): never has SB number, container, BL, or shipping line — do not extract them.
   if (isBOE) {
@@ -296,37 +343,15 @@ function parseCustomsDocument(text) {
       }
     }
 
-    // ICEGATE duty block: "74138.907413.91926130988520" -> BCD 74138.9, SWS 7413.9, IGST 192613, Total assessable 988520 (SWS decimal "9" then IGST then assessable; optional trailing digit)
+    // ICEGATE duty block: "74138.907413.91926130988520" -> BCD 74138.9, SWS 7413.9, IGST 192613 (do NOT set invoiceValue/assessable from BOE)
     const dutyBlock = t.match(/(\d{5})\.(\d)(\d{4,5})\.(\d)(\d{6})(\d{6,7})/);
     if (dutyBlock) {
       const bcd = dutyBlock[1] + '.' + dutyBlock[2];
       let sws = dutyBlock[3] + '.' + dutyBlock[4];
       if (sws.startsWith('0')) sws = String(parseFloat(sws)); // 07413.9 -> 7413.9
-      let assessable = dutyBlock[6];
-      if (assessable.startsWith('0')) assessable = String(parseInt(assessable, 10)); // 0988520 -> 988520
       result.dutyBCD = bcd;
       result.dutySWS = sws;
       result.gst = dutyBlock[5];   // 192613
-      result.invoiceValue = assessable;
-    }
-
-    // Fallbacks for labelled values if block not found
-    if (!result.invoiceValue) {
-      const invoiceValuePatterns = [
-        /Total\s+Assessable\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*[\d,\s]+(?:\.\d{2})?/i,
-        /Assessable\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*[\d,\s]+(?:\.\d{2})?/i,
-        /Total\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*[\d,\s]+(?:\.\d{2})?/i,
-      ];
-      for (const re of invoiceValuePatterns) {
-        const m = t.match(re);
-        if (m && m[0]) {
-          const num = extractNumberFromLine(m[0]);
-          if (num) {
-            result.invoiceValue = num;
-            break;
-          }
-        }
-      }
     }
     if (!result.dutyBCD) {
       const bcdMatch = t.match(/(?:BCD|Basic\s+Customs\s+Duty)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d)?/i);
@@ -349,6 +374,44 @@ function parseCustomsDocument(text) {
         if (num && num.length >= 2) result.gst = num;
       }
     }
+    // 15.INT, 16.PNLTY, 17.FINE — extract as separate columns (document layout)
+    const intMatch = t.match(/(?:15\.\s*)?INT\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i) || t.match(/(?:Interest|Duty\s+INT)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i);
+    if (intMatch && intMatch[0]) {
+      const num = extractNumberFromLine(intMatch[0]);
+      if (num !== undefined) result.dutyINT = num;
+    }
+    const penaltyMatch = t.match(/(?:16\.\s*)?PNLTY\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i) || t.match(/(?:Penalty|Penalties)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i);
+    if (penaltyMatch && penaltyMatch[0]) {
+      const num = extractNumberFromLine(penaltyMatch[0]);
+      if (num !== undefined) result.penalty = num;
+    }
+    const fineMatch = t.match(/(?:17\.\s*)?FINE\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i) || t.match(/(?:Fine|Fines)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i);
+    if (fineMatch && fineMatch[0]) {
+      const num = extractNumberFromLine(fineMatch[0]);
+      if (num !== undefined) result.fine = num;
+    }
+
+    // Exchange rate (e.g. 1 USD=83.75INR or Exchange Rate : 83.75)
+    const exchPatterns = [
+      /1\s*USD\s*=\s*([\d.]+)(?:\s*INR)?/i,
+      /Exchange\s*Rate\s*:?\s*([\d.]+)/i,
+      /(?:Rate|INR)\s*[=:]\s*([\d.]+)/i,
+    ];
+    for (const re of exchPatterns) {
+      const m = t.match(re);
+      if (m && m[1]) {
+        const n = parseFloat(m[1]);
+        if (!Number.isNaN(n) && n > 0) {
+          result.exchangeRate = String(n);
+          break;
+        }
+      }
+    }
+
+    // Inco term (FOB, CIF, etc.) — also INVTERM / 7.INVTERM as on Shipping Bills
+    const incoMatch = t.match(/(?:Inco\s*Term|Incoterm|Term|(?:7\.\s*)?INVTERM)\s*:?\s*(FOB|CIF|EXW|DDP|CFR|C\s*&\s*F|DAP|DPU)/i)
+      || t.match(/\b(FOB|CIF|EXW|DDP|CFR|DAP|DPU)\b/i);
+    if (incoMatch && incoMatch[1]) result.incoTerm = incoMatch[1].replace(/\s+/g, '').toUpperCase();
 
     // Port Code (BOE)
     const portPattern = /IN[A-Z]{3}\d{1,2}\b/g;
@@ -379,12 +442,14 @@ function parseCustomsDocument(text) {
     }
   }
 
-  // Shipping Bill (SB) number - only for export / SB documents
+  // Shipping Bill (SB) number — take only the number immediately after "SB No" / "Shipping Bill No" (4–10 digits)
   if (!isBOE) {
     const sbPatterns = [
-      /Shipping\s+Bill\s+No\.?\s*:?\s*(\d{3,}[\w\-]*)/i,
-      /S\/B\s+No\.?\s*:?\s*(\d{3,}[\w\-]*)/i,
-      /SB\s*:?\s*(\d{3,}[\w\-]*)/i,
+      /(?:SB\s+No\.?|Shipping\s+Bill\s+No\.?)\s*:?\s*[\s\n]*(\d{4,10})\b/i,
+      /(?:S\/B\s+No\.?)\s*:?\s*[\s\n]*(\d{4,10})\b/i,
+      /Shipping\s+Bill\s+No\.?\s*:?\s*(\d{4,10})\b/i,
+      /SB\s+No\.?\s*:?\s*(\d{4,10})\b/i,
+      /SB\s*:?\s*[\s\n]*(\d{4,10})\b/i,
     ];
     for (const re of sbPatterns) {
       const m = t.match(re);
@@ -397,13 +462,26 @@ function parseCustomsDocument(text) {
 
   // Date (for non-BOE or when not set)
   if (!result.date) {
-    const dateKeywordPattern = /(?:Date|Dated)\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i;
+    const dateKeywordPattern = /(?:Date|Dated|SB\s+Date)\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i;
     const dateMatch = t.match(dateKeywordPattern);
     if (dateMatch && dateMatch[1]) {
       result.date = normalizeDate(dateMatch[1]);
     } else {
-      const allDates = [...t.matchAll(/\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b/g)];
-      if (allDates.length > 0) result.date = normalizeDate(allDates[0][1]);
+      // DD-MON-YY (e.g. 14-AUG-25) on Shipping Bills
+      const ddMonYy = t.match(/(?:SB\s+Date)\s*:?\s*(\d{1,2})-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-(\d{2})/i);
+      if (ddMonYy && ddMonYy[1] && ddMonYy[2] && ddMonYy[3]) {
+        result.date = normalizeDateDdMonYy(ddMonYy[1], ddMonYy[2], ddMonYy[3]);
+      }
+      if (!result.date) {
+        const ddMonYyAlt = t.match(/\b(\d{1,2})-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-(\d{2})\b/i);
+        if (ddMonYyAlt && ddMonYyAlt[1] && ddMonYyAlt[2] && ddMonYyAlt[3]) {
+          result.date = normalizeDateDdMonYy(ddMonYyAlt[1], ddMonYyAlt[2], ddMonYyAlt[3]);
+        }
+      }
+      if (!result.date) {
+        const allDates = [...t.matchAll(/\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b/g)];
+        if (allDates.length > 0) result.date = normalizeDate(allDates[0][1]);
+      }
     }
   }
 
@@ -541,6 +619,128 @@ function parseCustomsDocument(text) {
     }
   }
 
+  // ----- Shipping Bill only: extract SB number, date, port, inco term, FOB FC/INR, exchange rate, DBK, RODTEP. -----
+  // OCR is unreliable: use "keyword then next number" as well as label+value patterns. Prefer number immediately after label.
+  if (isSB) {
+    result.containerNumber = undefined;
+    result.blNumber = undefined;
+    result.blDate = undefined;
+    result.shippingLine = undefined;
+    result.dutyBCD = undefined;
+    result.dutySWS = undefined;
+    result.dutyINT = undefined;
+    result.penalty = undefined;
+    result.fine = undefined;
+    result.gst = undefined;
+
+    // Normalize: collapse newlines to space so "1. FOB VALUE\n4287559.1" becomes "1. FOB VALUE 4287559.1"
+    const tNorm = t.replace(/\s+/g, ' ');
+
+    // Port Code — prefer value next to "Port Code" (e.g. INSAU6) when present
+    const portAfterLabel = t.match(/Port\s+Code\s*:?\s*[\s\n]*([A-Z]{2}[A-Z]{3}\d{1,2})/i) || tNorm.match(/Port\s+Code\s+([A-Z]{2}[A-Z]{3}\d{1,2})/i);
+    if (portAfterLabel && portAfterLabel[1] && /^IN[A-Z]{3}\d{1,2}$/i.test(portAfterLabel[1])) result.portCode = portAfterLabel[1].toUpperCase();
+
+    // ---- 1. FOB VALUE (INR) ----
+    let val = valueAfterLabel(t, /(?:1\.\s*)?FOB\s+VALUE/i, /([\d,]+(?:\.\d+)?)/);
+    if (val && acceptAmount(val.replace(/[,]/g, ''))) result.fobValueINR = val.replace(/[,]/g, '');
+    if (!result.fobValueINR) {
+      const m = tNorm.match(/(?:1\.\s*)?FOB\s+VALUE\s+([\d,]+(?:\.\d+)?)/i);
+      if (m && m[1] && acceptAmount(m[1].replace(/[,]/g, ''))) result.fobValueINR = m[1].replace(/[,]/g, '');
+    }
+    if (!result.fobValueINR) {
+      const num = numberAfterKeyword(t, /(?:1\.\s*)?FOB\s+VALUE/i, 150);
+      if (num && acceptAmount(num)) result.fobValueINR = num;
+    }
+
+    // ---- 2. FOB VALUE (foreign currency) ----
+    val = valueAfterLabel(t, /(?:2\.\s*)?FOB\s+VALUE/i, /([\d,]+(?:\.\d+)?)/);
+    if (val && acceptAmount(val.replace(/[,]/g, ''))) result.fobValueFC = val.replace(/[,]/g, '');
+    if (!result.fobValueFC) {
+      const m = tNorm.match(/(?:2\.\s*)?FOB\s+VALUE\s+([\d,]+(?:\.\d+)?)/i);
+      if (m && m[1] && acceptAmount(m[1].replace(/[,]/g, ''))) result.fobValueFC = m[1].replace(/[,]/g, '');
+    }
+    if (!result.fobValueFC) {
+      const num = numberAfterKeyword(t, /(?:2\.\s*)?FOB\s+VALUE/i, 150);
+      if (num && acceptAmount(num)) result.fobValueFC = num;
+    }
+    if (!result.fobValueFC && result.invoiceValue) result.fobValueFC = result.invoiceValue;
+
+    // ---- 1.DBK CLAIM ----
+    val = valueAfterLabel(t, /(?:1\.\s*)?DBK\s+CLAIM/i, /([\d,]+(?:\.\d+)?)/);
+    if (val !== null) result.dbk = val.replace(/[,]/g, '');
+    if (result.dbk === undefined) {
+      const m = tNorm.match(/(?:1\.\s*)?DBK\s+CLAIM\s+([\d,]+(?:\.\d+)?)/i);
+      if (m && m[1]) result.dbk = m[1].replace(/[,]/g, '');
+    }
+    if (result.dbk === undefined) {
+      const num = numberAfterKeyword(t, /DBK\s+CLAIM/i, 80);
+      if (num !== null) result.dbk = num;
+    }
+
+    // ---- 5.RODTEP AMT ----
+    val = valueAfterLabel(t, /(?:5\.\s*)?RODTEP\s+(?:AMT\s*:?)?/i, /([\d,]+(?:\.\d+)?)/);
+    if (val !== null && val.replace(/[,]/g, '').length > 0) result.rodtep = val.replace(/[,]/g, '');
+    if (result.rodtep === undefined) {
+      const m = tNorm.match(/(?:5\.\s*)?RODTEP\s+(?:AMT\s*:?)?\s+([\d,]+(?:\.\d+)?)/i);
+      if (m && m[1]) result.rodtep = m[1].replace(/[,]/g, '');
+    }
+    if (result.rodtep === undefined) {
+      const num = numberAfterKeyword(t, /RODTEP/i, 80);
+      if (num !== null && num.length > 0) result.rodtep = num;
+    }
+
+    // ---- 7.INVTERM ----
+    let incoVal = valueAfterLabel(t, /(?:7\.\s*)?INVTERM/i, /(FOB|CIF|EXW|DDP|CFR|C\s*&\s*F|DAP|DPU)/i);
+    if (incoVal) result.incoTerm = incoVal.replace(/\s+/g, '').toUpperCase();
+    if (!result.incoTerm) {
+      const m = tNorm.match(/(?:7\.\s*)?INVTERM\s+(FOB|CIF|EXW|DDP|CFR|DAP|DPU|C\s*&\s*F)/i);
+      if (m && m[1]) result.incoTerm = m[1].replace(/\s+/g, '').toUpperCase();
+    }
+    if (!result.incoTerm) {
+      const term = incoTermAfterKeyword(t, /INVTERM/i, 100);
+      if (term) result.incoTerm = term;
+    }
+    if (!result.incoTerm) {
+      for (const re of [
+        /(?:7\.\s*)?INVTERM\s*:?\s*(FOB|CIF|EXW|DDP|CFR|C\s*&\s*F|DAP|DPU)/i,
+        /(?:Inco\s*Term|Incoterm)\s*:?\s*(FOB|CIF|EXW|DDP|CFR|DAP|DPU)/i,
+      ]) {
+        const mm = t.match(re);
+        if (mm && mm[1]) {
+          result.incoTerm = mm[1].replace(/\s+/g, '').toUpperCase();
+          break;
+        }
+      }
+    }
+
+    // ---- 9.EXCHANGE RATE — look for "1 USD INR 86.9" anywhere after EXCHANGE RATE or in text ----
+    if (!result.exchangeRate) {
+      let rateVal = valueAfterLabel(t, /(?:9\.\s*)?EXCHANGE\s+RATE/i, /1\s*USD\s+INR\s+([\d.]+)/i);
+      if (rateVal) {
+        const n = parseFloat(rateVal);
+        if (!Number.isNaN(n) && n > 0) result.exchangeRate = String(n);
+      }
+      if (!result.exchangeRate) {
+        const chunk = (function () {
+          const mx = t.match(/(?:9\.\s*)?EXCHANGE\s+RATE/i);
+          return mx ? t.slice(mx.index, mx.index + 80) : t;
+        })();
+        const rateMatch = chunk.match(/1\s*USD\s+INR\s+([\d.]+)/i) || t.match(/1\s*USD\s+INR\s+([\d.]+)/i);
+        if (rateMatch && rateMatch[1]) {
+          const n = parseFloat(rateMatch[1]);
+          if (!Number.isNaN(n) && n > 0) result.exchangeRate = String(rateMatch[1]);
+        }
+      }
+      if (!result.exchangeRate) {
+        const m = t.match(/1\s*USD\s*=\s*([\d.]+)(?:\s*INR)?/i);
+        if (m && m[1]) {
+          const n = parseFloat(m[1]);
+          if (!Number.isNaN(n) && n > 0) result.exchangeRate = String(m[1]);
+        }
+      }
+    }
+  }
+
   return result;
 }
 
@@ -554,6 +754,17 @@ function normalizeDate(str) {
   if (y.length === 2) y = '20' + y;
   if (d.length === 1) d = '0' + d;
   if (m.length === 1) m = '0' + m;
+  return `${y}-${m}-${d}`;
+}
+
+/** Normalize DD-MON-YY (e.g. 14-AUG-25) to YYYY-MM-DD. */
+function normalizeDateDdMonYy(day, monthStr, yearTwo) {
+  const mon = (monthStr || '').toUpperCase().slice(0, 3);
+  const months = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+  const m = months[mon];
+  if (!m) return undefined;
+  const y = (yearTwo || '').length === 2 ? '20' + yearTwo : yearTwo;
+  const d = (day || '').length === 1 ? '0' + day : day;
   return `${y}-${m}-${d}`;
 }
 

@@ -16,11 +16,15 @@ interface LicenceTrackerProps {
 const canEditLicence = (user?: User | null) =>
   user?.role === UserRole.MANAGEMENT || user?.role === UserRole.CHECKER;
 
-/** Export obligation fulfilled (INR) = sum of linked export shipments' invoice value in INR */
+/** Export obligation fulfilled (INR) = sum of linked export shipments' invoice value in INR (linked via linkedLicenceId, epcgLicenceId, or advLicenceId) */
 function getFulfilledForLicence(licenceId: string, allShipments: Shipment[]): number {
   const id = String(licenceId);
   return allShipments
-    .filter(s => s?.linkedLicenceId != null && s.linkedLicenceId !== '' && String(s.linkedLicenceId) === id && !!s.buyerId)
+    .filter(s => !!s.buyerId && (
+      (s?.linkedLicenceId != null && s.linkedLicenceId !== '' && String(s.linkedLicenceId) === id) ||
+      (s?.epcgLicenceId != null && s.epcgLicenceId !== '' && String(s.epcgLicenceId) === id) ||
+      (s?.advLicenceId != null && s.advLicenceId !== '' && String(s.advLicenceId) === id)
+    ))
     .reduce((sum, s) => sum + (s.invoiceValueINR || 0), 0);
 }
 
@@ -63,7 +67,12 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
 
   const handleManage = (licence: Licence) => {
     const licenceId = licence?.id != null ? String(licence.id) : '';
-    const linked = shipments.filter(s => s?.linkedLicenceId != null && s.linkedLicenceId !== '' && String(s.linkedLicenceId) === licenceId);
+    const linked = shipments.filter(s => {
+      const lid = s?.linkedLicenceId != null && s.linkedLicenceId !== '' ? String(s.linkedLicenceId) : null;
+      const epcg = s?.epcgLicenceId != null && s.epcgLicenceId !== '' ? String(s.epcgLicenceId) : null;
+      const adv = s?.advLicenceId != null && s.advLicenceId !== '' ? String(s.advLicenceId) : null;
+      return lid === licenceId || epcg === licenceId || adv === licenceId;
+    });
     setImportShipments(linked.filter(s => !!s.supplierId)); // Has Supplier = Import
     setExportShipments(linked.filter(s => !!s.buyerId)); // Has Buyer = Export
     setSelectedLicence(licence);

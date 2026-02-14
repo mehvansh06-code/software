@@ -7,6 +7,8 @@ export interface OcrReviewData {
   date?: string | null;
   portCode?: string | null;
   invoiceValue?: string | null;
+  exchangeRate?: string | null;
+  incoTerm?: string | null;
   containerNumber?: string | null;
   blNumber?: string | null;
   blDate?: string | null;
@@ -14,7 +16,14 @@ export interface OcrReviewData {
   dutyBCD?: string | null;
   dutySWS?: string | null;
   dutyINT?: string | null;
+  penalty?: string | null;
+  fine?: string | null;
   gst?: string | null;
+  /** SB only */
+  fobValueFC?: string | null;
+  fobValueINR?: string | null;
+  dbk?: string | null;
+  rodtep?: string | null;
   source?: string | null;
   confidence?: number | null;
 }
@@ -28,11 +37,19 @@ export interface OcrReviewedPayload {
   date: string;
   portCode: string;
   invoiceValue: string;
-  /** BOE only: duty fields (not present on Shipping Bill) */
+  /** BOE only */
+  exchangeRate?: string;
+  incoTerm?: string;
   dutyBCD?: string;
   dutySWS?: string;
   dutyINT?: string;
+  penalty?: string;
+  fine?: string;
   gst?: string;
+  /** SB only */
+  fobValueINR?: string;
+  dbk?: string;
+  rodtep?: string;
 }
 
 export interface OcrReviewModalProps {
@@ -81,7 +98,14 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [dutyBCD, setDutyBCD] = useState(getStr('dutyBCD'));
   const [dutySWS, setDutySWS] = useState(getStr('dutySWS'));
   const [dutyINT, setDutyINT] = useState(getStr('dutyINT'));
+  const [penalty, setPenalty] = useState(getStr('penalty'));
+  const [fine, setFine] = useState(getStr('fine'));
   const [gst, setGst] = useState(getStr('gst'));
+  const [exchangeRate, setExchangeRate] = useState(getStr('exchangeRate'));
+  const [incoTerm, setIncoTerm] = useState(getStr('incoTerm'));
+  const [fobValueINR, setFobValueINR] = useState(getStr('fobValueINR'));
+  const [dbk, setDbk] = useState(getStr('dbk'));
+  const [rodtep, setRodtep] = useState(getStr('rodtep'));
   const [touched, setTouched] = useState({ number: false, portCode: false });
 
   useEffect(() => {
@@ -91,11 +115,18 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       setNumber(num);
       setDate((d.date as string) || '');
       setPortCode((d.portCode as string) || '');
-      setInvoiceValue((d.invoiceValue as string) || '');
+      setInvoiceValue((isExport ? (d.fobValueFC as string) : (d.invoiceValue as string)) || (d.invoiceValue as string) || '');
       setDutyBCD((d.dutyBCD as string) || '');
       setDutySWS((d.dutySWS as string) || '');
       setDutyINT((d.dutyINT as string) || '');
+      setPenalty((d.penalty as string) || '');
+      setFine((d.fine as string) || '');
       setGst((d.gst as string) || '');
+      setExchangeRate((d.exchangeRate as string) || '');
+      setIncoTerm((d.incoTerm as string) || '');
+      setFobValueINR((d.fobValueINR as string) || '');
+      setDbk((d.dbk as string) || '');
+      setRodtep((d.rodtep as string) || '');
       setTouched({ number: false, portCode: false });
     }
   }, [open, isExport, initialData, numberKey]);
@@ -116,10 +147,20 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       invoiceValue: trim(invoiceValue),
     };
     if (!isExport) {
+      payload.exchangeRate = trim(exchangeRate);
+      payload.incoTerm = trim(incoTerm);
       payload.dutyBCD = trim(dutyBCD);
       payload.dutySWS = trim(dutySWS);
       payload.dutyINT = trim(dutyINT);
+      payload.penalty = trim(penalty);
+      payload.fine = trim(fine);
       payload.gst = trim(gst);
+    } else {
+      payload.exchangeRate = trim(exchangeRate);
+      payload.incoTerm = trim(incoTerm);
+      payload.fobValueINR = trim(fobValueINR);
+      payload.dbk = trim(dbk);
+      payload.rodtep = trim(rodtep);
     }
     onConfirm(payload);
   };
@@ -215,7 +256,7 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
-              {isExport ? 'Invoice / FOB Value' : 'Assessable Value'}
+              {isExport ? 'FOB Value (Foreign Currency)' : 'Assessable Value'}
             </label>
             <input
               type="text"
@@ -223,17 +264,102 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               value={invoiceValue}
               onChange={(e) => setInvoiceValue(e.target.value)}
               className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-              placeholder="e.g. 50000"
+              placeholder={isExport ? 'e.g. 50000 USD' : 'e.g. 50000'}
             />
           </div>
 
-          {/* Bill of Entry (import) only: duty fields. SB (export) and BL/Invoice details are separate sections. */}
+          {isExport && (
+            <>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">FOB Value (INR)</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={fobValueINR}
+                  onChange={(e) => setFobValueINR(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="e.g. 4200000"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Exchange Rate</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={exchangeRate}
+                  onChange={(e) => setExchangeRate(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="e.g. 84"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Inco Term</label>
+                <input
+                  type="text"
+                  value={incoTerm}
+                  onChange={(e) => setIncoTerm(e.target.value.toUpperCase())}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none uppercase"
+                  placeholder="e.g. FOB, CIF"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">DBK</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={dbk}
+                  onChange={(e) => setDbk(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="Rs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">RODTEP</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={rodtep}
+                  onChange={(e) => setRodtep(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="Rs"
+                />
+              </div>
+            </>
+          )}
+
+          {!isExport && (
+            <>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Exchange Rate</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={exchangeRate}
+                  onChange={(e) => setExchangeRate(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="e.g. 83.75"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Inco Term</label>
+                <input
+                  type="text"
+                  value={incoTerm}
+                  onChange={(e) => setIncoTerm(e.target.value.toUpperCase())}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none uppercase"
+                  placeholder="e.g. FOB, CIF"
+                />
+              </div>
+            </>
+          )}
+
+          {/* Bill of Entry (import) only: duty fields (BCD, SWS, 15.INT / 16.PNLTY / 17.FINE, IGST). */}
           {!isExport && (
             <div className="space-y-3 pt-2 border-t border-slate-100">
-              <p className="text-[10px] font-bold uppercase text-slate-400">Duty (BOE only)</p>
+              <p className="text-[10px] font-bold uppercase text-slate-400">Duty: BCD, SWS, Interest / Penalty / Fine, IGST</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Duty BCD</label>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">BCD</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -255,29 +381,51 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Duty INT / IGST</label>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">15. INT</label>
                   <input
                     type="text"
                     inputMode="decimal"
                     value={dutyINT}
                     onChange={(e) => setDutyINT(e.target.value)}
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="Rs"
+                    placeholder="0"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">GST</label>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">16. PNLTY</label>
                   <input
                     type="text"
                     inputMode="decimal"
-                    value={gst}
-                    onChange={(e) => setGst(e.target.value)}
+                    value={penalty}
+                    onChange={(e) => setPenalty(e.target.value)}
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="Rs"
+                    placeholder="0"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">17. FINE</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={fine}
+                    onChange={(e) => setFine(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">IGST</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={gst}
+                  onChange={(e) => setGst(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="Rs"
+                />
               </div>
             </div>
           )}

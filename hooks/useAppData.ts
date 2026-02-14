@@ -46,8 +46,13 @@ export function useAppData(): UseAppDataReturn {
   const [connectionMode, setConnectionMode] = useState<'SQL' | 'OFFLINE'>('SQL');
   const [refreshingUserForSelector, setRefreshingUserForSelector] = useState(false);
   const selectorRefetchDone = useRef(false);
+  const dataChangedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLoadAllDataRef = useRef(0);
+  const DATA_CHANGED_DEBOUNCE_MS = 600;
+  const LOAD_ALL_DATA_THROTTLE_MS = 1200;
 
   const loadAllData = useCallback(async () => {
+    lastLoadAllDataRef.current = Date.now();
     try {
       const [s, b, sh, l, lc] = await Promise.all([
         api.suppliers.list(),
@@ -170,7 +175,15 @@ export function useAppData(): UseAppDataReturn {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === 'data-changed') loadAllData();
+          if (data.type === 'data-changed') {
+            if (dataChangedDebounceRef.current) clearTimeout(dataChangedDebounceRef.current);
+            dataChangedDebounceRef.current = setTimeout(() => {
+              dataChangedDebounceRef.current = null;
+              if (Date.now() - lastLoadAllDataRef.current < LOAD_ALL_DATA_THROTTLE_MS) return;
+              lastLoadAllDataRef.current = Date.now();
+              loadAllData();
+            }, DATA_CHANGED_DEBOUNCE_MS);
+          }
         } catch (_) {}
       };
       ws.onerror = () => { /* reconnection handled on close */ };
@@ -184,6 +197,7 @@ export function useAppData(): UseAppDataReturn {
     };
     connect();
     return () => {
+      if (dataChangedDebounceRef.current) clearTimeout(dataChangedDebounceRef.current);
       clearTimeout(reconnectTimer);
       ws?.close();
     };

@@ -322,6 +322,10 @@ export interface Shipment {
   // Licence Obligation Fields
   isUnderLicence: boolean;
   linkedLicenceId?: string;
+  /** Export: EPCG licence id when shipment fulfils EPCG obligation */
+  epcgLicenceId?: string;
+  /** Export: Advance licence id when shipment fulfils Advance obligation */
+  advLicenceId?: string;
   licenceObligationAmount?: number;
   /** Quantity utilized against the linked licence (import). */
   licenceObligationQuantity?: number;

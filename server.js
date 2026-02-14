@@ -34,6 +34,7 @@ const indentProductRoutes = require('./server/routes/indentProducts');
 const indentRoutes = require('./server/routes/indent');
 const userRoutes = require('./server/routes/users');
 const ocrRoutes = require('./server/routes/ocr');
+const auditRoutes = require('./server/routes/audit');
 
 const port = 3001;
 const app = express();
@@ -211,6 +212,7 @@ app.use('/api/indent-products', indentProductRoutes(broadcast));
 app.use('/api/indent', indentRoutes());
 app.use('/api/users', userRoutes());
 app.use('/api/ocr', ocrRoutes);
+app.use('/api/audit-logs', auditRoutes());
 
 
 app.get('/api/lc-transactions', (req, res) => {

@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
+const { log: auditLog } = require('../services/auditService');
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -29,6 +30,8 @@ function createRouter(broadcast) {
         db.prepare(`INSERT OR REPLACE INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, l.amount, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks);
       } else throw e;
     }
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'LC_CREATED', idCheck.value, { lcNumber: l.lcNumber, amount: l.amount, currency: l.currency });
     res.json({ success: true });
     broadcast();
   });
@@ -46,6 +49,8 @@ function createRouter(broadcast) {
     if ((newStatus === 'HONORED' || newStatus === 'PAID') && prev && prev.status !== newStatus) {
       settleLC(id, l.amount, l.maturityDate || new Date().toISOString().split('T')[0]);
     }
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'LC_UPDATED', id, { lcNumber: l.lcNumber, status: l.status });
     res.json({ success: true });
     broadcast();
   });

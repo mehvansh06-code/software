@@ -19,7 +19,8 @@ import {
   RefreshCw,
   FileText,
   Menu,
-  X
+  X,
+  ClipboardList
 } from 'lucide-react';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -84,9 +85,10 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
     { path: '/export-shipments', label: 'Export Shipments', icon: Truck, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
     { path: '/export-lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
   ];
-  const navItems = hasPermission('users.view')
-    ? [...baseNavItems, { path: '/users', label: 'User Management', icon: UserCog, permission: 'users.view' as const }]
-    : baseNavItems;
+  const extraNavItems: Array<{ path: string; label: string; icon: typeof UserCog; permission: string }> = [];
+  if (hasPermission('users.view')) extraNavItems.push({ path: '/users', label: 'User Management', icon: UserCog, permission: 'users.view' });
+  if (hasPermission('system.audit_logs')) extraNavItems.push({ path: '/audit-logs', label: 'Audit Logs', icon: ClipboardList, permission: 'system.audit_logs' });
+  const navItems = [...baseNavItems, ...extraNavItems];
 
   const sidebarClass = isLicence ? 'bg-emerald-900' : isSalesIndent ? 'bg-rose-900' : isImport ? 'bg-indigo-900' : 'bg-amber-900';
   const logoIconClass = isLicence ? 'text-emerald-900' : isSalesIndent ? 'text-rose-900' : isImport ? 'text-indigo-900' : 'text-amber-900';
