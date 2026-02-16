@@ -90,6 +90,9 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
     serverAvailable = true;
 
     if (response.status === 401) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'response 401', data: { endpoint: safeEndpoint }, timestamp: Date.now(), hypothesisId: 'C' }) }).catch(() => {});
+      // #endregion
       if (typeof window !== 'undefined') localStorage.removeItem('token');
       throw new Error('Session expired. Please log in again.');
     }
@@ -97,15 +100,24 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data?.error || 'Insufficient permissions for this action.');
     }
-    if (!response.ok) throw new Error('Offline');
+    if (!response.ok) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'response not ok', data: { endpoint: safeEndpoint, status: response.status }, timestamp: Date.now(), hypothesisId: 'C' }) }).catch(() => {});
+      // #endregion
+      throw new Error('Offline');
+    }
 
     return await response.json();
   } catch (error: any) {
     clearTimeout(timeoutId);
-    // Only mark offline on real network failure (timeout, connection refused, etc.), not on 4xx/5xx
     const isNetworkFailure =
       error?.name === 'AbortError' ||
       /failed to fetch|network error|load failed|connection refused/i.test(error?.message || '');
+    // #region agent log
+    if (isNetworkFailure) {
+      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'fetch catch', data: { endpoint: safeEndpoint, errName: error?.name, isNetworkFailure: true }, timestamp: Date.now(), hypothesisId: 'C' }) }).catch(() => {});
+    }
+    // #endregion
     if (isNetworkFailure) serverAvailable = false;
     return handleSimulatedRequest(safeEndpoint, options);
   }

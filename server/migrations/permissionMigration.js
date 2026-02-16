@@ -77,8 +77,10 @@ function runPermissionMigration(db) {
   }
 
   // 5) Backfill: users with empty permissions get preset by role
-  const users = db.prepare('SELECT id, role, permissions FROM users').all();
+  const users = db.prepare('SELECT id, role, permissions, allowedDomains FROM users').all();
   const updatePerms = db.prepare('UPDATE users SET permissions = ? WHERE id = ?');
+  const allDomainsJson = JSON.stringify(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT']);
+  const updateDomains = db.prepare('UPDATE users SET allowedDomains = ? WHERE id = ?');
   for (const u of users) {
     let perms = [];
     try {
@@ -89,6 +91,15 @@ function runPermissionMigration(db) {
     if (!Array.isArray(perms) || perms.length === 0) {
       const preset = PRESETS[u.role] || PRESETS.VIEWER;
       updatePerms.run(JSON.stringify(preset), u.id);
+    }
+    let domains = [];
+    try {
+      if (u.allowedDomains && String(u.allowedDomains).trim() !== '' && String(u.allowedDomains) !== '[]') {
+        domains = JSON.parse(u.allowedDomains);
+      }
+    } catch (_) {}
+    if (!Array.isArray(domains) || domains.length === 0) {
+      updateDomains.run(allDomainsJson, u.id);
     }
   }
 }

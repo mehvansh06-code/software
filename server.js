@@ -98,19 +98,37 @@ const FALLBACK_USERS = [
   { id: '3', username: 'employee', name: 'Rahul Sharma', role: 'EXECUTIONER' },
 ];
 const FALLBACK_PASSWORD_HASH = bcrypt.hashSync('admin123', 10);
+const DEFAULT_ALLOWED_DOMAINS = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
+
+const DEBUG_LOG_PATH = path.join(__dirname, '.cursor', 'debug.log');
+function debugLog(payload) {
+  try {
+    const line = JSON.stringify({ ...payload, timestamp: Date.now() }) + '\n';
+    fs.appendFileSync(DEBUG_LOG_PATH, line);
+  } catch (_) {}
+}
 
 function handleLogin(req, res) {
   const { username, password } = req.body || {};
   if (!username || !password) {
+    // #region agent log
+    debugLog({ location: 'server.js:handleLogin', message: 'Login validation failed', data: { reason: 'missing_credentials' }, hypothesisId: 'A' });
+    // #endregion
     return res.status(400).json({ success: false, error: 'Username and password required' });
   }
   // 1) Env admin takes precedence when set
   if (ADMIN_USERNAME && ADMIN_PASSWORD_HASH) {
     if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+      // #region agent log
+      debugLog({ location: 'server.js:handleLogin', message: 'Login failed', data: { path: 'env_admin', success: false }, hypothesisId: 'A' });
+      // #endregion
       return res.status(401).json({ success: false, error: 'Invalid username or password' });
     }
     const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [], allowedDomains: ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'] };
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    // #region agent log
+    debugLog({ location: 'server.js:handleLogin', message: 'Login success', data: { path: 'env_admin', success: true, userId: user.id }, hypothesisId: 'A' });
+    // #endregion
     return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions: user.permissions, allowedDomains: user.allowedDomains } });
   }
   // 2) DB users (from permission migration)
@@ -125,19 +143,31 @@ function handleLogin(req, res) {
       try {
         allowedDomains = JSON.parse(row.allowedDomains || '[]');
       } catch (_) {}
+      if (!Array.isArray(allowedDomains) || allowedDomains.length === 0) {
+        allowedDomains = DEFAULT_ALLOWED_DOMAINS;
+      }
       const user = { id: row.id, username: row.username, name: row.name, role: row.role, permissions, allowedDomains };
       const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+      // #region agent log
+      debugLog({ location: 'server.js:handleLogin', message: 'Login success', data: { path: 'db', success: true, userId: user.id, allowedDomainsCount: allowedDomains.length }, hypothesisId: 'A' });
+      // #endregion
       return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
     }
   } catch (_) {}
   // 3) Legacy in-memory fallback (no users table or no matching DB user)
   const user = FALLBACK_USERS.find((u) => u.username === username);
   if (!user || !bcrypt.compareSync(password, FALLBACK_PASSWORD_HASH)) {
+    // #region agent log
+    debugLog({ location: 'server.js:handleLogin', message: 'Login failed', data: { path: 'fallback', success: false }, hypothesisId: 'A' });
+    // #endregion
     return res.status(401).json({ success: false, error: 'Invalid username or password' });
   }
   const permissions = PRESETS[user.role] || PRESETS.VIEWER || [];
   const allowedDomains = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
   const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+  // #region agent log
+  debugLog({ location: 'server.js:handleLogin', message: 'Login success', data: { path: 'fallback', success: true, userId: user.id }, hypothesisId: 'A' });
+  // #endregion
   res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
 }
 
@@ -166,7 +196,12 @@ app.get('/api/permission-groups', (req, res) => {
 // Session sync: return current user with fresh permissions from DB
 app.get('/api/auth/me', (req, res) => {
   const id = req.user && req.user.id;
-  if (!id) return res.status(401).json({ success: false, error: 'Not authenticated' });
+  if (!id) {
+    // #region agent log
+    debugLog({ location: 'server.js:auth/me', message: 'auth/me unauthenticated', data: { hasUser: false }, hypothesisId: 'A' });
+    // #endregion
+    return res.status(401).json({ success: false, error: 'Not authenticated' });
+  }
   try {
     const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(id);
     if (row) {
@@ -178,6 +213,12 @@ app.get('/api/auth/me', (req, res) => {
       try {
         allowedDomains = JSON.parse(row.allowedDomains || '[]');
       } catch (_) {}
+      if (!Array.isArray(allowedDomains) || allowedDomains.length === 0) {
+        allowedDomains = DEFAULT_ALLOWED_DOMAINS;
+      }
+      // #region agent log
+      debugLog({ location: 'server.js:auth/me', message: 'auth/me from DB', data: { userId: id, allowedDomainsCount: allowedDomains.length }, hypothesisId: 'D' });
+      // #endregion
       return res.json({
         id: row.id,
         username: row.username,
@@ -191,6 +232,9 @@ app.get('/api/auth/me', (req, res) => {
   // Not in DB (env admin or legacy): return from token + preset permissions
   const name = req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id;
   const allowedDomains = req.user.allowedDomains || ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
+  // #region agent log
+  debugLog({ location: 'server.js:auth/me', message: 'auth/me from token', data: { userId: id, allowedDomainsCount: allowedDomains.length }, hypothesisId: 'D' });
+  // #endregion
   res.json({
     id: req.user.id,
     username: req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id,

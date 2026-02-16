@@ -81,7 +81,13 @@ export function useAppData(): UseAppDataReturn {
       setLicences(l || []);
       setLcs(lc || []);
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:loadAllData', message: 'loadAllData success', data: { suppliers: (s || []).length, buyers: (b || []).length, shipments: (fromApi || []).length, licences: (l || []).length, lcs: (lc || []).length }, timestamp: Date.now(), hypothesisId: 'B' }) }).catch(() => {});
+      // #endregion
     } catch (err) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:loadAllData', message: 'loadAllData failed', data: { err: String((err as Error).message) }, timestamp: Date.now(), hypothesisId: 'B' }) }).catch(() => {});
+      // #endregion
       console.error('Data refresh failed:', err);
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
     }
@@ -103,6 +109,9 @@ export function useAppData(): UseAppDataReturn {
     }
 
     const init = async () => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:init', message: 'init started', data: {}, timestamp: Date.now(), hypothesisId: 'B' }) }).catch(() => {});
+      // #endregion
       // Set server online/offline from health check first (no auth), so UI shows correct status
       await api.system.ping();
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
@@ -112,6 +121,9 @@ export function useAppData(): UseAppDataReturn {
       if (token) {
         try {
           const me = await api.auth.me();
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:init', message: 'auth/me success', data: { userId: me.id, allowedDomainsCount: Array.isArray(me.allowedDomains) ? me.allowedDomains.length : 0 }, timestamp: Date.now(), hypothesisId: 'A' }) }).catch(() => {});
+          // #endregion
           const updated: User = {
             id: me.id,
             username: me.username,
@@ -130,7 +142,11 @@ export function useAppData(): UseAppDataReturn {
               setDomain(null);
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:init', message: 'auth/me catch', data: { err: String((e as Error).message) }, timestamp: Date.now(), hypothesisId: 'A' }) }).catch(() => {});
+          // #endregion
+        }
       }
       setIsLoading(false);
     };
