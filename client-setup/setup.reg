@@ -5,4 +5,4 @@ Windows Registry Editor Version 5.00
 "URL Protocol"=""
 
 [HKEY_CLASSES_ROOT\flotex-open\shell\open\command]
-@="powershell.exe -ExecutionPolicy Bypass -File \"C:\\Flotex\\opener.ps1\" \"%1\""
+@="powershell.exe -ExecutionPolicy Bypass -File \"c:\\software\\client-setup\\opener.ps1\" \"%1\""

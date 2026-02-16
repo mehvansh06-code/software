@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, LCStatus, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType } from '../types';
+import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType, ShipmentLicenceImportLine, ShipmentLicenceExportLine } from '../types';
 import { SHIPMENT_STATUS_ORDER_IMPORT, SHIPMENT_STATUS_ORDER_EXPORT, getShipmentStatusLabel, formatINR, formatDate, formatCurrency } from '../constants';
 import { 
   ArrowLeft, 
@@ -16,6 +16,7 @@ import {
   MapPin,
   Plus,
   X,
+  Pencil,
   Calendar,
   Landmark,
   ShieldAlert,
@@ -45,9 +46,11 @@ interface ShipmentDetailsProps {
   user: User;
   /** When 'OFFLINE', document upload may fail with "Shipment not found"; we show a hint to refresh after reconnecting. */
   connectionMode?: 'SQL' | 'OFFLINE';
+  /** Call after update so LC balance etc. refetch (e.g. after adding an LC payment). */
+  onRefreshData?: () => Promise<void>;
 }
 
-const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], onUpdate, onDelete, onUpdateLC, user, connectionMode }) => {
+const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], onUpdate, onDelete, onUpdateLC, user, connectionMode, onRefreshData }) => {
   const { id } = useParams();
   const navigate = useNavigate();
   const shipment = shipments.find(s => s.id === id);
@@ -65,6 +68,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [editDuties, setEditDuties] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [editingHistoryIndex, setEditingHistoryIndex] = useState<number | null>(null);
+  const [editHistoryDraft, setEditHistoryDraft] = useState<ShipmentHistory | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastVariant, setToastVariant] = useState<'error' | 'success'>('error');
 
@@ -106,16 +111,28 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     licenceObligationAmount: 0,
     licenceObligationQuantity: 0
   });
+  const [licenceImportLines, setLicenceImportLines] = useState<ShipmentLicenceImportLine[]>([]);
+  const [licenceExportLines, setLicenceExportLines] = useState<ShipmentLicenceExportLine[]>([]);
   const [editInvoice, setEditInvoice] = useState(false);
   const [invoiceEditData, setInvoiceEditData] = useState({
     invoiceNumber: shipment?.invoiceNumber || '',
     invoiceDate: shipment?.invoiceDate || '',
+    /** Import only: payment due date */
+    paymentDueDate: shipment?.paymentDueDate || '',
+    /** Export: payment term (e.g. Net 30, CAD) */
+    paymentTerm: shipment?.paymentTerm || '',
     freightCharges: Number(shipment?.freightCharges) || 0,
     otherCharges: Number(shipment?.otherCharges) || 0,
     items: (shipment?.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) })),
     /** Export only: editable invoice/FOB amount in FC */
     amountFC: Number(shipment?.amount ?? (shipment as any)?.fobValueFC) || 0
   });
+  const [remarksDraft, setRemarksDraft] = useState(shipment?.remarks ?? '');
+
+  useEffect(() => {
+    setRemarksDraft(shipment?.remarks ?? '');
+  }, [shipment?.id, shipment?.remarks]);
+
   const [newPayment, setNewPayment] = useState<Partial<PaymentLog>>({
     amount: 0,
     date: new Date().toISOString().split('T')[0],
@@ -257,6 +274,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       ...prev,
       invoiceNumber: shipment.invoiceNumber || '',
       invoiceDate: shipment.invoiceDate || '',
+      paymentDueDate: shipment.paymentDueDate || '',
+      paymentTerm: shipment.paymentTerm || '',
       freightCharges: Number(shipment.freightCharges) || 0,
       otherCharges: Number(shipment.otherCharges) || 0,
       items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) })),
@@ -293,6 +312,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       licenceObligationAmount: shipment.licenceObligationAmount ?? 0,
       licenceObligationQuantity: shipment.licenceObligationQuantity ?? 0
     });
+    setLicenceImportLines(Array.isArray(shipment.licenceImportLines) ? shipment.licenceImportLines : []);
+    setLicenceExportLines(Array.isArray(shipment.licenceExportLines) ? shipment.licenceExportLines : []);
     const linkedLic = shipment.linkedLicenceId ? licences.find(l => l.id === shipment.linkedLicenceId) : null;
     setExportDocData({
       sbNo: (shipment as any).sbNo || '',
@@ -502,6 +523,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleSaveDuties = async () => {
     try {
+      // When a licence is selected, invoice is reference-only — BOE/product details are in Licence system, so don't send licenceImportLines.
       const updated = {
         ...shipment,
         ...dutiesData,
@@ -509,7 +531,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         isUnderLicence: !!licenceImportData.linkedLicenceId,
         linkedLicenceId: licenceImportData.linkedLicenceId || undefined,
         licenceObligationAmount: licenceImportData.licenceObligationAmount || undefined,
-        licenceObligationQuantity: licenceImportData.licenceObligationQuantity || undefined
+        licenceObligationQuantity: licenceImportData.licenceObligationQuantity || undefined,
+        licenceImportLines: licenceImportData.linkedLicenceId ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined),
       };
       await onUpdate(updated);
       setEditDuties(false);
@@ -521,7 +544,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   };
   const handleSaveExportDoc = async () => {
     try {
-      const updated = { ...shipment, ...exportDocData };
+      const updated: any = { ...shipment, ...exportDocData };
+      // When a licence is selected, invoice is reference-only — product fulfillment is in Licence system.
+      if (licenceExportLines.length > 0 && !epcgLicenceId && !advLicenceId) updated.licenceExportLines = licenceExportLines;
       await onUpdate(updated);
       setEditExportDoc(false);
     } catch (e: any) {
@@ -543,6 +568,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         ...shipment,
         invoiceNumber: invoiceEditData.invoiceNumber,
         invoiceDate: invoiceEditData.invoiceDate || undefined,
+        paymentDueDate: invoiceEditData.paymentDueDate || undefined,
+        paymentTerm: invoiceEditData.paymentTerm || undefined,
         freightCharges: invoiceEditData.freightCharges || undefined,
         otherCharges: invoiceEditData.otherCharges || undefined,
         items,
@@ -568,7 +595,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         updated.linkedLicenceId = licenceImportData.linkedLicenceId || undefined;
         updated.licenceObligationAmount = licenceImportData.licenceObligationAmount || undefined;
         updated.licenceObligationQuantity = licenceImportData.licenceObligationQuantity || undefined;
+        // When licence selected, invoice is reference-only — don't send licenceImportLines (managed in Licence system).
+        updated.licenceImportLines = licenceImportData.linkedLicenceId ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined);
       }
+      // When export licence(s) selected, invoice is reference-only — don't send licenceExportLines (managed in Licence system).
+      if (isExport) (updated as any).licenceExportLines = (epcgLicenceId || advLicenceId) ? undefined : (licenceExportLines.length > 0 ? licenceExportLines : undefined);
       await onUpdate(updated);
       setEditAll(false);
       setEditInvoice(false);
@@ -586,6 +617,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setInvoiceEditData({
       invoiceNumber: shipment.invoiceNumber || '',
       invoiceDate: shipment.invoiceDate || '',
+      paymentDueDate: shipment.paymentDueDate || '',
+      paymentTerm: shipment.paymentTerm || '',
       freightCharges: Number(shipment.freightCharges) || 0,
       otherCharges: Number(shipment.otherCharges) || 0,
       items: (shipment.items || []).map((it) => ({ ...it, amount: (it.quantity || 0) * (it.rate || 0) })),
@@ -637,6 +670,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       licenceObligationAmount: shipment.licenceObligationAmount ?? 0,
       licenceObligationQuantity: shipment.licenceObligationQuantity ?? 0
     });
+    setLicenceImportLines(Array.isArray(shipment.licenceImportLines) ? shipment.licenceImportLines : []);
+    setLicenceExportLines(Array.isArray(shipment.licenceExportLines) ? shipment.licenceExportLines : []);
     setLodgementValue((shipment as any).lodgement || '');
     setLodgementDateValue((shipment as any).lodgementDate || '');
     setEditAll(false);
@@ -689,10 +724,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       currency: shipment.currency,
       mode: newPayment.mode || 'WIRE',
       reference: newPayment.reference || '',
-      adviceUploaded: false
+      adviceUploaded: false,
+      ...(newPayment.mode === 'LC' && linkedLC ? { linkedLcId: linkedLC.id } : {})
     };
     const updated = { ...shipment, payments: [...(shipment.payments || []), payment] };
     await onUpdate(updated);
+    if (shipment.isUnderLC && (newPayment.mode === 'LC' || newPayment.mode === 'Letter of Credit') && onRefreshData) {
+      await onRefreshData();
+    }
     setShowPaymentModal(false);
     setNewPayment({ amount: 0, date: new Date().toISOString().split('T')[0], currency: shipment.currency, mode: 'WIRE', reference: '' });
   };
@@ -725,18 +764,56 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setNewUpdate({ status: newUpdate.status, location: '', remarks: '' });
   };
 
+  const openEditTimeline = (index: number) => {
+    const h = historyArray[index];
+    if (!h) return;
+    setEditHistoryDraft({
+      status: h.status,
+      date: h.date ? h.date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+      location: h.location || '',
+      remarks: h.remarks || '',
+      updatedBy: h.updatedBy
+    });
+    setEditingHistoryIndex(index);
+  };
+
+  const handleSaveTimelineEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingHistoryIndex == null || !editHistoryDraft || !shipment) return;
+    if (!editHistoryDraft.location?.trim()) {
+      alert('Location is required.');
+      return;
+    }
+    const dateStr = editHistoryDraft.date && editHistoryDraft.date.length >= 10
+      ? new Date(editHistoryDraft.date + 'T12:00:00').toISOString()
+      : new Date().toISOString();
+    const updatedEntry: ShipmentHistory = {
+      status: editHistoryDraft.status,
+      date: dateStr,
+      location: editHistoryDraft.location.trim(),
+      remarks: editHistoryDraft.remarks?.trim() || undefined,
+      updatedBy: user.name
+    };
+    const newHistory = [...historyArray];
+    newHistory[editingHistoryIndex] = updatedEntry;
+    await onUpdate({ ...shipment, history: newHistory });
+    setEditingHistoryIndex(null);
+    setEditHistoryDraft(null);
+  };
+
+  const handleRemoveTimelineEntry = async (index: number) => {
+    if (!shipment || !window.confirm('Remove this entry from the tracking timeline?')) return;
+    const newHistory = historyArray.filter((_, i) => i !== index);
+    await onUpdate({ ...shipment, history: newHistory });
+    setEditingHistoryIndex(null);
+    setEditHistoryDraft(null);
+  };
+
   const totalDuty = dutiesData.dutyBCD + dutiesData.dutySWS + dutiesData.dutyINT;
 
   const handleMarkPaymentReceived = async (payId: string) => {
     const payments = (shipment.payments || []).map(p => p.id === payId ? { ...p, received: true } : p);
     await onUpdate({ ...shipment, payments });
-  };
-
-  const handleMarkLCSettled = async () => {
-    await onUpdate({ ...shipment, lcSettled: true });
-    if (linkedLC && onUpdateLC) {
-      await onUpdateLC({ ...linkedLC, status: LCStatus.PAID });
-    }
   };
 
   return (
@@ -809,6 +886,30 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         </div>
       </div>
 
+      {/* Export reminders: lodgement after BL filled; e-BRC after payment received */}
+      {isExport && (
+        <div className="space-y-3">
+          {((shipment.blNumber || shipment.blDate) && !(shipment as any).lodgement) && (
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-center gap-3">
+              <AlertCircle size={22} className="text-amber-600 shrink-0" />
+              <div>
+                <p className="text-xs font-black text-amber-800 uppercase tracking-wide">Reminder</p>
+                <p className="text-sm font-medium text-amber-800">Bill of Lading is filled. File lodgement with bank when documents are lodged.</p>
+              </div>
+            </div>
+          )}
+          {(shipment.payments || []).some(p => p.received === true) && !(shipment as any).ebrcNo && (
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-center gap-3">
+              <AlertCircle size={22} className="text-amber-600 shrink-0" />
+              <div>
+                <p className="text-xs font-black text-amber-800 uppercase tracking-wide">Reminder</p>
+                <p className="text-sm font-medium text-amber-800">Payment received. File e-BRC and update the shipment with e-BRC number and value.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
 
@@ -852,7 +953,18 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     <p className="text-sm font-bold text-slate-800">{shipment.invoiceDate ? formatDate(shipment.invoiceDate) : '—'}</p>
                   )}
                 </div>
+                {!isExport && (
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Payment Due Date</label>
+                  {editAll ? (
+                    <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={invoiceEditData.paymentDueDate} onChange={e => setInvoiceEditData(prev => ({ ...prev, paymentDueDate: e.target.value }))} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{shipment.paymentDueDate ? formatDate(shipment.paymentDueDate) : '—'}</p>
+                  )}
+                </div>
+                )}
                 {isExport && (
+                <>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Amount</label>
                   {editAll ? (
@@ -869,6 +981,23 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     <p className="text-sm font-bold text-slate-900">{formatCurrency(shipment.amount ?? shipment.fobValueFC, shipment.currency)}</p>
                   )}
                 </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Expected Payment Date</label>
+                  {editAll ? (
+                    <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={invoiceEditData.paymentDueDate} onChange={e => setInvoiceEditData(prev => ({ ...prev, paymentDueDate: e.target.value }))} />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{shipment.paymentDueDate ? formatDate(shipment.paymentDueDate) : '—'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Payment Term</label>
+                  {editAll ? (
+                    <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={invoiceEditData.paymentTerm} onChange={e => setInvoiceEditData(prev => ({ ...prev, paymentTerm: e.target.value }))} placeholder="e.g. Net 30, CAD" />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{shipment.paymentTerm || '—'}</p>
+                  )}
+                </div>
+                </>
                 )}
               </div>
               {!isExport && (
@@ -1032,7 +1161,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   )}
                 </div>
                 <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Expected Shipment Date</label>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Destination ETA</label>
                   {editAll ? (
                     <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.expectedShipmentDate} onChange={e => setLogisticsData({...logisticsData, expectedShipmentDate: e.target.value})} />
                   ) : (
@@ -1152,6 +1281,61 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   ) : <p className="font-bold text-slate-800">{advLicenceId ? (licences.find(l => l.id === advLicenceId)?.number || advLicenceId) : '—'}</p>}
                 </div>
               </div>
+              {isExport && (epcgLicenceId || advLicenceId) && (
+                <p className="text-xs text-slate-500 mt-2">This shipment is linked to the selected licence(s) for export. Product-level fulfillment is managed in Licence Audit Control.</p>
+              )}
+              {/* Products fulfilling this licence (export). When a licence is selected, invoice is just a reference — no product add here; that is in Licence system. */}
+              {isExport && licenceExportLines.length > 0 && !epcgLicenceId && !advLicenceId && (
+                <div className="mt-6">
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Products fulfilling this licence</p>
+                  <p className="text-[10px] text-slate-500 mb-2">
+                    Invoice: {shipment?.invoiceNumber ?? '—'} · Buyer: {partnerName || '—'} · SB No: {exportDocData.sbNo || (shipment as any)?.sbNo || '—'} · SB Date: {exportDocData.sbDate ? formatDate(exportDocData.sbDate) : ((shipment as any)?.sbDate ? formatDate((shipment as any).sbDate) : '—')} · Exchange rate: {exportDocData.exchangeRate ?? shipment?.exchangeRate ?? '—'}
+                  </p>
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
+                          <th className="p-2">Product name</th>
+                          <th className="p-2">HSN</th>
+                          <th className="p-2">Quantity</th>
+                          <th className="p-2">Value (INR)</th>
+                          <th className="p-2">Value (USD)</th>
+                          <th className="p-2 w-10"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {licenceExportLines.map((row, idx) => (
+                          <tr key={idx}>
+                            <td className="p-2"><input type="text" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.productName || ''} onChange={e => setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, productName: e.target.value } : r))} placeholder="Name" /></td>
+                            <td className="p-2"><input type="text" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.hsnCode || ''} onChange={e => setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: e.target.value } : r))} placeholder="HSN" /></td>
+                            <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.quantity ?? ''} onChange={e => setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: parseFloat(e.target.value) || 0 } : r))} /></td>
+                            <td className="p-2">
+                              <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.valueINR ?? ''} onChange={e => {
+                                const v = parseFloat(e.target.value) || 0;
+                                const ex = exportDocData.exchangeRate || 1;
+                                setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, valueINR: v, valueUSD: ex > 0 ? v / ex : 0 } : r));
+                              }} />
+                            </td>
+                            <td className="p-2">
+                              <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.valueUSD ?? ''} onChange={e => {
+                                const usd = parseFloat(e.target.value) || 0;
+                                const ex = exportDocData.exchangeRate || 1;
+                                setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, valueUSD: usd, valueINR: usd * ex } : r));
+                              }} />
+                            </td>
+                            <td className="p-2"><button type="button" onClick={() => setLicenceExportLines(prev => prev.filter((_, i) => i !== idx))} className="p-1 text-slate-400 hover:text-red-600 rounded"><Trash2 size={14} /></button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {(editAll || editExportDoc) && (
+                      <div className="p-2 border-t border-slate-100">
+                        <button type="button" onClick={() => setLicenceExportLines(prev => [...prev, { productName: '', hsnCode: '', quantity: 0, valueINR: 0, valueUSD: 0 }])} className="text-xs font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1"><Plus size={12} /> Add product</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           )}
@@ -1261,13 +1445,38 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
           </div>
           )}
 
-          {/* Bill of Entry (Import only) */}
+          {/* Bill of Entry (Import only). When a licence is selected, invoice is just a reference — no BOE or product add here; those are in Licence system. */}
           {!isExport && (
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
                <h2 className="text-xs font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Landmark size={16} /> Bill of Entry (Import)</h2>
             </div>
             <div className="p-8">
+               {/* When licence is selected: only show licence reference (dropdown + note). No BOE or product add on invoice. */}
+               {licenceImportData.linkedLicenceId ? (
+                 <div className="mb-8 pb-8 border-b border-slate-50">
+                   <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4 flex items-center gap-2"><ShieldAlert size={14} /> Licence reference</h3>
+                   <p className="text-xs text-slate-500 mb-4">This shipment is linked to the selected licence for import. Bill of Entry and product-level details are managed in Licence Audit Control.</p>
+                   <div className="max-w-sm">
+                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{importLicenceType === LicenceType.EPCG ? 'EPCG Licence' : 'Advance Licence'}</label>
+                     {(editAll || editDuties) ? (
+                       <select
+                         className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                         value={licenceImportData.linkedLicenceId}
+                         onChange={e => setLicenceImportData(prev => ({ ...prev, linkedLicenceId: e.target.value }))}
+                       >
+                         <option value="">— Select —</option>
+                         {importLicencesFiltered.map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
+                       </select>
+                     ) : (
+                       <p className="text-sm font-bold text-slate-800">
+                         {licences.find(l => l.id === licenceImportData.linkedLicenceId)?.number || licenceImportData.linkedLicenceId}
+                       </p>
+                     )}
+                   </div>
+                 </div>
+               ) : (
+                 <>
                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 pb-8 border-b border-slate-50">
                    <div>
                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Amount (INR)</label>
@@ -1310,7 +1519,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                    </div>
                </div>
 
-               {/* Licence (Import): Advance for raw material, EPCG for capital goods */}
+               {/* Licence (Import): Advance for raw material, EPCG for capital goods — only when no licence selected yet */}
                <div className="mb-8 pb-8 border-b border-slate-50">
                    <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4 flex items-center gap-2"><ShieldAlert size={14} /> Licence</h3>
                    {importLicenceType ? (
@@ -1362,8 +1571,69 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                    ) : (
                    <p className="text-xs text-slate-400 italic">Add line items with product type to show Advance (raw material) or EPCG (capital goods) licence selection.</p>
                    )}
+                   {/* Products in this Bill of Entry — only when no licence selected (when selected, BOE/product add are in Licence system) */}
+                   {licenceImportLines.length > 0 && (
+                     <div className="mt-6">
+                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Products in this Bill of Entry</p>
+                       <p className="text-[10px] text-slate-500 mb-2">Invoice: {shipment?.invoiceNumber} · Supplier: {partnerName} · BE No: {dutiesData.beNumber || '—'} · BE Date: {dutiesData.beDate ? formatDate(dutiesData.beDate) : '—'} · Exchange rate: {dutiesData.exchangeRate || '—'}</p>
+                       <div className="border border-slate-200 rounded-xl overflow-hidden">
+                         <table className="w-full text-sm">
+                           <thead>
+                             <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
+                               <th className="p-2">Product name</th>
+                               <th className="p-2">Quantity</th>
+                               <th className="p-2">Unit</th>
+                               <th className="p-2">Value (INR)</th>
+                               <th className="p-2">Amount (USD)</th>
+                               <th className="p-2 w-10"></th>
+                             </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-100">
+                             {licenceImportLines.map((row, idx) => (
+                               <tr key={idx}>
+                                 <td className="p-2">
+                                   <input type="text" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.productName || ''} onChange={e => setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, productName: e.target.value } : r))} placeholder="Name" />
+                                 </td>
+                                 <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.quantity ?? ''} onChange={e => setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: parseFloat(e.target.value) || 0 } : r))} /></td>
+                                 <td className="p-2">
+                                   <select className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.unit || 'KGS'} onChange={e => setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r))}>
+                                     {STANDARDISED_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                                   </select>
+                                 </td>
+                                 <td className="p-2">
+                                   <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.valueINR ?? ''} onChange={e => {
+                                     const v = parseFloat(e.target.value) || 0;
+                                     const ex = dutiesData.exchangeRate || 1;
+                                     setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, valueINR: v, amountUSD: ex > 0 ? v / ex : 0 } : r));
+                                   }} />
+                                 </td>
+                                 <td className="p-2">
+                                   <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.amountUSD ?? ''} onChange={e => {
+                                     const usd = parseFloat(e.target.value) || 0;
+                                     const ex = dutiesData.exchangeRate || 1;
+                                     setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, amountUSD: usd, valueINR: usd * ex } : r));
+                                   }} />
+                                 </td>
+                                 <td className="p-2"><button type="button" onClick={() => setLicenceImportLines(prev => prev.filter((_, i) => i !== idx))} className="p-1 text-slate-400 hover:text-red-600 rounded"><Trash2 size={14} /></button></td>
+                               </tr>
+                             ))}
+                           </tbody>
+                         </table>
+                         {(editAll || editDuties) && (
+                           <div className="p-2 border-t border-slate-100">
+                             <button type="button" onClick={() => setLicenceImportLines(prev => [...prev, { productName: '', quantity: 0, unit: 'KGS', valueINR: 0, amountUSD: 0 }])} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"><Plus size={12} /> Add product</button>
+                           </div>
+                         )}
+                       </div>
+                     </div>
+                   )}
                </div>
+               </>
+               )}
 
+               {/* Duties / BOE details only when no licence selected (when selected, BOE is in Licence system) */}
+               {!licenceImportData.linkedLicenceId && (
+               <>
                <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-50">
                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl"><Zap size={20} /></div>
                    <div className="flex-1">
@@ -1404,6 +1674,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      : <p className="font-black text-emerald-700">{formatINR(dutiesData.gst)}</p>}
                   </div>
                </div>
+               </>
+               )}
             </div>
           </div>
           )}
@@ -1468,18 +1740,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
              )}
              {shipment.isUnderLC && (
              <div className="px-6 py-4 border-b border-slate-100 bg-indigo-50/50">
-               <h3 className="text-[10px] font-black uppercase text-indigo-700 tracking-widest mb-2 flex items-center gap-2"><CreditCard size={14} /> Payment is on LC</h3>
-               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                 <div><span className="text-[9px] font-black text-slate-500 uppercase">LC No.</span><p className="font-bold text-slate-800">{shipment.lcNumber || '—'}</p></div>
-                 <div><span className="text-[9px] font-black text-slate-500 uppercase">LC Date</span><p className="font-bold text-slate-800">{shipment.lcDate ? formatDate(shipment.lcDate) : '—'}</p></div>
-                 <div><span className="text-[9px] font-black text-slate-500 uppercase">Amount</span><p className="font-bold text-slate-800">{shipment.lcAmount != null ? formatCurrency(shipment.lcAmount, shipment.currency) : (shipment.amount ? formatCurrency(shipment.amount, shipment.currency) : '—')}</p></div>
-                 {linkedLC && <div><span className="text-[9px] font-black text-slate-500 uppercase">Issuing Bank</span><p className="font-bold text-slate-800">{linkedLC.issuingBank || '—'}</p></div>}
-               </div>
-               {shipment.lcSettled ? (
-                 <p className="text-xs font-black text-emerald-600 uppercase mt-2 flex items-center gap-2"><CheckCircle size={14} /> LC Settled</p>
-               ) : (
-                 <button type="button" onClick={handleMarkLCSettled} className="mt-3 px-4 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-emerald-700">Mark LC as settled</button>
-               )}
+               <p className="text-sm font-bold text-slate-800"><span className="text-[9px] font-black text-slate-500 uppercase">LC No.</span> {shipment.lcNumber || '—'}</p>
              </div>
              )}
              <div className="p-6">
@@ -1561,7 +1822,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                                   <div className={`hidden md:block absolute top-[1.6rem] h-px bg-slate-200 w-6 ${isRight ? 'left-1/2' : 'right-1/2'}`}></div>
                                   <div className={`${isRight ? 'hidden md:block' : 'pl-14 md:pl-0'}`}>
                                       {!isRight && (
-                                          <div className="p-5 rounded-2xl border border-slate-100 bg-slate-50 shadow-sm w-full relative hover:border-indigo-100 transition-colors">
+                                          <div className="p-5 rounded-2xl border border-slate-100 bg-slate-50 shadow-sm w-full relative hover:border-indigo-100 transition-colors group/card">
+                                              <button type="button" onClick={(e) => { e.stopPropagation(); openEditTimeline(i); }} className="absolute top-3 right-3 p-1.5 rounded-lg text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 transition-colors" title="Edit timeline entry"><Pencil size={14} /></button>
                                               <div className="mb-2">
                                                   <span className="block font-black text-xs text-slate-900 uppercase tracking-tight mb-1">{getShipmentStatusLabel(h.status)}</span>
                                                   <div className="inline-flex items-center gap-2 text-[9px] font-bold text-slate-500 bg-white border border-slate-100 px-3 py-1.5 rounded-lg">
@@ -1575,7 +1837,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                                   </div>
                                   <div className={`${!isRight ? 'hidden md:block' : 'pl-14 md:pl-0'}`}>
                                       {isRight && (
-                                          <div className="p-5 rounded-2xl border border-slate-100 bg-slate-50 shadow-sm w-full relative hover:border-indigo-100 transition-colors">
+                                          <div className="p-5 rounded-2xl border border-slate-100 bg-slate-50 shadow-sm w-full relative hover:border-indigo-100 transition-colors group/card">
+                                              <button type="button" onClick={(e) => { e.stopPropagation(); openEditTimeline(i); }} className="absolute top-3 right-3 p-1.5 rounded-lg text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 transition-colors" title="Edit timeline entry"><Pencil size={14} /></button>
                                               <div className="mb-2">
                                                   <span className="block font-black text-xs text-slate-900 uppercase tracking-tight mb-1">{getShipmentStatusLabel(h.status)}</span>
                                                   <div className="inline-flex items-center gap-2 text-[9px] font-bold text-slate-500 bg-white border border-slate-100 px-3 py-1.5 rounded-lg">
@@ -1780,6 +2043,26 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </>
              )}
            </div>
+
+           {/* Remarks: free-form notes for this shipment */}
+           <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-4">
+             <h2 className="text-xs font-black uppercase text-slate-900 flex items-center gap-2">
+               <Edit3 size={16} className="text-indigo-500" /> Remarks
+             </h2>
+             <p className="text-[10px] text-slate-500">Add any notes or information for this shipment. They are saved automatically when you leave the box.</p>
+             <textarea
+               rows={4}
+               className="w-full px-4 py-3 rounded-xl border border-slate-200 font-medium text-sm placeholder:text-slate-400 focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
+               placeholder="Enter any information you want to remember for this shipment…"
+               value={remarksDraft}
+               onChange={e => setRemarksDraft(e.target.value)}
+               onBlur={() => {
+                 if (shipment && remarksDraft !== (shipment.remarks ?? '')) {
+                   onUpdate({ ...shipment, remarks: remarksDraft });
+                 }
+               }}
+             />
+           </div>
         </div>
       </div>
 
@@ -1817,6 +2100,59 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                       <button type="submit" className="w-full py-4 bg-indigo-600 text-white font-black uppercase rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 flex items-center justify-center gap-2">
                           <CheckCircle size={18} /> Confirm Update
                       </button>
+                  </form>
+              </div>
+          </div>
+      )}
+
+      {editingHistoryIndex !== null && editHistoryDraft && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-8 relative">
+                  <button onClick={() => { setEditingHistoryIndex(null); setEditHistoryDraft(null); }} className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full text-slate-400">
+                      <X size={20} />
+                  </button>
+                  <h2 className="text-xl font-black text-slate-900 mb-6">Edit timeline entry</h2>
+                  <form onSubmit={handleSaveTimelineEdit} className="space-y-6">
+                      <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Status</label>
+                          <select
+                            className="w-full px-4 py-3 rounded-xl border font-bold text-sm bg-slate-50"
+                            value={editHistoryDraft.status}
+                            onChange={e => setEditHistoryDraft({ ...editHistoryDraft, status: e.target.value as ShipmentStatus })}
+                          >
+                              {(isExport ? SHIPMENT_STATUS_ORDER_EXPORT : SHIPMENT_STATUS_ORDER_IMPORT).map(s => (
+                                  <option key={s} value={s}>{getShipmentStatusLabel(s)}</option>
+                              ))}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Date</label>
+                          <input
+                            type="date"
+                            className="w-full px-4 py-3 rounded-xl border font-bold text-sm bg-slate-50"
+                            value={editHistoryDraft.date && editHistoryDraft.date.length >= 10 ? editHistoryDraft.date.slice(0, 10) : ''}
+                            onChange={e => setEditHistoryDraft({ ...editHistoryDraft, date: e.target.value })}
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Location</label>
+                          <div className="relative">
+                              <MapPin size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-indigo-500" />
+                              <input required className="w-full pl-10 pr-4 py-3 rounded-xl border font-bold text-sm" placeholder="e.g. Mundra Port, Gujarat" value={editHistoryDraft.location} onChange={e => setEditHistoryDraft({ ...editHistoryDraft, location: e.target.value })} />
+                          </div>
+                      </div>
+                      <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Remarks / Notes</label>
+                          <textarea rows={3} className="w-full px-4 py-3 rounded-xl border font-medium text-sm" placeholder="Any delays, weather conditions..." value={editHistoryDraft.remarks || ''} onChange={e => setEditHistoryDraft({ ...editHistoryDraft, remarks: e.target.value })} />
+                      </div>
+                      <div className="flex gap-3">
+                          <button type="button" onClick={() => handleRemoveTimelineEntry(editingHistoryIndex)} className="px-4 py-3 border border-red-200 text-red-600 font-bold rounded-xl hover:bg-red-50 transition-all text-sm">
+                              Remove entry
+                          </button>
+                          <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white font-black uppercase rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 flex items-center justify-center gap-2">
+                              <Save size={18} /> Save changes
+                          </button>
+                      </div>
                   </form>
               </div>
           </div>

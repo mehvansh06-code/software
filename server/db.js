@@ -167,6 +167,7 @@ runMigration('ALTER TABLE shipments ADD COLUMN freightCharges REAL', 'freightCha
 runMigration('ALTER TABLE shipments ADD COLUMN otherCharges REAL', 'otherCharges');
 runMigration('ALTER TABLE shipments ADD COLUMN documentsFolderPath TEXT', 'documentsFolderPath');
 runMigration('ALTER TABLE shipments ADD COLUMN remarks TEXT', 'remarks');
+runMigration('ALTER TABLE shipments ADD COLUMN paymentTerm TEXT', 'paymentTerm');
 runMigration('ALTER TABLE shipments ADD COLUMN isLC INTEGER', 'shipments.isLC');
 runMigration('ALTER TABLE shipments ADD COLUMN lcReferenceNumber TEXT', 'shipments.lcReferenceNumber');
 runMigration('ALTER TABLE shipments ADD COLUMN lcOpeningDate TEXT', 'shipments.lcOpeningDate');
@@ -189,6 +190,13 @@ runMigration('ALTER TABLE lcs ADD COLUMN shipments_json TEXT', 'lcs.shipments_js
 runMigration('ALTER TABLE lcs ADD COLUMN balanceAmount REAL', 'lcs.balanceAmount');
 runMigration('ALTER TABLE shipments ADD COLUMN dbk REAL', 'shipments.dbk');
 runMigration('ALTER TABLE shipments ADD COLUMN rodtep REAL', 'shipments.rodtep');
+runMigration('ALTER TABLE licences ADD COLUMN amountImportUSD REAL', 'licences.amountImportUSD');
+runMigration('ALTER TABLE licences ADD COLUMN amountImportINR REAL', 'licences.amountImportINR');
+runMigration('ALTER TABLE licences ADD COLUMN importProducts_json TEXT', 'licences.importProducts_json');
+runMigration('ALTER TABLE licences ADD COLUMN exportProducts_json TEXT', 'licences.exportProducts_json');
+runMigration('ALTER TABLE shipments ADD COLUMN licenceImportLines_json TEXT', 'shipments.licenceImportLines_json');
+runMigration('ALTER TABLE shipments ADD COLUMN licenceExportLines_json TEXT', 'shipments.licenceExportLines_json');
+runMigration('ALTER TABLE shipments ADD COLUMN linkedLcId TEXT', 'shipments.linkedLcId');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS lc_transactions (
@@ -350,6 +358,7 @@ function getShipmentValues(s, folderPath) {
     trackingUrl: s.trackingUrl || null,
     incoTerm: s.incoTerm || 'FOB',
     paymentDueDate: s.paymentDueDate || null,
+    paymentTerm: s.paymentTerm || null,
     expectedArrivalDate: s.expectedArrivalDate ?? null,
     invoiceDate: s.invoiceDate || null,
     freightCharges: s.freightCharges ?? null,
@@ -368,6 +377,9 @@ function getShipmentValues(s, folderPath) {
     sbDate: s.sbDate || null,
     dbk: s.dbk ?? null,
     rodtep: s.rodtep ?? null,
+    licenceImportLines_json: Array.isArray(s.licenceImportLines) ? JSON.stringify(s.licenceImportLines) : null,
+    licenceExportLines_json: Array.isArray(s.licenceExportLines) ? JSON.stringify(s.licenceExportLines) : null,
+    linkedLcId: s.linkedLcId || null,
   };
 }
 
@@ -376,21 +388,21 @@ const SHIPMENT_INSERT_SQL = `
   INSERT INTO shipments (
     id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
     status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
-    isUnderLC, lcNumber, lcAmount, lcDate, isUnderLicence, linkedLicenceId, epcgLicenceId, advLicenceId,
+    isUnderLC, lcNumber, lcAmount, lcDate, linkedLcId, isUnderLicence, linkedLicenceId, epcgLicenceId, advLicenceId,
     licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
-    incoTerm, paymentDueDate, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
+    incoTerm, paymentDueDate, paymentTerm, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-    shipperSealNumber, lineSealNumber, sbNo, sbDate, dbk, rodtep
+    shipperSealNumber, lineSealNumber, sbNo, sbDate, dbk, rodtep, licenceImportLines_json, licenceExportLines_json
   ) VALUES (
     :id, :supplierId, :buyerId, :productId, :invoiceNumber, :company, :amount, :currency, :exchangeRate, :rate, :quantity,
     :status, :expectedShipmentDate, :createdAt, :fobValueFC, :fobValueINR, :invoiceValueINR,
-    :isUnderLC, :lcNumber, :lcAmount, :lcDate, :isUnderLicence, :linkedLicenceId, :epcgLicenceId, :advLicenceId,
+    :isUnderLC, :lcNumber, :lcAmount, :lcDate, :linkedLcId, :isUnderLicence, :linkedLicenceId, :epcgLicenceId, :advLicenceId,
     :licenceObligationAmount, :licenceObligationQuantity, :containerNumber, :blNumber, :blDate, :beNumber, :beDate, :shippingLine,
     :portCode, :portOfLoading, :portOfDischarge, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :gst, :trackingUrl,
-    :incoTerm, :paymentDueDate, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
+    :incoTerm, :paymentDueDate, :paymentTerm, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
     :documents_json, :history_json, :payments_json, :items_json, :documentsFolderPath, :remarks, :consigneeId, :lcSettled,
-    :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate, :dbk, :rodtep
+    :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate, :dbk, :rodtep, :licenceImportLines_json, :licenceExportLines_json
   )`;
 
 const SHIPMENT_INSERT_OR_REPLACE_SQL = SHIPMENT_INSERT_SQL.replace('INSERT INTO', 'INSERT OR REPLACE INTO');

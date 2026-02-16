@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { Licence, LicenceType, Shipment, User, UserRole } from '../types';
-import { Award, ShieldAlert, Calendar, FileCheck, TrendingUp, Plus, Briefcase, Settings, X, Save, ArrowDownLeft, ArrowUpRight, Pencil } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Licence, LicenceType, LicenceImportProduct, LicenceExportProduct, Shipment, User, UserRole, Material } from '../types';
+import { Award, ShieldAlert, Calendar, FileCheck, TrendingUp, Plus, Briefcase, Settings, X, Save, ArrowDownLeft, ArrowUpRight, Pencil, Trash2 } from 'lucide-react';
 import { formatINR, formatDate, formatCurrency } from '../constants';
 import { COMPANY_OPTIONS } from '../constants';
+import { api } from '../api';
+import { STANDARDISED_UNITS } from '../types';
 
 interface LicenceTrackerProps {
   licences: Licence[];
@@ -16,24 +18,33 @@ interface LicenceTrackerProps {
 const canEditLicence = (user?: User | null) =>
   user?.role === UserRole.MANAGEMENT || user?.role === UserRole.CHECKER;
 
-/** Export obligation fulfilled (INR) = sum of linked export shipments' invoice value in INR (linked via linkedLicenceId, epcgLicenceId, or advLicenceId) */
+/** Export obligation fulfilled (INR) = sum of linked export shipments' licenceExportLines valueINR when present, else invoice value in INR. */
 function getFulfilledForLicence(licenceId: string, allShipments: Shipment[]): number {
   const id = String(licenceId);
-  return allShipments
-    .filter(s => !!s.buyerId && (
-      (s?.linkedLicenceId != null && s.linkedLicenceId !== '' && String(s.linkedLicenceId) === id) ||
-      (s?.epcgLicenceId != null && s.epcgLicenceId !== '' && String(s.epcgLicenceId) === id) ||
-      (s?.advLicenceId != null && s.advLicenceId !== '' && String(s.advLicenceId) === id)
-    ))
-    .reduce((sum, s) => sum + (s.invoiceValueINR || 0), 0);
+  const linked = allShipments.filter(s => !!s.buyerId && (
+    (s?.linkedLicenceId != null && s.linkedLicenceId !== '' && String(s.linkedLicenceId) === id) ||
+    (s?.epcgLicenceId != null && s.epcgLicenceId !== '' && String(s.epcgLicenceId) === id) ||
+    (s?.advLicenceId != null && s.advLicenceId !== '' && String(s.advLicenceId) === id)
+  ));
+  return linked.reduce((sum, s) => {
+    if (Array.isArray(s.licenceExportLines) && s.licenceExportLines.length > 0) {
+      return sum + s.licenceExportLines.reduce((s2, l) => s2 + (l.valueINR || 0), 0);
+    }
+    return sum + (s.invoiceValueINR || 0);
+  }, 0);
 }
 
-/** Import utilization (INR) = sum of linked import shipments' obligation amount, or invoice value if not set */
+/** Import utilization (INR) = sum of linked import shipments' obligation amount, or invoice value if not set; when licenceImportLines exist, use sum of their valueINR. */
 function getUtilizationForLicence(licenceId: string, allShipments: Shipment[]): number {
   const id = String(licenceId);
-  return allShipments
-    .filter(s => s?.linkedLicenceId != null && s.linkedLicenceId !== '' && String(s.linkedLicenceId) === id && !!s.supplierId)
-    .reduce((sum, s) => sum + (s.licenceObligationAmount ?? s.invoiceValueINR ?? 0), 0);
+  const linked = allShipments.filter(s => s?.linkedLicenceId != null && s.linkedLicenceId !== '' && String(s.linkedLicenceId) === id && !!s.supplierId);
+  const fromLines = linked.reduce((sum, s) => {
+    if (Array.isArray(s.licenceImportLines) && s.licenceImportLines.length > 0) {
+      return sum + s.licenceImportLines.reduce((s2, l) => s2 + (l.valueINR || 0), 0);
+    }
+    return sum + (s.licenceObligationAmount ?? s.invoiceValueINR ?? 0);
+  }, 0);
+  return fromLines;
 }
 
 const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, user, onAddItem, onUpdateItem, onUpdateShipment }) => {
@@ -54,8 +65,19 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     eoFulfilled: 0,
     status: 'ACTIVE',
     number: '',
+    amountImportUSD: 0,
+    amountImportINR: 0,
   });
-  
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [newImportProducts, setNewImportProducts] = useState<LicenceImportProduct[]>([]);
+  const [newExportProducts, setNewExportProducts] = useState<LicenceExportProduct[]>([]);
+
+  useEffect(() => {
+    if (showAddLicence) {
+      api.materials.list().then((list: any) => setMaterials(Array.isArray(list) ? list : []));
+    }
+  }, [showAddLicence]);
+
   const epcgLicences = licences.filter(l => l.type === LicenceType.EPCG);
   const advanceLicences = licences.filter(l => l.type === LicenceType.ADVANCE);
 
@@ -97,10 +119,20 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     setSelectedLicence(null);
   };
 
-  // Total import utilization: sum of obligation amount (or invoice value if not set) for linked imports
-  const totalImportUtilization = importShipments.reduce((sum, s) => sum + (s.licenceObligationAmount ?? s.invoiceValueINR ?? 0), 0);
-  const isOverImportLimit = selectedLicence != null && totalImportUtilization > (selectedLicence.dutySaved || 0);
-  const fulfilledFromExports = selectedLicence != null ? exportShipments.reduce((s, x) => s + (x.invoiceValueINR || 0), 0) : 0;
+  // Total import utilization: when licenceImportLines exist use their valueINR sum, else obligation amount or invoice value
+  const totalImportUtilization = importShipments.reduce((sum, s) => {
+    if (Array.isArray(s.licenceImportLines) && s.licenceImportLines.length > 0) {
+      return sum + s.licenceImportLines.reduce((s2, l) => s2 + (l.valueINR || 0), 0);
+    }
+    return sum + (s.licenceObligationAmount ?? s.invoiceValueINR ?? 0);
+  }, 0);
+  const isOverImportLimit = selectedLicence != null && totalImportUtilization > (selectedLicence.dutySaved || selectedLicence.amountImportINR || 0);
+  const fulfilledFromExports = selectedLicence != null ? exportShipments.reduce((s, x) => {
+    if (Array.isArray(x.licenceExportLines) && x.licenceExportLines.length > 0) {
+      return s + x.licenceExportLines.reduce((s2, l) => s2 + (l.valueINR || 0), 0);
+    }
+    return s + (x.invoiceValueINR || 0);
+  }, 0) : 0;
 
   const LicenceTable = ({ title, data, icon: Icon, colorClass }: { title: string, data: Licence[], icon: React.ElementType, colorClass: string }) => (
     <section className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden mb-8">
@@ -434,7 +466,8 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                  <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                     <div className="bg-amber-50 p-6 rounded-2xl border border-amber-100">
                        <p className="text-[10px] font-black uppercase text-amber-600">Duty-free import limit</p>
-                       <p className="text-2xl font-black text-slate-900 mt-2">{formatINR(selectedLicence.dutySaved)}</p>
+                       <p className="text-2xl font-black text-slate-900 mt-2">{formatINR(selectedLicence.dutySaved || selectedLicence.amountImportINR || 0)}</p>
+                       {(selectedLicence.amountImportUSD != null && selectedLicence.amountImportUSD > 0) && <p className="text-[9px] text-slate-600 mt-0.5">USD limit: {formatCurrency(selectedLicence.amountImportUSD, 'USD')}</p>}
                        <p className="text-[9px] text-slate-500 mt-1">Fixed: max you can import without duty/GST</p>
                     </div>
                     <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100">
@@ -472,11 +505,18 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                                   </tr>
                                </thead>
                                <tbody className="divide-y divide-slate-100">
-                                  {importShipments.map(sh => (
+                                  {importShipments.map(sh => {
+                                    const lineSumINR = Array.isArray(sh.licenceImportLines) && sh.licenceImportLines.length > 0
+                                      ? sh.licenceImportLines.reduce((s, l) => s + (l.valueINR || 0), 0)
+                                      : null;
+                                    return (
                                      <tr key={sh.id}>
                                         <td className="py-3 pl-3">
                                            <p className="text-xs font-bold text-slate-900">{sh.invoiceNumber}</p>
                                            <p className="text-[9px] text-slate-400">{formatDate(sh.createdAt)}</p>
+                                           {Array.isArray(sh.licenceImportLines) && sh.licenceImportLines.length > 0 && (
+                                             <p className="text-[9px] text-amber-600 mt-0.5">BOE: {sh.licenceImportLines.length} product(s) · Σ {formatINR(sh.licenceImportLines.reduce((s, l) => s + (l.valueINR || 0), 0))}</p>
+                                           )}
                                         </td>
                                         <td className="py-3">
                                            <p className="text-xs font-bold text-slate-700">{formatINR(sh.invoiceValueINR ?? 0)}</p>
@@ -485,12 +525,12 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                                            <input 
                                               type="number" 
                                               className="w-full max-w-[140px] px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-amber-500 outline-none"
-                                              value={sh.licenceObligationAmount ?? sh.invoiceValueINR ?? 0}
+                                              value={lineSumINR ?? sh.licenceObligationAmount ?? sh.invoiceValueINR ?? 0}
                                               onChange={(e) => handleObligationChange(sh.id, e.target.value)}
                                            />
                                         </td>
                                      </tr>
-                                  ))}
+                                  ); })}
                                </tbody>
                             </table>
                           ) : <p className="p-6 text-center text-xs text-slate-400 italic">No import shipments linked to this licence. Link imports in Shipment Master or Shipment Details.</p>}
@@ -513,17 +553,24 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                                   </tr>
                                </thead>
                                <tbody className="divide-y divide-slate-100">
-                                  {exportShipments.map(sh => (
+                                  {exportShipments.map(sh => {
+                                    const lineSumINR = Array.isArray(sh.licenceExportLines) && sh.licenceExportLines.length > 0
+                                      ? sh.licenceExportLines.reduce((s, l) => s + (l.valueINR || 0), 0)
+                                      : null;
+                                    return (
                                      <tr key={sh.id}>
                                         <td className="py-3 pl-3">
                                            <p className="text-xs font-bold text-slate-900">{sh.invoiceNumber}</p>
                                            <p className="text-[9px] text-slate-400">{formatDate(sh.createdAt)}</p>
+                                           {Array.isArray(sh.licenceExportLines) && sh.licenceExportLines.length > 0 && (
+                                             <p className="text-[9px] text-emerald-600 mt-0.5">Lines: {sh.licenceExportLines.length} product(s) · Σ {formatINR(lineSumINR!)}</p>
+                                           )}
                                         </td>
                                         <td className="py-3">
-                                           <p className="text-xs font-black text-emerald-600">{formatINR(sh.invoiceValueINR)}</p>
+                                           <p className="text-xs font-black text-emerald-600">{formatINR(lineSumINR ?? sh.invoiceValueINR ?? 0)}</p>
                                         </td>
                                      </tr>
-                                  ))}
+                                  ); })}
                                </tbody>
                             </table>
                           ) : <p className="p-6 text-center text-xs text-slate-400 italic">No export shipments fulfilling this licence.</p>}
@@ -545,135 +592,194 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
       {/* Add New Licence Modal */}
       {showAddLicence && onAddItem && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
-          <div className="bg-white w-full max-w-2xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="bg-white w-full max-w-4xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
               <h2 className="text-lg font-black text-slate-900">Add New Licence</h2>
-              <button type="button" onClick={() => setShowAddLicence(false)} className="p-2 hover:bg-slate-200 rounded-full transition-all"><X size={20} className="text-slate-500" /></button>
+              <button type="button" onClick={() => { setShowAddLicence(false); setNewImportProducts([]); setNewExportProducts([]); }} className="p-2 hover:bg-slate-200 rounded-full transition-all"><X size={20} className="text-slate-500" /></button>
             </div>
             <form
-              className="p-8 overflow-y-auto space-y-6"
+              className="p-8 overflow-y-auto space-y-8"
               onSubmit={async (e) => {
                 e.preventDefault();
                 if (!newLicence.issueDate || !newLicence.expiryDate || !newLicence.number || !newLicence.company) {
-                  alert('Please fill Licence type, Licence number, Company, Opening date, and Obligation due by date.');
+                  alert('Please fill Licence number, Opening date, and Export validity date.');
                   return;
                 }
                 const id = 'lic' + Date.now();
+                const importTotalUSD = newImportProducts.reduce((s, r) => s + (r.amountUSDLimit || 0), 0);
+                const dutySaved = Number(newLicence.dutySaved) || 0;
+                const eoRequired = newExportProducts.reduce((sum, p) => sum + (p.amountINR || 0), 0) || Number(newLicence.eoRequired) || 0;
                 const licence: Licence = {
                   id,
-                  number: newLicence.number,
+                  number: newLicence.number!,
                   type: newLicence.type ?? LicenceType.ADVANCE,
                   issueDate: newLicence.issueDate,
                   importValidityDate: newLicence.importValidityDate || undefined,
                   expiryDate: newLicence.expiryDate,
-                  dutySaved: Number(newLicence.dutySaved) || 0,
-                  eoRequired: Number(newLicence.eoRequired) || 0,
+                  dutySaved,
+                  eoRequired,
                   eoFulfilled: 0,
                   company: newLicence.company as 'GFPL' | 'GTEX',
                   status: 'ACTIVE',
+                  amountImportUSD: importTotalUSD > 0 ? importTotalUSD : undefined,
+                  amountImportINR: undefined,
+                  importProducts: newImportProducts.length > 0 ? newImportProducts : undefined,
+                  exportProducts: newExportProducts.length > 0 ? newExportProducts : undefined,
                 };
                 await onAddItem(licence);
                 setShowAddLicence(false);
-                setNewLicence({ type: LicenceType.ADVANCE, company: 'GFPL', issueDate: '', importValidityDate: '', expiryDate: '', dutySaved: 0, eoRequired: 0, eoFulfilled: 0, status: 'ACTIVE', number: '' });
+                setNewLicence({ type: LicenceType.ADVANCE, company: 'GFPL', issueDate: '', importValidityDate: '', expiryDate: '', dutySaved: 0, eoRequired: 0, eoFulfilled: 0, status: 'ACTIVE', number: '', amountImportUSD: 0, amountImportINR: 0 });
+                setNewImportProducts([]);
+                setNewExportProducts([]);
               }}
             >
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Licence Type</label>
-                <select
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold bg-white"
-                  value={newLicence.type ?? LicenceType.ADVANCE}
-                  onChange={e => setNewLicence(prev => ({ ...prev, type: e.target.value as LicenceType }))}
-                >
-                  <option value={LicenceType.ADVANCE}>Advance Licence</option>
-                  <option value={LicenceType.EPCG}>EPCG</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Licence Number</label>
-                <input
-                  type="text"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
-                  value={newLicence.number ?? ''}
-                  onChange={e => setNewLicence(prev => ({ ...prev, number: e.target.value }))}
-                  placeholder="e.g. 0310224567"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Company</label>
-                <select
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold bg-white"
-                  value={newLicence.company ?? 'GFPL'}
-                  onChange={e => setNewLicence(prev => ({ ...prev, company: e.target.value as 'GFPL' | 'GTEX' }))}
-                >
-                  {COMPANY_OPTIONS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <p className="text-xs text-slate-500 bg-slate-50 rounded-xl p-3 border border-slate-100">
-                You get a duty-free import limit (raw/capital goods). In return you promise to export finished goods and bring in foreign exchange by the obligation due date.
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Opening date</label>
-                  <input
-                    type="date"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
-                    value={newLicence.issueDate ?? ''}
-                    onChange={e => setNewLicence(prev => ({ ...prev, issueDate: e.target.value }))}
-                  />
+              {/* Section 1: Licence details */}
+              <div className="space-y-4">
+                <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 pb-2">1. Licence details</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Licence Number</label>
+                    <input type="text" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.number ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, number: e.target.value }))} placeholder="e.g. 0310224567" required />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Licence Type</label>
+                    <select className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold bg-white" value={newLicence.type ?? LicenceType.ADVANCE} onChange={e => setNewLicence(prev => ({ ...prev, type: e.target.value as LicenceType }))}>
+                      <option value={LicenceType.ADVANCE}>Advance Licence</option>
+                      <option value={LicenceType.EPCG}>EPCG</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Company</label>
+                    <select className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold bg-white" value={newLicence.company ?? 'GFPL'} onChange={e => setNewLicence(prev => ({ ...prev, company: e.target.value as 'GFPL' | 'GTEX' }))}>
+                      {COMPANY_OPTIONS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Import validity (optional)</label>
-                  <p className="text-[9px] text-slate-500 mb-1">Until when imports under this licence can be cleared</p>
-                  <input
-                    type="date"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
-                    value={newLicence.importValidityDate ?? ''}
-                    onChange={e => setNewLicence(prev => ({ ...prev, importValidityDate: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Obligation due by</label>
-                  <p className="text-[9px] text-slate-500 mb-1">Export obligation must be fulfilled by this date</p>
-                  <input
-                    type="date"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
-                    value={newLicence.expiryDate ?? ''}
-                    onChange={e => setNewLicence(prev => ({ ...prev, expiryDate: e.target.value }))}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Licence opening date</label>
+                    <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.issueDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, issueDate: e.target.value }))} required />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Import validity (optional)</label>
+                    <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.importValidityDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, importValidityDate: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Export validity date</label>
+                    <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.expiryDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, expiryDate: e.target.value }))} required />
+                  </div>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Duty-free import limit (INR)</label>
-                  <p className="text-[9px] text-slate-500 mb-1">Fixed: max value of goods you can import without duty/GST under this licence</p>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
-                    value={newLicence.dutySaved ?? ''}
-                    onChange={e => setNewLicence(prev => ({ ...prev, dutySaved: parseFloat(e.target.value) || 0 }))}
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Export obligation (INR)</label>
-                  <p className="text-[9px] text-slate-500 mb-1">Amount you must export (finished goods, forex) by the due date to fulfill your promise</p>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
-                    value={newLicence.eoRequired ?? ''}
-                    onChange={e => setNewLicence(prev => ({ ...prev, eoRequired: parseFloat(e.target.value) || 0 }))}
-                    placeholder="0"
-                  />
+
+              {/* Section 2: Import */}
+              <div className="space-y-4">
+                <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 pb-2">2. Import</h3>
+                <p className="text-[10px] text-slate-500">Add products you can import under this licence (from Material master). Each product has a quantity limit and amount in USD limit; whichever is hit first when importing applies. Total amount is calculated from the product rows below.</p>
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
+                        <th className="p-3">Material</th>
+                        <th className="p-3">Quantity limit</th>
+                        <th className="p-3">Unit of measurement</th>
+                        <th className="p-3">HSN code</th>
+                        <th className="p-3">Amount (USD) limit</th>
+                        <th className="p-3">Amount (INR)</th>
+                        <th className="p-3 w-12"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {newImportProducts.map((row, idx) => (
+                        <tr key={idx}>
+                          <td className="p-2">
+                            <select className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.materialId} onChange={e => { const m = materials.find(m => m.id === e.target.value); setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, materialId: e.target.value, materialName: m?.name, unit: m?.unit ?? r.unit, hsnCode: m?.hsnCode ?? r.hsnCode } : r)); }}>
+                              <option value="">— Select —</option>
+                              {materials.map(m => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
+                            </select>
+                          </td>
+                          <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.quantityLimit || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, quantityLimit: parseFloat(e.target.value) || 0 } : r))} /></td>
+                          <td className="p-2">
+                            <select className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.unit || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r))}>
+                              <option value="">—</option>
+                              {STANDARDISED_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                            </select>
+                          </td>
+                          <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.hsnCode || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: e.target.value } : r))} placeholder="HSN" /></td>
+                          <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountUSDLimit || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountUSDLimit: parseFloat(e.target.value) || 0 } : r))} /></td>
+                          <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountINR ?? ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountINR: parseFloat(e.target.value) || 0 } : r))} /></td>
+                          <td className="p-2"><button type="button" onClick={() => setNewImportProducts(prev => prev.filter((_, i) => i !== idx))} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-amber-50 border-t-2 border-amber-200 text-[10px] font-black text-slate-700">
+                        <td className="p-3" colSpan={2}>Total amount (USD)</td>
+                        <td className="p-3" colSpan={2}>Total amount (INR)</td>
+                        <td className="p-3">{formatCurrency(newImportProducts.reduce((s, r) => s + (r.amountUSDLimit || 0), 0), 'USD')}</td>
+                        <td className="p-3">{formatINR(newImportProducts.reduce((s, r) => s + (r.amountINR || 0), 0))}</td>
+                        <td className="p-3 w-12"></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                  <div className="p-2 border-t border-slate-100">
+                    <button type="button" onClick={() => setNewImportProducts(prev => [...prev, { materialId: '', quantityLimit: 0, amountUSDLimit: 0, unit: '', hsnCode: '', amountINR: 0 }])} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"><Plus size={14} /> Add import product</button>
+                  </div>
                 </div>
               </div>
-              <div className="flex justify-end gap-4 pt-4">
-                <button type="button" onClick={() => setShowAddLicence(false)} className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:text-slate-700 uppercase text-xs">Cancel</button>
+
+              {/* Section 3: Export */}
+              <div className="space-y-4">
+                <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 pb-2">3. Export</h3>
+                <p className="text-[10px] text-slate-500">Add export products (obligation to export). Amount in USD and INR define the obligation.</p>
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
+                        <th className="p-3">Product name</th>
+                        <th className="p-3">HSN</th>
+                        <th className="p-3">Quantity</th>
+                        <th className="p-3">Unit</th>
+                        <th className="p-3">Amount (USD)</th>
+                        <th className="p-3">Amount (INR)</th>
+                        <th className="p-3 w-12"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {newExportProducts.map((row, idx) => (
+                        <tr key={idx}>
+                          <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.productName || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, productName: e.target.value } : r))} placeholder="Name" /></td>
+                          <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.hsnCode || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: e.target.value } : r))} placeholder="HSN" /></td>
+                          <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.quantity || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, quantity: parseFloat(e.target.value) || 0 } : r))} /></td>
+                          <td className="p-2">
+                            <select className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.unit || 'KGS'} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r))}>
+                              {STANDARDISED_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                            </select>
+                          </td>
+                          <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountUSD || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountUSD: parseFloat(e.target.value) || 0 } : r))} /></td>
+                          <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountINR || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountINR: parseFloat(e.target.value) || 0 } : r))} /></td>
+                          <td className="p-2"><button type="button" onClick={() => setNewExportProducts(prev => prev.filter((_, i) => i !== idx))} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-emerald-50 border-t-2 border-emerald-200 text-[10px] font-black text-slate-700">
+                        <td className="p-3" colSpan={4}>Total amount</td>
+                        <td className="p-3">{formatCurrency(newExportProducts.reduce((s, r) => s + (r.amountUSD || 0), 0), 'USD')}</td>
+                        <td className="p-3">{formatINR(newExportProducts.reduce((s, r) => s + (r.amountINR || 0), 0))}</td>
+                        <td className="p-3 w-12"></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                  <div className="p-2 border-t border-slate-100">
+                    <button type="button" onClick={() => setNewExportProducts(prev => [...prev, { productName: '', hsnCode: '', quantity: 0, unit: 'KGS', amountUSD: 0, amountINR: 0 }])} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"><Plus size={14} /> Add export product</button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-4 pt-4 border-t border-slate-100">
+                <button type="button" onClick={() => { setShowAddLicence(false); setNewImportProducts([]); setNewExportProducts([]); }} className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:text-slate-700 uppercase text-xs">Cancel</button>
                 <button type="submit" className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs shadow-lg shadow-indigo-100 hover:bg-indigo-700 flex items-center gap-2">
-                  <Save size={16} /> Add Licence
+                  <Save size={16} /> Create licence
                 </button>
               </div>
             </form>

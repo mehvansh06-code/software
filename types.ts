@@ -257,6 +257,25 @@ export interface Material {
   type?: string;
 }
 
+/** Per–Bill of Entry product line when linking an import shipment to a licence. */
+export interface ShipmentLicenceImportLine {
+  productName: string;
+  quantity: number;
+  unit: string;
+  valueINR: number;
+  amountUSD: number;
+  materialId?: string;
+}
+
+/** Per-shipment product line when linking an export shipment to a licence (fulfillment). */
+export interface ShipmentLicenceExportLine {
+  productName: string;
+  hsnCode: string;
+  quantity: number;
+  valueINR: number;
+  valueUSD: number;
+}
+
 export interface Shipment {
   id: string;
   supplierId?: string;
@@ -315,6 +334,8 @@ export interface Shipment {
   
   invoiceValueINR: number;
   paymentDueDate?: string;
+  /** Payment terms (e.g. Net 30, CAD) */
+  paymentTerm?: string;
   invoiceDate?: string;
   freightCharges?: number;
   otherCharges?: number;
@@ -329,7 +350,11 @@ export interface Shipment {
   licenceObligationAmount?: number;
   /** Quantity utilized against the linked licence (import). */
   licenceObligationQuantity?: number;
-  
+  /** Import: products in this Bill of Entry linked to licence (for utilization). */
+  licenceImportLines?: ShipmentLicenceImportLine[];
+  /** Export: products in this shipment fulfilling licence obligation. */
+  licenceExportLines?: ShipmentLicenceExportLine[];
+
   status: ShipmentStatus;
   history: ShipmentHistory[];
   documents: {
@@ -360,6 +385,30 @@ export enum LicenceType {
   ADVANCE = 'ADVANCE'
 }
 
+/** Import product line on a licence: material from master with quantity and USD/INR limits (whichever hit first). */
+export interface LicenceImportProduct {
+  materialId: string;
+  materialName?: string;
+  quantityLimit: number;
+  amountUSDLimit: number;
+  /** Unit of measurement (e.g. KGS, MT). */
+  unit?: string;
+  /** HSN code. */
+  hsnCode?: string;
+  /** Amount limit in INR. */
+  amountINR?: number;
+}
+
+/** Export product line on a licence: obligation to export (freeform, no master). */
+export interface LicenceExportProduct {
+  productName: string;
+  hsnCode: string;
+  quantity: number;
+  unit: string;
+  amountUSD: number;
+  amountINR: number;
+}
+
 export interface Licence {
   id: string;
   number: string;
@@ -378,6 +427,14 @@ export interface Licence {
   eoFulfilled: number;
   company: 'GFPL' | 'GTEX';
   status: 'ACTIVE' | 'CLOSED' | 'EXPIRED';
+  /** Total import limit in USD */
+  amountImportUSD?: number;
+  /** Total import limit in INR */
+  amountImportINR?: number;
+  /** Import products (material + quantity/USD limits). Whichever limit hit first applies per product. */
+  importProducts?: LicenceImportProduct[];
+  /** Export obligation product lines (name, HSN, qty, unit, amount USD/INR). */
+  exportProducts?: LicenceExportProduct[];
 }
 
 export enum LCStatus {
@@ -409,6 +466,17 @@ export interface LetterOfCredit {
   remarks?: string;
   /** Shipment IDs linked to this LC. */
   shipments?: string[];
+  /** Payments made against this LC (from lc_transactions + invoice number + reference). */
+  paymentSummary?: Array<{
+    id: string;
+    date: string;
+    amount: number;
+    currency: string;
+    type: string;
+    shipmentId: string | null;
+    invoiceNumber: string | null;
+    reference?: string | null;
+  }>;
 }
 
 /** Transaction record when an LC is honored (settled). Import = DEBIT, Export = CREDIT. */

@@ -9,10 +9,11 @@ export const COMPANY_OPTIONS = [
   { id: 'GTEX' as const, name: 'GTEX Fabrics Pvt Ltd' },
 ] as const;
 
+/** Display label for company: uses abbreviations GFPL / GTEX */
 export function getCompanyName(company: string | undefined): string {
   if (!company) return '—';
   const opt = COMPANY_OPTIONS.find(c => c.id === company);
-  return opt ? opt.name : company;
+  return opt ? opt.id : company;
 }
 
 /** Import lifecycle order */

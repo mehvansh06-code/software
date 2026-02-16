@@ -4,14 +4,12 @@ import {
   TrendingUp, 
   ArrowRight,
   Ship,
-  Award,
-  Package,
   ShieldAlert,
   AlertCircle,
   CreditCard
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { formatINR, formatCurrency, getCompanyName } from '../constants';
+import { formatINR, formatCurrency, formatDate, getCompanyName } from '../constants';
 
 interface ExportDashboardProps {
   shipments?: Shipment[];
@@ -55,6 +53,18 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
       }));
     }, [safeLicences]);
 
+    const getExportPaymentStatus = (sh: Shipment): { status: 'pending' | 'partial' | 'received'; receivedFC: number; pendingFC: number } => {
+      const toFC = (p: { amount: number; currency: string }) =>
+        p.currency === sh.currency ? p.amount : (p.currency === 'INR' ? p.amount / (sh.exchangeRate || 1) : 0);
+      const receivedFC = (sh.payments || []).filter(p => p.received === true).reduce((sum, p) => sum + toFC(p), 0);
+      const dueFC = sh.amount || 0;
+      const pendingFC = Math.max(0, dueFC - receivedFC);
+      if (dueFC <= 0) return { status: receivedFC > 0 ? 'received' : 'pending', receivedFC, pendingFC: 0 };
+      if (receivedFC >= dueFC) return { status: 'received', receivedFC, pendingFC: 0 };
+      if (receivedFC > 0) return { status: 'partial', receivedFC, pendingFC };
+      return { status: 'pending', receivedFC, pendingFC };
+    };
+
     return (
       <div className="space-y-8 animate-in fade-in pb-20">
         <header>
@@ -84,7 +94,7 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
           </section>
         )}
 
-        <div className={`grid grid-cols-1 gap-6 ${user?.role === UserRole.EXECUTIONER ? 'md:grid-cols-3' : 'md:grid-cols-4'}`}>
+        <div className={`grid grid-cols-1 gap-6 ${user?.role === UserRole.EXECUTIONER ? 'md:grid-cols-1' : 'md:grid-cols-2'}`}>
           {user?.role !== UserRole.EXECUTIONER && (
           <div className="bg-white p-6 rounded-3xl border border-slate-100 flex items-center gap-4 shadow-sm">
              <div className="bg-emerald-50 text-emerald-600 p-3 rounded-2xl"><TrendingUp size={24} /></div>
@@ -95,76 +105,51 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
              <div className="bg-amber-50 text-amber-600 p-3 rounded-2xl"><Ship size={24} /></div>
              <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active Sails</p><p className="text-xl font-black">{activeShipmentsCount}</p></div>
           </div>
-          <div className="bg-white p-6 rounded-3xl border border-slate-100 flex items-center gap-4 shadow-sm">
-             <div className="bg-indigo-50 text-indigo-600 p-3 rounded-2xl"><Award size={24} /></div>
-             <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Adv Licences</p><p className="text-xl font-black">{safeLicences.length}</p></div>
-          </div>
-          <div className="bg-white p-6 rounded-3xl border border-slate-100 flex items-center gap-4 shadow-sm">
-             <div className="bg-blue-50 text-blue-600 p-3 rounded-2xl"><Package size={24} /></div>
-             <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Global Buyers</p><p className="text-xl font-black">{safeBuyers.length}</p></div>
-          </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100 lg:col-span-2 shadow-sm">
-             <div className="flex items-center justify-between mb-8">
-                <h2 className="text-sm font-black text-slate-900 uppercase">Latest Exports</h2>
-                <Link to="/export-shipments" className="text-amber-600 text-xs font-bold flex items-center gap-1">View All <ArrowRight size={14}/></Link>
+        <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+             <div className="flex items-center justify-between mb-6">
+                <h2 className="text-base font-black text-slate-900 uppercase tracking-wide">Latest Exports</h2>
+                <Link to="/export-shipments" className="text-amber-600 text-sm font-semibold flex items-center gap-1.5 hover:text-amber-700 transition-colors">View all <ArrowRight size={16}/></Link>
              </div>
-             <div className="overflow-x-auto">
-               <table className="w-full text-left">
+             <div className="overflow-x-auto rounded-2xl border border-slate-100">
+               <table className="w-full text-left min-w-[640px]">
                  <thead>
-                   <tr className="border-b border-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                     <th className="pb-4">Invoice #</th>
-                     <th className="pb-4">Company</th>
-                     <th className="pb-4">Buyer</th>
-                     <th className="pb-4 text-right">Value (FC)</th>
+                   <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                     <th className="py-4 px-5 text-left">Invoice #</th>
+                     <th className="py-4 px-5 text-left">Company</th>
+                     <th className="py-4 px-5 text-left">Buyer</th>
+                     <th className="py-4 px-5 text-right w-28">Value (FC)</th>
+                     <th className="py-4 px-5 text-left w-28">Payment Due Date</th>
+                     <th className="py-4 px-5 text-right w-28">Received</th>
+                     <th className="py-4 px-5 text-right w-28">Pending</th>
                    </tr>
                  </thead>
-                 <tbody className="divide-y divide-slate-50">
+                 <tbody className="divide-y divide-slate-100">
                    {exportShipments.length > 0 ? (
-                     exportShipments.slice(-5).reverse().map(sh => (
-                       <tr key={sh.id} className="hover:bg-slate-50/50 transition-colors">
-                         <td className="py-4 text-xs font-bold text-slate-900">#{sh.invoiceNumber || '---'}</td>
-                         <td className="py-4 text-xs font-medium text-slate-600">{getCompanyName(sh.company)}</td>
-                         <td className="py-4 text-xs font-medium text-slate-600">{safeBuyers.find(b => b.id === sh.buyerId)?.name || 'Buyer'}</td>
-                         <td className="py-4 text-right text-xs font-black text-emerald-600">{formatCurrency(sh.amount, sh.currency)}</td>
-                       </tr>
-                     ))
+                     exportShipments.slice(-5).reverse().map(sh => {
+                       const { receivedFC, pendingFC } = getExportPaymentStatus(sh);
+                       return (
+                         <tr key={sh.id} className="hover:bg-slate-50/50 transition-colors">
+                           <td className="py-5 px-5 text-sm font-bold text-slate-900">#{sh.invoiceNumber || '—'}</td>
+                           <td className="py-5 px-5 text-sm font-medium text-slate-700">{getCompanyName(sh.company)}</td>
+                           <td className="py-5 px-5 text-sm font-medium text-slate-700">{safeBuyers.find(b => b.id === sh.buyerId)?.name || 'Buyer'}</td>
+                           <td className="py-5 px-5 text-right text-sm font-bold text-emerald-600 tabular-nums">{formatCurrency(sh.amount, sh.currency)}</td>
+                           <td className="py-5 px-5 text-sm font-medium text-slate-600">{sh.paymentDueDate ? formatDate(sh.paymentDueDate) : '—'}</td>
+                           <td className="py-5 px-5 text-right text-sm font-semibold text-emerald-700 tabular-nums">{formatCurrency(receivedFC, sh.currency)}</td>
+                           <td className="py-5 px-5 text-right text-sm font-semibold text-slate-600 tabular-nums">{formatCurrency(pendingFC, sh.currency)}</td>
+                         </tr>
+                       );
+                     })
                    ) : (
                      <tr>
-                       <td colSpan={4} className="py-12 text-center text-slate-300 italic text-sm">No ledger entries yet.</td>
+                       <td colSpan={7} className="py-16 text-center text-slate-400 text-sm">No ledger entries yet.</td>
                      </tr>
                    )}
                  </tbody>
                </table>
              </div>
           </section>
-
-          <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-             <h2 className="text-sm font-black text-slate-900 uppercase mb-8">Fulfillment Progress</h2>
-             <div className="space-y-6">
-                {safeLicences.filter(l => l.type === LicenceType.ADVANCE).slice(0, 4).map(l => {
-                  const rawProg = (Number(l.eoFulfilled || 0) / (Number(l.eoRequired) || 1)) * 100;
-                  const progress = isFinite(rawProg) ? Math.min(100, rawProg) : 0;
-                  return (
-                    <div key={l.id}>
-                      <div className="flex justify-between text-[9px] font-black uppercase text-slate-500 mb-1">
-                         <span className="truncate w-32">{l.number}</span>
-                         <span>{Math.round(progress)}%</span>
-                      </div>
-                      <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                         <div 
-                           className="h-full bg-amber-500 transition-all duration-700" 
-                           style={{ width: `${progress}%` }} 
-                         />
-                      </div>
-                    </div>
-                  );
-                })}
-             </div>
-          </section>
-        </div>
       </div>
     );
   } catch (err) {

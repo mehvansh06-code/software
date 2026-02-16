@@ -6,12 +6,48 @@ const { log: auditLog } = require('../services/auditService');
 function createRouter(broadcast) {
   const router = express.Router();
 
+  /** Get payment transactions for an LC with invoice number and payment reference from linked shipment */
+  function getLCPaymentSummary(lcId) {
+    try {
+      const rows = db.prepare(`
+        SELECT t.id, t.amount, t.currency, t.date, t.type, t.shipmentId, s.invoiceNumber, s.payments_json
+        FROM lc_transactions t
+        LEFT JOIN shipments s ON s.id = t.shipmentId
+        WHERE t.lcId = ?
+        ORDER BY t.date DESC
+      `).all(lcId);
+      return rows.map(row => {
+        let reference = null;
+        if (row.shipmentId && row.payments_json) {
+          try {
+            const payments = JSON.parse(row.payments_json || '[]');
+            const match = payments.find(p => p.linkedLcId === lcId && Number(p.amount) === Number(row.amount) && (p.date === row.date || !row.date));
+            if (match && match.reference) reference = match.reference;
+          } catch (_) {}
+        }
+        return {
+          id: row.id,
+          date: row.date,
+          amount: Number(row.amount) || 0,
+          currency: row.currency || 'USD',
+          type: row.type,
+          shipmentId: row.shipmentId || null,
+          invoiceNumber: row.invoiceNumber || null,
+          reference: reference || null
+        };
+      });
+    } catch (e) {
+      return [];
+    }
+  }
+
   router.get('/', hasPermission('lc.view'), (req, res) => {
     const rows = db.prepare('SELECT * FROM lcs').all();
     res.json(rows.map(r => ({
       ...r,
       shipments: (() => { try { return JSON.parse(r.shipments_json || '[]'); } catch (_) { return []; } })(),
-      balanceAmount: r.balanceAmount != null ? Number(r.balanceAmount) : (r.amount != null ? Number(r.amount) : undefined)
+      balanceAmount: r.balanceAmount != null ? Number(r.balanceAmount) : (r.amount != null ? Number(r.amount) : undefined),
+      paymentSummary: getLCPaymentSummary(r.id)
     })));
   });
 
@@ -44,13 +80,42 @@ function createRouter(broadcast) {
     if (!l || typeof l !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const prev = db.prepare('SELECT status FROM lcs WHERE id = ?').get(id);
     const newStatus = (l.status || '').toUpperCase();
-    const stmt = db.prepare(`UPDATE lcs SET status=?, maturityDate=? WHERE id=?`);
-    stmt.run(l.status, l.maturityDate, id);
+    const issueDate = l.issueDate != null && l.issueDate !== '' ? l.issueDate : null;
+    const expiryDate = l.expiryDate != null && l.expiryDate !== '' ? l.expiryDate : null;
+    const maturityDate = l.maturityDate != null && l.maturityDate !== '' ? l.maturityDate : null;
+    const stmt = db.prepare('UPDATE lcs SET status=?, issueDate=?, expiryDate=?, maturityDate=? WHERE id=?');
+    const existing = db.prepare('SELECT issueDate, expiryDate, maturityDate FROM lcs WHERE id = ?').get(id);
+    stmt.run(
+      l.status,
+      issueDate != null ? issueDate : (existing && existing.issueDate),
+      expiryDate != null ? expiryDate : (existing && existing.expiryDate),
+      maturityDate != null ? maturityDate : (existing && existing.maturityDate),
+      id
+    );
     if ((newStatus === 'HONORED' || newStatus === 'PAID') && prev && prev.status !== newStatus) {
-      settleLC(id, l.amount, l.maturityDate || new Date().toISOString().split('T')[0]);
+      settleLC(id, l.amount, maturityDate || new Date().toISOString().split('T')[0]);
     }
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'LC_UPDATED', id, { lcNumber: l.lcNumber, status: l.status });
+    res.json({ success: true });
+    broadcast();
+  });
+
+  router.delete('/:id', hasPermission('lc.delete'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'LC ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const id = idCheck.value;
+    const row = db.prepare('SELECT id, lcNumber FROM lcs WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ success: false, error: 'LC not found' });
+    try {
+      db.prepare('DELETE FROM lc_transactions WHERE lcId = ?').run(id);
+      db.prepare('DELETE FROM lcs WHERE id = ?').run(id);
+    } catch (e) {
+      console.error('LC delete error:', e);
+      return res.status(500).json({ success: false, error: e.message || 'Failed to delete LC' });
+    }
+    const userId = req.user && req.user.id;
+    auditLog(db, userId, 'LC_DELETED', id, { lcNumber: row.lcNumber });
     res.json({ success: true });
     broadcast();
   });

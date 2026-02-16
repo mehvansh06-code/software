@@ -31,6 +31,7 @@ export interface UseAppDataReturn {
     handleAddLicence: (licence: Licence) => Promise<void>;
     handleUpdateLicence: (updated: Licence) => Promise<void>;
     handleUpdateLC: (updated: LetterOfCredit) => Promise<void>;
+    handleDeleteLC: (id: string) => Promise<void>;
   };
 }
 
@@ -261,6 +262,11 @@ export function useAppData(): UseAppDataReturn {
     setLcs(prev => prev.map(l => (l.id === updated.id ? updated : l)));
   }, []);
 
+  const handleDeleteLC = useCallback(async (id: string) => {
+    await api.lcs.delete(id);
+    setLcs(prev => prev.filter(l => l.id !== id));
+  }, []);
+
   const handleLogin = useCallback((u: User) => {
     setUser(u);
     localStorage.setItem('user', JSON.stringify(u));
@@ -315,6 +321,7 @@ export function useAppData(): UseAppDataReturn {
       handleAddLicence,
       handleUpdateLicence,
       handleUpdateLC,
+      handleDeleteLC,
     },
   };
 }

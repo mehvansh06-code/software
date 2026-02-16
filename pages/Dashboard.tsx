@@ -17,7 +17,7 @@ import {
   Calendar
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { formatCurrency, formatDate, getCompanyName } from '../constants';
+import { formatCurrency, formatDate, getCompanyName, getShipmentStatusLabel } from '../constants';
 import { api } from '../api';
 
 interface DashboardProps {
@@ -117,6 +117,52 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
            <div className="bg-blue-50 text-blue-600 p-3 rounded-2xl"><Package size={24} /></div>
            <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Live Cargo</p><p className="text-xl font-black">{activeShipmentsCount}</p></div>
         </div>
+
+        <section className="md:col-span-4 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-black text-slate-900 uppercase flex items-center gap-2">
+              <Package size={16} className="text-blue-500" /> Shipment status
+            </h2>
+            <Link to="/shipments" className="text-indigo-600 text-xs font-bold flex items-center gap-1">View Ledger <ArrowRight size={14}/></Link>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[400px]">
+              <thead>
+                <tr className="text-left text-[9px] font-black text-slate-400 uppercase border-b border-slate-100">
+                  <th className="pb-3 pr-4">Invoice #</th>
+                  <th className="pb-3 pr-4">Supplier</th>
+                  <th className="pb-3 pr-4">Product</th>
+                  <th className="pb-3 pr-4">Status</th>
+                  <th className="pb-3 text-right">Value</th>
+                  <th className="pb-3 text-right w-20">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {shipments
+                  .filter(s => !!s.supplierId)
+                  .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+                  .slice(0, 12)
+                  .map(sh => (
+                    <tr key={sh.id}>
+                      <td className="py-3 pr-4 font-bold text-slate-900">{sh.invoiceNumber}</td>
+                      <td className="py-3 pr-4 text-slate-700">{suppliers.find(s => s.id === sh.supplierId)?.name || '—'}</td>
+                      <td className="py-3 pr-4 text-slate-600 truncate max-w-[140px]">{(sh.items && sh.items[0]) ? sh.items[0].productName : '—'}</td>
+                      <td className="py-3 pr-4">
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full uppercase bg-blue-100 text-blue-700">{getShipmentStatusLabel(sh.status)}</span>
+                      </td>
+                      <td className="py-3 text-right font-bold text-indigo-600">{formatCurrency(sh.amount, sh.currency)}</td>
+                      <td className="py-3 text-right">
+                        <Link to={`/shipments/${sh.id}`} className="text-indigo-600 text-[10px] font-bold hover:underline">Manage</Link>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+            {shipments.filter(s => !!s.supplierId).length === 0 && (
+              <p className="py-6 text-center text-slate-400 text-xs italic">No import shipments.</p>
+            )}
+          </div>
+        </section>
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
            <div className="bg-emerald-50 text-emerald-600 p-3 rounded-2xl"><CheckCircle size={24} /></div>
            <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Vendors</p><p className="text-xl font-black">{suppliers.length}</p></div>

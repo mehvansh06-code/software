@@ -1,23 +1,41 @@
 import React, { useState } from 'react';
-import { LetterOfCredit, LCStatus, Supplier } from '../types';
-import { CreditCard, Calendar, Landmark, AlertCircle, Plus, Search, Filter, CheckCircle, X } from 'lucide-react';
+import { LetterOfCredit, LCStatus, Supplier, User } from '../types';
+import { CreditCard, Calendar, Landmark, AlertCircle, Plus, Search, Filter, CheckCircle, X, Trash2, Settings } from 'lucide-react';
 import { formatCurrency, formatDate, COMPANIES } from '../constants';
 import { api } from '../api';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface LCTrackerProps {
   lcs: LetterOfCredit[];
   suppliers: Supplier[];
+  user: User;
   onUpdateItem: (updated: LetterOfCredit) => Promise<void>;
+  onDeleteItem?: (id: string) => Promise<void>;
 }
 
-const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, onUpdateItem }) => {
+const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateItem, onDeleteItem }) => {
   const importLcs = lcs.filter(lc => lc.supplierId);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | LCStatus>('ALL');
   const [showModal, setShowModal] = useState(false);
   const [editData, setEditData] = useState<Partial<LetterOfCredit> | null>(null);
+  const [manageLc, setManageLc] = useState<LetterOfCredit | null>(null);
+  const { hasPermission } = usePermissions(user);
+  const canDeleteLC = hasPermission('lc.delete');
 
   const getSupplierName = (id: string) => suppliers.find(s => s.id === id)?.name || 'Unknown';
+
+  const handleDelete = async (e: React.MouseEvent, lc: LetterOfCredit) => {
+    e.stopPropagation();
+    if (!onDeleteItem || !window.confirm(`Delete LC ${lc.lcNumber}? This will also remove its payment history. This cannot be undone.`)) return;
+    try {
+      await onDeleteItem(lc.id);
+      setShowModal(false);
+      setEditData(null);
+    } catch (err) {
+      alert('Failed to delete LC.');
+    }
+  };
 
   const filtered = importLcs.filter(lc => {
     const matchesSearch = lc.lcNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -145,54 +163,97 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, onUpdateItem }) =
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Issuing Bank</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Beneficiary</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Value</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Balance</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Maturity Date</th>
                 <th className="px-6 py-4 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
+                <th className="px-6 py-4 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map(lc => {
                 const isDueSoon = lc.status === LCStatus.OPEN && new Date(lc.maturityDate).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
+                const payments = lc.paymentSummary || [];
+                const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
                 return (
-                  <tr key={lc.id} className="hover:bg-slate-50/50 transition-colors cursor-pointer" onClick={() => openEditModal(lc)}>
-                    <td className="px-6 py-5">
-                      <p className="font-bold text-slate-900 text-sm">{lc.lcNumber}</p>
-                      <span className="text-[9px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded uppercase">{lc.company}</span>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="flex items-center gap-2">
-                        <Landmark size={14} className="text-slate-400" />
-                        <span className="text-xs font-bold text-slate-600">{lc.issuingBank}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5">
-                      <p className="text-sm font-bold text-slate-700">{getSupplierName(lc.supplierId)}</p>
-                    </td>
-                    <td className="px-6 py-5">
-                      <p className="font-black text-indigo-600 text-sm">{formatCurrency(lc.amount, lc.currency)}</p>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="flex flex-col gap-1">
-                        <p className={`text-xs font-bold flex items-center gap-1.5 ${isDueSoon ? 'text-red-500 animate-pulse' : 'text-slate-700'}`}>
-                          <Calendar size={14} /> {formatDate(lc.maturityDate)}
-                        </p>
-                        {isDueSoon && <span className="text-[8px] font-black text-red-400 uppercase mt-1">MATURING SOON</span>}
-                      </div>
-                    </td>
-                    <td className="px-6 py-5 text-right">
-                       <span className={`text-[10px] font-black px-3 py-1 rounded-full uppercase border ${
-                         lc.status === LCStatus.OPEN ? 'bg-blue-50 border-blue-100 text-blue-700' :
-                         lc.status === LCStatus.PAID ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
-                         'bg-slate-50 border-slate-100 text-slate-400'
-                       }`}>
-                         {lc.status}
-                       </span>
-                    </td>
-                  </tr>
+                  <React.Fragment key={lc.id}>
+                    <tr className="hover:bg-slate-50/50 transition-colors cursor-pointer" onClick={() => openEditModal(lc)}>
+                      <td className="px-6 py-5">
+                        <p className="font-bold text-slate-900 text-sm">{lc.lcNumber}</p>
+                        <span className="text-[9px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded uppercase">{lc.company}</span>
+                      </td>
+                      <td className="px-6 py-5">
+                        <div className="flex items-center gap-2">
+                          <Landmark size={14} className="text-slate-400" />
+                          <span className="text-xs font-bold text-slate-600">{lc.issuingBank}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-5">
+                        <p className="text-sm font-bold text-slate-700">{getSupplierName(lc.supplierId)}</p>
+                      </td>
+                      <td className="px-6 py-5">
+                        <p className="font-black text-indigo-600 text-sm">{formatCurrency(lc.amount, lc.currency)}</p>
+                      </td>
+                      <td className="px-6 py-5">
+                        <p className="text-sm font-bold text-slate-700">{formatCurrency(lc.balanceAmount ?? lc.amount ?? 0, lc.currency)}</p>
+                        {(lc.shipments?.length ?? 0) > 0 && (
+                          <p className="text-[9px] text-slate-500 mt-0.5">{lc.shipments.length} shipment(s)</p>
+                        )}
+                      </td>
+                      <td className="px-6 py-5">
+                        <div className="flex flex-col gap-1">
+                          <p className={`text-xs font-bold flex items-center gap-1.5 ${isDueSoon ? 'text-red-500 animate-pulse' : 'text-slate-700'}`}>
+                            <Calendar size={14} /> {formatDate(lc.maturityDate)}
+                          </p>
+                          {isDueSoon && <span className="text-[8px] font-black text-red-400 uppercase mt-1">MATURING SOON</span>}
+                        </div>
+                      </td>
+                      <td className="px-6 py-5 text-right">
+                         <span className={`text-[10px] font-black px-3 py-1 rounded-full uppercase border ${
+                           lc.status === LCStatus.OPEN ? 'bg-blue-50 border-blue-100 text-blue-700' :
+                           lc.status === LCStatus.PAID ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
+                           'bg-slate-50 border-slate-100 text-slate-400'
+                         }`}>
+                           {lc.status}
+                         </span>
+                      </td>
+                      <td className="px-6 py-5 text-right" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button type="button" onClick={(e) => { e.stopPropagation(); setManageLc(lc); }} className="px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:border-indigo-200 hover:text-indigo-600 text-[10px] font-bold uppercase flex items-center gap-1.5 transition-colors" title="Manage">
+                            <Settings size={14} /> Manage
+                          </button>
+                          {canDeleteLC && (
+                            <button type="button" onClick={(e) => handleDelete(e, lc)} className="p-2 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Delete LC">
+                              <Trash2 size={18} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {payments.length > 0 && (
+                      <tr className="bg-slate-50/50">
+                        <td colSpan={8} className="px-6 py-4">
+                          <div className="pl-4 border-l-2 border-indigo-200">
+                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Payments made against this LC</p>
+                            <p className="text-xs font-bold text-slate-700 mb-2">Total paid: {formatCurrency(totalPaid, lc.currency)}</p>
+                            <ul className="space-y-1.5">
+                              {payments.map((p) => (
+                                <li key={p.id} className="text-xs font-medium text-slate-600 flex items-center gap-2 flex-wrap">
+                                  <span className="font-mono text-slate-500">Invoice {p.invoiceNumber || '—'}</span>
+                                  <span className="font-bold text-indigo-600">{formatCurrency(p.amount, p.currency)}</span>
+                                  <span className="text-slate-400">{formatDate(p.date)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-20 text-center">
+                  <td colSpan={8} className="px-6 py-20 text-center">
                     <p className="text-slate-400 font-medium italic">No Letters of Credit found.</p>
                   </td>
                 </tr>
@@ -201,6 +262,69 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, onUpdateItem }) =
           </table>
         </div>
       </div>
+
+      {/* Manage LC modal: all details + payment track */}
+      {manageLc && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-3xl max-h-[90vh] rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <h2 className="text-xl font-black text-slate-900 flex items-center gap-2"><CreditCard size={22} /> LC Details — {manageLc.lcNumber}</h2>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => { setManageLc(null); openEditModal(manageLc); }} className="px-4 py-2 rounded-xl font-bold text-indigo-600 hover:bg-indigo-50 text-xs uppercase">Edit</button>
+                <button type="button" onClick={() => setManageLc(null)} className="p-2 hover:bg-slate-200 rounded-full text-slate-400"><X size={20} /></button>
+              </div>
+            </div>
+            <div className="p-8 overflow-y-auto space-y-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">LC Number</span><p className="font-bold text-slate-800">{manageLc.lcNumber}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Issuing Bank</span><p className="font-bold text-slate-800">{manageLc.issuingBank}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Beneficiary (Supplier)</span><p className="font-bold text-slate-800">{getSupplierName(manageLc.supplierId!)}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Company</span><p className="font-bold text-slate-800">{manageLc.company}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">LC Amount</span><p className="font-bold text-indigo-600">{formatCurrency(manageLc.amount, manageLc.currency)}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Balance</span><p className="font-bold text-slate-700">{formatCurrency(manageLc.balanceAmount ?? manageLc.amount ?? 0, manageLc.currency)}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Issue Date</span><p className="font-bold text-slate-800">{formatDate(manageLc.issueDate)}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Expiry Date</span><p className="font-bold text-slate-800">{formatDate(manageLc.expiryDate)}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Maturity Date</span><p className="font-bold text-slate-800">{formatDate(manageLc.maturityDate)}</p></div>
+                <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Status</span><p className="font-bold"><span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${manageLc.status === LCStatus.OPEN ? 'bg-blue-50 text-blue-700' : manageLc.status === LCStatus.PAID ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{manageLc.status}</span></p></div>
+              </div>
+              {manageLc.remarks && <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Remarks</span><p className="font-bold text-slate-800">{manageLc.remarks}</p></div>}
+              <div>
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">Payment track</h3>
+                <p className="text-xs text-slate-500 mb-3">Payments made against this LC (invoice, reference, date, amount).</p>
+                {(manageLc.paymentSummary && manageLc.paymentSummary.length > 0) ? (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
+                          <th className="p-3">Invoice number</th>
+                          <th className="p-3">Payment reference</th>
+                          <th className="p-3">Payment date</th>
+                          <th className="p-3 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {manageLc.paymentSummary.map((p) => (
+                          <tr key={p.id}>
+                            <td className="p-3 font-medium text-slate-800">{p.invoiceNumber || '—'}</td>
+                            <td className="p-3 font-medium text-slate-700">{p.reference || '—'}</td>
+                            <td className="p-3 font-medium text-slate-700">{formatDate(p.date)}</td>
+                            <td className="p-3 text-right font-bold text-indigo-600">{formatCurrency(p.amount, p.currency)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="p-3 border-t border-slate-100 bg-slate-50 text-[10px] font-black text-slate-600">
+                      Total paid: {formatCurrency(manageLc.paymentSummary.reduce((s, p) => s + (p.amount || 0), 0), manageLc.currency)}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400 italic py-4">No payments recorded against this LC yet.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showModal && editData && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
@@ -251,18 +375,21 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, onUpdateItem }) =
                     </div>
                  </div>
 
-                 <div className="grid grid-cols-3 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <div>
-                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Issue Date</label>
-                       <input required type="date" className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.issueDate} onChange={e => setEditData({...editData, issueDate: e.target.value})} />
-                    </div>
-                    <div>
-                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Expiry Date</label>
-                       <input required type="date" className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.expiryDate} onChange={e => setEditData({...editData, expiryDate: e.target.value})} />
-                    </div>
-                    <div>
-                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Maturity Date</label>
-                       <input required type="date" className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.maturityDate} onChange={e => setEditData({...editData, maturityDate: e.target.value})} />
+                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Tracking timeline</h3>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Issue Date</label>
+                         <input required type="date" className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.issueDate} onChange={e => setEditData({...editData, issueDate: e.target.value})} />
+                      </div>
+                      <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Expiry Date</label>
+                         <input required type="date" className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.expiryDate} onChange={e => setEditData({...editData, expiryDate: e.target.value})} />
+                      </div>
+                      <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Maturity Date</label>
+                         <input required type="date" className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.maturityDate} onChange={e => setEditData({...editData, maturityDate: e.target.value})} />
+                      </div>
                     </div>
                  </div>
 
@@ -275,9 +402,16 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, onUpdateItem }) =
                    </div>
                  )}
 
-                 <button type="submit" className="w-full py-4 bg-indigo-600 text-white font-black uppercase rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
-                    {editData.id ? 'Save Changes' : 'Open Letter of Credit'}
-                 </button>
+                 <div className="flex gap-3">
+                   {editData.id && canDeleteLC && onDeleteItem && (
+                     <button type="button" onClick={(e) => { e.preventDefault(); handleDelete(e as any, editData as LetterOfCredit); }} className="px-6 py-4 border-2 border-red-200 text-red-600 font-black uppercase rounded-xl hover:bg-red-50 transition-all">
+                       Delete LC
+                     </button>
+                   )}
+                   <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white font-black uppercase rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
+                      {editData.id ? 'Save Changes' : 'Open Letter of Credit'}
+                   </button>
+                 </div>
               </form>
            </div>
         </div>

@@ -32,8 +32,10 @@ function resolveDocBase(envValue) {
 // Two separate roots: Import and Export. Set via .env (e.g. IMPORT_BASE, EXPORT_BASE or SHIPMENT_DOCS_BASE / EXPORT_SHIPMENT_DOCS_BASE).
 const IMPORT_BASE_RAW = process.env.SHIPMENT_DOCS_BASE || process.env.IMPORT_BASE;
 const EXPORT_BASE_RAW = process.env.EXPORT_SHIPMENT_DOCS_BASE || process.env.EXPORT_BASE;
-const IMPORT_DOCS_BASE = IMPORT_BASE_RAW ? resolveDocBase(IMPORT_BASE_RAW) : path.join(PROJECT_ROOT, 'documents', 'Import Shipment Documents');
-const EXPORT_DOCS_BASE = EXPORT_BASE_RAW ? resolveDocBase(EXPORT_BASE_RAW) : path.join(PROJECT_ROOT, 'documents', 'Export Shipment Documents');
+const LOCAL_IMPORT_DOCS = path.join(PROJECT_ROOT, 'documents', 'Import Shipment Documents');
+const LOCAL_EXPORT_DOCS = path.join(PROJECT_ROOT, 'documents', 'Export Shipment Documents');
+const IMPORT_DOCS_BASE = IMPORT_BASE_RAW ? resolveDocBase(IMPORT_BASE_RAW) : LOCAL_IMPORT_DOCS;
+const EXPORT_DOCS_BASE = EXPORT_BASE_RAW ? resolveDocBase(EXPORT_BASE_RAW) : LOCAL_EXPORT_DOCS;
 // Under each root: one folder per company (Gujarat Flotex, GTEX Fabrics).
 const COMPANY_FOLDER = { GFPL: 'Gujarat Flotex Pvt Ltd', GTEX: 'GTEX Fabrics Pvt Ltd' };
 
@@ -72,6 +74,8 @@ const INDENT_COMPANY_DB = {
 module.exports = {
   IMPORT_DOCS_BASE,
   EXPORT_DOCS_BASE,
+  LOCAL_IMPORT_DOCS,
+  LOCAL_EXPORT_DOCS,
   COMPANY_FOLDER,
   INDENT_COMPANY_DB,
   DOCUMENTS_BASE,

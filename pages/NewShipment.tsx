@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, Consignee, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material } from '../types';
-import { UploadCloud, Award, CreditCard, Package, Zap, Trash2 } from 'lucide-react';
+import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, Consignee, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material, LetterOfCredit, LCStatus } from '../types';
+import { UploadCloud, Award, CreditCard, Package, Zap, Trash2, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatCurrency, formatINR, formatDate, COMPANY_OPTIONS } from '../constants';
 import { api } from '../api';
@@ -11,11 +11,12 @@ interface NewShipmentProps {
   suppliers?: Supplier[];
   buyers?: Buyer[];
   licences?: Licence[];
+  lcs?: LetterOfCredit[];
   isExport?: boolean;
   onSubmit: (shipment: Shipment) => Promise<void>;
 }
 
-const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], licences: licencesProp, isExport = false, onSubmit }) => {
+const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], licences: licencesProp, lcs = [], isExport = false, onSubmit }) => {
   const navigate = useNavigate();
   const [licencesLocal, setLicencesLocal] = useState<Licence[]>([]);
   const licences = (licencesProp != null && Array.isArray(licencesProp)) ? licencesProp : licencesLocal;
@@ -42,6 +43,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     paymentDueDate: '',
     isUnderLC: false,
     lcNumber: '',
+    linkedLcId: '' as string,
     lcDate: '',
     isUnderLicence: false,
     linkedLicenceId: '',
@@ -148,6 +150,12 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     return byCompany;
   }, [licences, formData.company, detectedLicenceType, isExport, formData]);
 
+  /** Import: open LCs for the selected supplier (for LC dropdown) */
+  const lcsForSupplier = useMemo(() => {
+    if (isExport || !selectedEntityId) return [];
+    return lcs.filter(lc => lc.supplierId === selectedEntityId && lc.status === LCStatus.OPEN);
+  }, [lcs, selectedEntityId, isExport]);
+
   const handleChange = (field: string, value: any) => {
     setFormData((prev: any) => ({ ...prev, [field]: value }));
   };
@@ -198,6 +206,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
         fobValueINR: finalFobFC * exchRate,
         isUnderLC: formData.isUnderLC,
         lcNumber: formData.lcNumber || undefined,
+        linkedLcId: formData.isUnderLC && formData.linkedLcId ? formData.linkedLcId : undefined,
         lcAmount: formData.isUnderLC ? (typeof formData.lcAmount === 'number' ? formData.lcAmount : (formData.lcAmount ? parseFloat(formData.lcAmount) : (isExport ? totalOrAmountFC : 0))) : 0,
         lcDate: formData.lcDate || undefined,
         isUnderLicence: formData.isUnderLicence,
@@ -268,6 +277,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                      onChange={e => {
                        setSelectedEntityId(e.target.value);
                        if (isExport) handleChange('consigneeId', '');
+                       if (!isExport) setFormData((prev: any) => ({ ...prev, lcNumber: '', linkedLcId: '', lcDate: '' }));
                      }}
                    >
                      <option value="">-- Choose Partner --</option>
@@ -419,19 +429,56 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                 
                 {formData.isUnderLC && (
                   <div className="grid grid-cols-2 gap-6 p-4 bg-slate-50 rounded-2xl border border-slate-100 animate-in slide-in-from-top-2">
-                    <div>
-                      <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Number</label>
-                      <input className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcNumber} onChange={e => handleChange('lcNumber', e.target.value)} placeholder="e.g. LC/001/24" />
-                    </div>
-                    <div>
-                      <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Date</label>
-                      <input type="date" className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcDate} onChange={e => handleChange('lcDate', e.target.value)} />
-                    </div>
-                    {isExport && (
-                    <div>
-                      <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Amount ({formData.currency})</label>
-                      <input type="number" step="0.01" className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcAmount ?? ''} onChange={e => handleChange('lcAmount', e.target.value)} placeholder="Optional" />
-                    </div>
+                    {!isExport ? (
+                      <>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Number</label>
+                          {lcsForSupplier.length > 0 ? (
+                            <select
+                              className="w-full px-4 py-2 rounded-xl border text-sm font-bold bg-white"
+                              value={formData.lcNumber}
+                              onChange={e => {
+                                const val = e.target.value;
+                                const lc = lcsForSupplier.find(l => l.lcNumber === val);
+                                setFormData((prev: any) => ({
+                                  ...prev,
+                                  lcNumber: val,
+                                  linkedLcId: lc?.id ?? '',
+                                  lcDate: lc?.issueDate ?? prev.lcDate
+                                }));
+                              }}
+                            >
+                              <option value="">-- Select LC --</option>
+                              {lcsForSupplier.map(lc => (
+                                <option key={lc.id} value={lc.lcNumber}>
+                                  {lc.lcNumber} — {formatCurrency(lc.amount ?? 0, lc.currency)} (balance: {formatCurrency(lc.balanceAmount ?? lc.amount ?? 0, lc.currency)})
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcNumber} onChange={e => { handleChange('lcNumber', e.target.value); handleChange('linkedLcId', ''); }} placeholder={selectedEntityId ? 'No open LCs for this supplier — type LC number' : 'Select supplier first'} />
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Date</label>
+                          <input type="date" className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcDate} onChange={e => handleChange('lcDate', e.target.value)} />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Number</label>
+                          <input className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcNumber} onChange={e => handleChange('lcNumber', e.target.value)} placeholder="e.g. LC/001/24" />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Date</label>
+                          <input type="date" className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcDate} onChange={e => handleChange('lcDate', e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-slate-500 mb-1">LC Amount ({formData.currency})</label>
+                          <input type="number" step="0.01" className="w-full px-4 py-2 rounded-xl border text-sm font-bold" value={formData.lcAmount ?? ''} onChange={e => handleChange('lcAmount', e.target.value)} placeholder="Optional" />
+                        </div>
+                      </>
                     )}
                   </div>
                 )}

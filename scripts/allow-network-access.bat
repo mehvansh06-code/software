@@ -17,6 +17,6 @@ netsh advfirewall firewall delete rule name="Flotex API (Node 3001)" >nul 2>&1
 netsh advfirewall firewall add rule name="Flotex App (Vite 3000)" dir=in action=allow protocol=TCP localport=3000
 netsh advfirewall firewall add rule name="Flotex API (Node 3001)" dir=in action=allow protocol=TCP localport=3001
 echo.
-echo Done. Other PCs can reach this machine at http://YOUR_LAPTOP_IP:3000 and :3001
+echo Done. Other PCs can reach this machine at http://THIS_PC_IP:3000 and :3001 (replace THIS_PC_IP with this PC's IP address)
 echo.
 pause

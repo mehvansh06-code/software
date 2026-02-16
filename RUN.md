@@ -4,14 +4,14 @@
 
 **Terminal 1 – Backend (API)**  
 ```bash
-cd d:\software
+cd c:\software
 node restart-server.js
 ```
 Leave this running. It clears port 3001 if needed, then starts the API.
 
 **Terminal 2 – Frontend (app)**  
 ```bash
-cd d:\software
+cd c:\software
 npm run dev
 ```
 Leave this running. Opens at http://localhost:3000

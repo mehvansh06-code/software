@@ -1,5 +1,5 @@
-# Run this script as Administrator on the laptop (where Node + Vite run) to allow other PCs on the network to connect.
-# Right-click PowerShell -> Run as Administrator, then: cd D:\software\scripts; .\allow-network-access.ps1
+# Run this script as Administrator on this PC (where Node + Vite run) to allow other PCs on the network to connect.
+# Right-click PowerShell -> Run as Administrator, then: cd c:\software\scripts; .\allow-network-access.ps1
 
 $ports = @(3000, 3001)
 foreach ($port in $ports) {

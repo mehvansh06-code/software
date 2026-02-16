@@ -35,6 +35,7 @@ const App: React.FC = () => {
     handleAddLicence,
     handleUpdateLicence,
     handleUpdateLC,
+    handleDeleteLC,
   } = actions;
 
   if (isLoading) {
@@ -98,6 +99,7 @@ const App: React.FC = () => {
         handleAddLicence={handleAddLicence}
         handleUpdateLicence={handleUpdateLicence}
         handleUpdateLC={handleUpdateLC}
+        handleDeleteLC={handleDeleteLC}
       />
     </HashRouter>
   );

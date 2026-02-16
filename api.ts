@@ -62,7 +62,10 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-async function fetchApi(endpoint: string, options: RequestInit = {}) {
+type FetchApiOptions = RequestInit & { queryString?: string };
+
+async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
+  const { queryString, ...fetchOptions } = options;
   const safeEndpoint = sanitizeEndpoint(endpoint);
   if (!safeEndpoint) return Promise.reject(new Error('Invalid endpoint'));
 
@@ -71,11 +74,15 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
+  const url = queryString && /^[a-zA-Z0-9&=\-_\.\+%]+$/.test(queryString)
+    ? `${API_BASE}/${safeEndpoint}?${queryString}`
+    : `${API_BASE}/${safeEndpoint}`;
+
   try {
-    const response = await fetch(`${API_BASE}/${safeEndpoint}`, {
-      ...options,
+    const response = await fetch(url, {
+      ...fetchOptions,
       signal: controller.signal,
-      headers: { ...getAuthHeaders(), ...(options.headers as Record<string, string>) },
+      headers: { ...getAuthHeaders(), ...(fetchOptions.headers as Record<string, string>) },
     });
 
     clearTimeout(timeoutId);
@@ -322,6 +329,7 @@ export const api = {
     list: () => fetchApi('lcs'),
     create: (data: any) => fetchApi('lcs', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`lcs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchApi(`lcs/${id}`, { method: 'DELETE' }),
     transactions: (): Promise<any[]> => fetchApi('lc-transactions'),
   },
   materials: {
@@ -469,7 +477,7 @@ export const api = {
       if (params?.to) q.set('to', params.to);
       if (params?.limit != null) q.set('limit', String(params.limit));
       const qs = q.toString();
-      return fetchApi('audit-logs' + (qs ? '?' + qs : ''));
+      return fetchApi('audit-logs', qs ? { queryString: qs } : {});
     },
   }
 };

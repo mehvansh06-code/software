@@ -50,6 +50,7 @@ export interface DomainRoutesProps {
   handleAddLicence: (l: Licence) => Promise<void>;
   handleUpdateLicence: (l: Licence) => Promise<void>;
   handleUpdateLC: (l: LetterOfCredit) => Promise<void>;
+  handleDeleteLC: (id: string) => Promise<void>;
 }
 
 const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
@@ -75,6 +76,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
     handleAddLicence,
     handleUpdateLicence,
     handleUpdateLC,
+    handleDeleteLC,
   } = props;
   const location = useLocation();
   const navigate = useNavigate();
@@ -119,9 +121,9 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
           <Route path="/" element={<Layout {...layoutProps}><Dashboard shipments={shipments} suppliers={suppliers} licences={licences} lcs={lcs} /></Layout>} />
           <Route path="/suppliers" element={<Layout {...layoutProps}><SupplierMaster suppliers={suppliers} user={user} onUpdateItem={handleUpdateSupplier} onAddItem={handleAddSupplier} /></Layout>} />
           <Route path="/materials" element={<Layout {...layoutProps}><MaterialsMaster /></Layout>} />
-          <Route path="/shipments" element={<Layout {...layoutProps}><ShipmentMaster shipments={shipments} suppliers={suppliers} buyers={[]} licences={licences} user={user} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} onDeleteShipment={handleDeleteShipment} /></Layout>} />
-          <Route path="/shipments/:id" element={<Layout {...layoutProps}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} connectionMode={connectionMode} /></Layout>} />
-          <Route path="/lcs" element={<Layout {...layoutProps}><LCTracker lcs={lcs} suppliers={suppliers} onUpdateItem={handleUpdateLC} /></Layout>} />
+          <Route path="/shipments" element={<Layout {...layoutProps}><ShipmentMaster shipments={shipments} suppliers={suppliers} buyers={[]} licences={licences} lcs={lcs} user={user} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} onDeleteShipment={handleDeleteShipment} /></Layout>} />
+          <Route path="/shipments/:id" element={<Layout {...layoutProps}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} connectionMode={connectionMode} onRefreshData={onRefreshData} /></Layout>} />
+          <Route path="/lcs" element={<Layout {...layoutProps}><LCTracker lcs={lcs} suppliers={suppliers} user={user} onUpdateItem={handleUpdateLC} onDeleteItem={handleDeleteLC} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
           <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
           <Route path="/export-shipments" element={<Navigate to="/shipments" replace />} />
@@ -133,7 +135,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
           <Route path="/shipments" element={<Navigate to="/export-shipments" replace />} />
           <Route path="/export-shipments" element={<Layout {...layoutProps}><ShipmentMaster isExport shipments={shipments} suppliers={[]} buyers={buyers} licences={licences} user={user} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} onDeleteShipment={handleDeleteShipment} /></Layout>} />
           <Route path="/export-lcs" element={<Layout {...layoutProps}><ExportLCTracker lcs={lcs} buyers={buyers} onUpdateItem={handleUpdateLC} /></Layout>} />
-          <Route path="/shipments/:id" element={<Layout {...layoutProps}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} connectionMode={connectionMode} /></Layout>} />
+          <Route path="/shipments/:id" element={<Layout {...layoutProps}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} connectionMode={connectionMode} onRefreshData={onRefreshData} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
           <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
         </>
