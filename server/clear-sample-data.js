@@ -19,7 +19,8 @@ const tables = [
   'products',
   'materials',
   'buyers',
-  'suppliers'
+  'suppliers',
+  'audit_logs'
 ];
 
 db.exec('PRAGMA foreign_keys = OFF');

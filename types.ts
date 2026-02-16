@@ -169,6 +169,7 @@ export interface Supplier {
   country: string;
   bankName: string;
   accountHolderName: string;
+  accountNumber?: string;
   swiftCode: string;
   bankAddress: string;
   contactPerson: string;
@@ -199,6 +200,7 @@ export interface Buyer {
   country: string;
   bankName: string;
   accountHolderName: string;
+  accountNumber?: string;
   swiftCode: string;
   bankAddress: string;
   contactPerson: string;
@@ -276,6 +278,21 @@ export interface ShipmentLicenceExportLine {
   valueUSD: number;
 }
 
+/** Multi-licence allocation: one row per licence×product with allocated quantity and amounts. Used for both import (utilization) and export (fulfillment). */
+export interface LicenceAllocation {
+  licenceId: string;
+  productId: string;
+  /** Product name (for display when productId is from shipment item). */
+  productName?: string;
+  /** HSN (for export display). */
+  hsnCode?: string;
+  allocatedQuantity: number;
+  /** UOM of allocated quantity (e.g. KGS, SQM). Used for validation and UOM conversion. */
+  allocatedUom?: string;
+  allocatedAmountUSD: number;
+  allocatedAmountINR: number;
+}
+
 export interface Shipment {
   id: string;
   supplierId?: string;
@@ -342,6 +359,7 @@ export interface Shipment {
   
   // Licence Obligation Fields
   isUnderLicence: boolean;
+  /** @deprecated Use licenceAllocations; kept for backward compat. First allocation's licenceId can be mirrored here. */
   linkedLicenceId?: string;
   /** Export: EPCG licence id when shipment fulfils EPCG obligation */
   epcgLicenceId?: string;
@@ -354,6 +372,8 @@ export interface Shipment {
   licenceImportLines?: ShipmentLicenceImportLine[];
   /** Export: products in this shipment fulfilling licence obligation. */
   licenceExportLines?: ShipmentLicenceExportLine[];
+  /** Multi-licence allocation: per product line, which licence(s) get how much (qty, USD, INR). Replaces single linkedLicenceId. */
+  licenceAllocations?: LicenceAllocation[];
 
   status: ShipmentStatus;
   history: ShipmentHistory[];
@@ -385,26 +405,32 @@ export enum LicenceType {
   ADVANCE = 'ADVANCE'
 }
 
-/** Import product line on a licence: material from master with quantity and USD/INR limits (whichever hit first). */
+/** Import product line on a licence: material from master with Quantity Limit, USD Limit, INR Limit (whichever hit first = 100% utilized). */
 export interface LicenceImportProduct {
   materialId: string;
   materialName?: string;
+  /** Quantity limit for this product under this licence (in licence UOM). */
   quantityLimit: number;
+  /** USD amount limit for this product. */
   amountUSDLimit: number;
-  /** Unit of measurement (e.g. KGS, MT). */
+  /** Unit of measurement for this product on the licence (e.g. SQM, KGS). */
   unit?: string;
   /** HSN code. */
   hsnCode?: string;
-  /** Amount limit in INR. */
+  /** INR amount limit for this product. */
   amountINR?: number;
+  /** UOM conversion: shipment units per 1 licence unit. e.g. 2 means 2 KGS (shipment) = 1 SQM (licence). Used when licence is in SQM but imports are in KGS/M. */
+  uomConversionFactor?: number;
 }
 
-/** Export product line on a licence: obligation to export (freeform, no master). */
+/** Export product line on a licence: obligation target (Quantity Target, USD Target, INR Target). Obligation met when USD target is reached. */
 export interface LicenceExportProduct {
   productName: string;
   hsnCode: string;
+  /** Quantity target. */
   quantity: number;
   unit: string;
+  /** USD target — obligation is met when this is reached. */
   amountUSD: number;
   amountINR: number;
 }

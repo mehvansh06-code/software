@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Supplier, SupplierStatus, User, UserRole, Product, ProductType } from '../types';
 import { 
   Search, 
@@ -13,25 +13,34 @@ import {
   Globe,
   Landmark,
   PackagePlus,
-  Eye
+  Eye,
+  Upload,
+  FileQuestion,
+  FileDown
 } from 'lucide-react';
 import { formatDate } from '../constants';
 import SupplierRequest from './SupplierRequest';
+import { api } from '../api';
+import * as XLSX from 'xlsx';
 
 interface SupplierMasterProps {
   suppliers: Supplier[];
   user: User;
   onUpdateItem: (updated: Supplier) => Promise<void>;
   onAddItem: (item: Supplier) => Promise<void>;
+  onRefreshData?: () => Promise<void>;
 }
 
-const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpdateItem, onAddItem }) => {
+const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpdateItem, onAddItem, onRefreshData }) => {
   const [filterStatus, setFilterStatus] = useState<SupplierStatus | 'ALL'>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [viewingSupplier, setViewingSupplier] = useState<Supplier | null>(null);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [showFormatHelp, setShowFormatHelp] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canApprove = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
   const canEdit = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
@@ -56,6 +65,75 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
     return matchesSearch && matchesStatus;
   });
 
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const rows = json.map((r) => {
+        const name = r.Name ?? r.name ?? r['Supplier Name'] ?? '';
+        const address = r.Address ?? r.address ?? '';
+        const country = r.Country ?? r.country ?? '';
+        const bankName = r['Bank Name'] ?? r.bankName ?? r.Bank ?? '';
+        const accountHolder = r['Account Holder'] ?? r['A/C Holder'] ?? r.accountHolderName ?? '';
+        const accountNumber = r['Account Number'] ?? r.accountNumber ?? r.account_number ?? '';
+        const swift = r.SWIFT ?? r.Swift ?? r.swiftCode ?? r['SWIFT Code'] ?? '';
+        const bankAddress = r['Bank Address'] ?? r.bankAddress ?? '';
+        const contactPerson = r['Contact Person'] ?? r.contactPerson ?? r['Contact Name'] ?? '';
+        const contactNumber = r['Contact Number'] ?? r['Phone'] ?? r.contactNumber ?? r.Mobile ?? '';
+        const contactEmail = r['Contact Email'] ?? r.Email ?? r.contactEmail ?? '';
+        const contactDetails = [contactNumber, contactEmail].filter(Boolean).join(' / ') || undefined;
+        return {
+          name,
+          address,
+          country,
+          bankName,
+          accountHolderName: accountHolder,
+          accountNumber: accountNumber || undefined,
+          swiftCode: swift,
+          bankAddress,
+          contactPerson,
+          contactDetails,
+          status: 'APPROVED',
+          requestedBy: 'Import',
+          createdAt: new Date().toISOString(),
+        };
+      }).filter((r) => r.name && r.country);
+      if (rows.length === 0) {
+        alert('No rows with Name and Country found. Use the Excel format (see "Excel format" button).');
+        return;
+      }
+      const result = await api.suppliers.import(rows);
+      const count = (result as any)?.imported ?? rows.length;
+      if (onRefreshData) {
+        await onRefreshData();
+        setFilterStatus('ALL');
+        setSearchTerm('');
+        alert(`Imported ${count} supplier(s). List updated.`);
+      } else {
+        alert(`Imported ${count} supplier(s). Refreshing the list.`);
+        window.location.reload();
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Import failed.');
+    } finally {
+      setImporting(false);
+      e.target.value = '';
+    }
+  };
+
+  const downloadSupplierTemplate = () => {
+    const headers = ['Name', 'Address', 'Country', 'Bank Name', 'Account Holder', 'Account Number', 'SWIFT Code', 'Bank Address', 'Contact Person', 'Contact Number', 'Contact Email'];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([headers, ['Example Supplier Ltd', '123 Trade St', 'China', 'Bank of China', 'Example Supplier Ltd', '1234567890', 'BKCHCNBJ', 'Beijing', 'Li Wei', '+86 123 456 7890', 'contact@example.com']]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Suppliers');
+    XLSX.writeFile(wb, 'suppliers_import_template.xlsx');
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-24">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -65,6 +143,16 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
         </div>
         
         <div className="flex items-center gap-4">
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50 transition-all">
+            <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
+          </button>
+          <button type="button" onClick={() => setShowFormatHelp(true)} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Excel format">
+            <FileQuestion size={16} /> Excel format
+          </button>
+          <button type="button" onClick={downloadSupplierTemplate} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Download template">
+            <FileDown size={16} /> Download template
+          </button>
           <button 
             onClick={() => setShowAddForm(true)}
             className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
@@ -97,6 +185,17 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
             <button onClick={() => handleBulkAction(SupplierStatus.REJECTED)} className="px-6 py-2 bg-red-500 hover:bg-red-600 rounded-xl font-bold flex items-center gap-2 transition-all">
               <XCircle size={16} /> Reject Selected
             </button>
+          </div>
+        </div>
+      )}
+
+      {showFormatHelp && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowFormatHelp(false)}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg p-6 space-y-3" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900">Supplier Excel format</h3>
+            <p className="text-sm text-slate-600">First row = headers. Required: <strong>Name</strong>, <strong>Country</strong>. Optional: Address, Bank Name, Account Holder, Account Number, SWIFT Code, Bank Address, Contact Person, Contact Number, Contact Email.</p>
+            <p className="text-xs text-slate-500">Column names are case-insensitive. You can use &quot;Supplier Name&quot; for Name.</p>
+            <button type="button" onClick={() => setShowFormatHelp(false)} className="mt-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm">Close</button>
           </div>
         </div>
       )}
@@ -180,6 +279,11 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
               <button onClick={() => setViewingSupplier(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={22} /></button>
             </div>
             <div className="p-8 space-y-6">
+              <div className="pb-4 border-b border-slate-100">
+                <span className="text-xs font-bold text-slate-400 uppercase">Supplier ID</span>
+                <p className="text-slate-900 font-mono text-sm mt-1">{viewingSupplier.id}</p>
+                <p className="text-slate-500 text-xs mt-1">Use this in shipment Excel import (Supplier ID column), or use the name below (Supplier Name).</p>
+              </div>
               <div>
                 <span className="text-xs font-bold text-slate-400 uppercase">Legal Name</span>
                 <p className="text-slate-900 font-semibold mt-1">{viewingSupplier.name}</p>
@@ -214,6 +318,12 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                 <span className="text-xs font-bold text-slate-400 uppercase">Account Holder</span>
                 <p className="text-slate-700 mt-1">{viewingSupplier.accountHolderName}</p>
               </div>
+              {viewingSupplier.accountNumber && (
+                <div>
+                  <span className="text-xs font-bold text-slate-400 uppercase">Account Number</span>
+                  <p className="text-slate-700 mt-1 font-mono">{viewingSupplier.accountNumber}</p>
+                </div>
+              )}
               <div>
                 <span className="text-xs font-bold text-slate-400 uppercase">Bank Address</span>
                 <p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewingSupplier.bankAddress}</p>
@@ -281,6 +391,10 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Account Holder</label>
                 <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.accountHolderName} onChange={e => setEditingSupplier({...editingSupplier, accountHolderName: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Account Number</label>
+                <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.accountNumber ?? ''} onChange={e => setEditingSupplier({...editingSupplier, accountNumber: e.target.value})} placeholder="e.g. 1234567890" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">SWIFT Code</label>

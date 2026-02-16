@@ -197,6 +197,9 @@ runMigration('ALTER TABLE licences ADD COLUMN exportProducts_json TEXT', 'licenc
 runMigration('ALTER TABLE shipments ADD COLUMN licenceImportLines_json TEXT', 'shipments.licenceImportLines_json');
 runMigration('ALTER TABLE shipments ADD COLUMN licenceExportLines_json TEXT', 'shipments.licenceExportLines_json');
 runMigration('ALTER TABLE shipments ADD COLUMN linkedLcId TEXT', 'shipments.linkedLcId');
+runMigration('ALTER TABLE shipments ADD COLUMN licence_allocations_json TEXT', 'shipments.licence_allocations_json');
+runMigration('ALTER TABLE suppliers ADD COLUMN accountNumber TEXT', 'suppliers.accountNumber');
+runMigration('ALTER TABLE buyers ADD COLUMN accountNumber TEXT', 'buyers.accountNumber');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS lc_transactions (
@@ -380,6 +383,7 @@ function getShipmentValues(s, folderPath) {
     licenceImportLines_json: Array.isArray(s.licenceImportLines) ? JSON.stringify(s.licenceImportLines) : null,
     licenceExportLines_json: Array.isArray(s.licenceExportLines) ? JSON.stringify(s.licenceExportLines) : null,
     linkedLcId: s.linkedLcId || null,
+    licence_allocations_json: Array.isArray(s.licenceAllocations) && s.licenceAllocations.length > 0 ? JSON.stringify(s.licenceAllocations) : null,
   };
 }
 
@@ -393,7 +397,7 @@ const SHIPMENT_INSERT_SQL = `
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, gst, trackingUrl,
     incoTerm, paymentDueDate, paymentTerm, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
-    shipperSealNumber, lineSealNumber, sbNo, sbDate, dbk, rodtep, licenceImportLines_json, licenceExportLines_json
+    shipperSealNumber, lineSealNumber, sbNo, sbDate, dbk, rodtep, licenceImportLines_json, licenceExportLines_json, licence_allocations_json
   ) VALUES (
     :id, :supplierId, :buyerId, :productId, :invoiceNumber, :company, :amount, :currency, :exchangeRate, :rate, :quantity,
     :status, :expectedShipmentDate, :createdAt, :fobValueFC, :fobValueINR, :invoiceValueINR,
@@ -402,7 +406,7 @@ const SHIPMENT_INSERT_SQL = `
     :portCode, :portOfLoading, :portOfDischarge, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :gst, :trackingUrl,
     :incoTerm, :paymentDueDate, :paymentTerm, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
     :documents_json, :history_json, :payments_json, :items_json, :documentsFolderPath, :remarks, :consigneeId, :lcSettled,
-    :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate, :dbk, :rodtep, :licenceImportLines_json, :licenceExportLines_json
+    :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate, :dbk, :rodtep, :licenceImportLines_json, :licenceExportLines_json, :licence_allocations_json
   )`;
 
 const SHIPMENT_INSERT_OR_REPLACE_SQL = SHIPMENT_INSERT_SQL.replace('INSERT INTO', 'INSERT OR REPLACE INTO');
@@ -414,12 +418,12 @@ function seedDummyData() {
   const daysAgo = (d) => new Date(Date.now() - d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const daysFuture = (d) => new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  runMany(`INSERT INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
-    ['s1', 'Shenzhen Global Textiles', 'Industrial Zone A, Shenzhen', 'China', 'Bank of China', 'Shenzhen Global Textiles Ltd', 'BKCHCNBJ', 'Shenzhen', 'Li Wei', 'liwei@szglobal.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
-    ['s2', 'Berlin Polymers GmbH', 'Hauptstrasse 10, Berlin', 'Germany', 'Deutsche Bank', 'Berlin Polymers GmbH', 'DEUTDEDB', 'Berlin', 'Hans Mueller', 'hans@berlinpolymers.de', 'APPROVED', 'Admin', now, 0, null, null, null, null],
-    ['s3', 'Tokyo Synthetics Co', 'Shinjuku 1-2-3, Tokyo', 'Japan', 'MUFG Bank', 'Tokyo Synthetics Co Ltd', 'BOTKJPJT', 'Tokyo', 'Yuki Tanaka', 'yuki@tokyosyn.co.jp', 'APPROVED', 'Admin', now, 1, 'Mizuho Bank', 'Tokyo Synthetics Co Ltd', 'MHCBJPJT', 'Tokyo Branch'],
-    ['s4', 'Mumbai Dyestuffs Pvt Ltd', 'Andheri East, Mumbai', 'India', 'HDFC Bank', 'Mumbai Dyestuffs Pvt Ltd', 'HDFCINBB', 'Mumbai', 'Raj Patel', 'raj@mumbaidye.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
-    ['s5', 'Istanbul Loom Co', 'Taksim Square, Istanbul', 'Turkey', 'Turkiye Is Bankasi', 'Istanbul Loom Co', 'ISBKTRIS', 'Istanbul', 'Mehmet Yilmaz', 'mehmet@istanbulloom.com', 'PENDING', 'Admin', now, 0, null, null, null, null],
+  runMany(`INSERT INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    ['s1', 'Shenzhen Global Textiles', 'Industrial Zone A, Shenzhen', 'China', 'Bank of China', 'Shenzhen Global Textiles Ltd', null, 'BKCHCNBJ', 'Shenzhen', 'Li Wei', 'liwei@szglobal.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s2', 'Berlin Polymers GmbH', 'Hauptstrasse 10, Berlin', 'Germany', 'Deutsche Bank', 'Berlin Polymers GmbH', null, 'DEUTDEDB', 'Berlin', 'Hans Mueller', 'hans@berlinpolymers.de', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s3', 'Tokyo Synthetics Co', 'Shinjuku 1-2-3, Tokyo', 'Japan', 'MUFG Bank', 'Tokyo Synthetics Co Ltd', null, 'BOTKJPJT', 'Tokyo', 'Yuki Tanaka', 'yuki@tokyosyn.co.jp', 'APPROVED', 'Admin', now, 1, 'Mizuho Bank', 'Tokyo Synthetics Co Ltd', 'MHCBJPJT', 'Tokyo Branch'],
+    ['s4', 'Mumbai Dyestuffs Pvt Ltd', 'Andheri East, Mumbai', 'India', 'HDFC Bank', 'Mumbai Dyestuffs Pvt Ltd', null, 'HDFCINBB', 'Mumbai', 'Raj Patel', 'raj@mumbaidye.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s5', 'Istanbul Loom Co', 'Taksim Square, Istanbul', 'Turkey', 'Turkiye Is Bankasi', 'Istanbul Loom Co', null, 'ISBKTRIS', 'Istanbul', 'Mehmet Yilmaz', 'mehmet@istanbulloom.com', 'PENDING', 'Admin', now, 0, null, null, null, null],
   ]);
   runMany('INSERT INTO products VALUES (?,?,?,?,?,?,?)', [
     ['p1', 's1', 'Premium Cotton Yarn', '40s count', '5205', 'KGS', 'RAW_MATERIAL'],
@@ -438,10 +442,10 @@ function seedDummyData() {
     ['m7', 'Industrial Weaving Loom', 'Auto loom', '8448', 'NOS', 'CAPITAL_GOOD'],
     ['m8', 'Spandex Elastic Yarn', '40D', '5404', 'KGS', 'RAW_MATERIAL'],
   ]);
-  runMany('INSERT INTO buyers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-    ['b1', 'London Fashion Hub', '22 Savile Row, London', 'United Kingdom', 'Barclays Bank', 'London Fashion Hub PLC', 'BARCGB22XXX', 'Canary Wharf, London', 'James Miller', 'james@londonfashion.co.uk', 'Rahul Sharma', '9876543210', 1, 'APPROVED', 'Rahul Sharma', now],
-    ['b2', 'NY Trends Inc', '5th Avenue, New York', 'USA', 'Chase Bank', 'NY Trends Inc', 'CHASUS33XXX', 'Manhattan, NY', 'Sarah Jessica', 'sarah@nytrends.com', 'J P Tosniwal', '9988776655', 0, 'APPROVED', 'J P Tosniwal', now],
-    ['b3', 'Dubai Textile Trading', 'Sheikh Zayed Road, Dubai', 'UAE', 'Emirates NBD', 'Dubai Textile Trading LLC', 'EBILAEAD', 'Dubai', 'Omar Hassan', 'omar@dubaitextile.ae', 'Sales Team', '9123456789', 0, 'APPROVED', 'Admin', now],
+  runMany('INSERT INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+    ['b1', 'London Fashion Hub', '22 Savile Row, London', 'United Kingdom', 'Barclays Bank', 'London Fashion Hub PLC', null, 'BARCGB22XXX', 'Canary Wharf, London', 'James Miller', 'james@londonfashion.co.uk', 'Rahul Sharma', '9876543210', 1, 'APPROVED', 'Rahul Sharma', now, null],
+    ['b2', 'NY Trends Inc', '5th Avenue, New York', 'USA', 'Chase Bank', 'NY Trends Inc', null, 'CHASUS33XXX', 'Manhattan, NY', 'Sarah Jessica', 'sarah@nytrends.com', 'J P Tosniwal', '9988776655', 0, 'APPROVED', 'J P Tosniwal', now, null],
+    ['b3', 'Dubai Textile Trading', 'Sheikh Zayed Road, Dubai', 'UAE', 'Emirates NBD', 'Dubai Textile Trading LLC', null, 'EBILAEAD', 'Dubai', 'Omar Hassan', 'omar@dubaitextile.ae', 'Sales Team', '9123456789', 0, 'APPROVED', 'Admin', now, null],
   ]);
   runMany('INSERT INTO licences (id, number, type, issueDate, importValidityDate, expiryDate, dutySaved, eoRequired, eoFulfilled, company, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
     ['lic1', '0310224567', 'ADVANCE', daysAgo(200), daysFuture(90), daysFuture(90), 1000000, 6000000, 500000, 'GFPL', 'ACTIVE'],
@@ -479,9 +483,9 @@ function seedAdditionalData() {
   const now = new Date().toISOString();
   const daysAgo = (d) => new Date(Date.now() - d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const daysFuture = (d) => new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  runMany(`INSERT OR IGNORE INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
-    ['s10', 'Vietnam Cotton Co', 'Ho Chi Minh City', 'Vietnam', 'Vietcombank', 'Vietnam Cotton Co Ltd', 'VCBCVNVX', 'HCMC', 'Nguyen Van', 'nguyen@vncotton.vn', 'APPROVED', 'Admin', now, 0, null, null, null, null],
-    ['s11', 'Pakistan Yarn Mills', 'Karachi', 'Pakistan', 'HBL', 'Pakistan Yarn Mills Ltd', 'HABBPKKA', 'Karachi', 'Ali Khan', 'ali@pk yarn.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+  runMany(`INSERT OR IGNORE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    ['s10', 'Vietnam Cotton Co', 'Ho Chi Minh City', 'Vietnam', 'Vietcombank', 'Vietnam Cotton Co Ltd', null, 'VCBCVNVX', 'HCMC', 'Nguyen Van', 'nguyen@vncotton.vn', 'APPROVED', 'Admin', now, 0, null, null, null, null],
+    ['s11', 'Pakistan Yarn Mills', 'Karachi', 'Pakistan', 'HBL', 'Pakistan Yarn Mills Ltd', null, 'HABBPKKA', 'Karachi', 'Ali Khan', 'ali@pk yarn.com', 'APPROVED', 'Admin', now, 0, null, null, null, null],
   ]);
   runMany('INSERT OR IGNORE INTO products VALUES (?,?,?,?,?,?,?)', [
     ['p10', 's10', 'Combed Cotton 30s', 'Vietnam origin', '5205', 'KGS', 'RAW_MATERIAL'],
@@ -491,8 +495,8 @@ function seedAdditionalData() {
     ['m10', 'Combed Cotton 30s', 'Vietnam', '5205', 'KGS', 'RAW_MATERIAL'],
     ['m11', 'Ring Spun Yarn 40s', 'Pakistan', '5206', 'KGS', 'RAW_MATERIAL'],
   ]);
-  runMany('INSERT OR IGNORE INTO buyers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-    ['b10', 'Berlin Textiles GmbH', 'Berlin', 'Germany', 'Commerzbank', 'Berlin Textiles GmbH', 'COBADEFF', 'Berlin', 'Klaus Weber', 'klaus@berlintextiles.de', 'Sales', '9111223344', 0, 'APPROVED', 'Admin', now],
+  runMany('INSERT OR IGNORE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+    ['b10', 'Berlin Textiles GmbH', 'Berlin', 'Germany', 'Commerzbank', 'Berlin Textiles GmbH', null, 'COBADEFF', 'Berlin', 'Klaus Weber', 'klaus@berlintextiles.de', 'Sales', '9111223344', 0, 'APPROVED', 'Admin', now, null],
   ]);
   runMany('INSERT OR IGNORE INTO licences (id, number, type, issueDate, importValidityDate, expiryDate, dutySaved, eoRequired, eoFulfilled, company, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
     ['lic10', '0310224571', 'ADVANCE', daysAgo(90), daysFuture(180), daysFuture(180), 1100000, 6500000, 800000, 'GFPL', 'ACTIVE'],

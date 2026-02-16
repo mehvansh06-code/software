@@ -182,6 +182,14 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
               <span className="text-[9px] uppercase tracking-wider text-white/50 font-black">{user.role}</span>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => { if (window.confirm('Clear cached data in this browser? Page will reload and show only server data.')) api.system.reset(); }}
+            className="w-full flex items-center justify-center gap-2 text-white/60 hover:bg-white/10 hover:text-white px-4 py-2 rounded-xl transition-all min-h-[44px] mb-2 text-[10px] font-bold uppercase tracking-wider"
+            title="Remove offline/cached data so list matches server (e.g. after clearing DB)"
+          >
+            <RefreshCw size={14} /> Clear local cache
+          </button>
           <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-4 py-2.5 rounded-xl transition-all min-h-[44px]">
             <LogOut size={16} /> <span className="font-bold text-xs uppercase tracking-widest">Sign Out</span>
           </button>

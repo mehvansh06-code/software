@@ -219,16 +219,19 @@ function getValidDocumentsFolderPath(row) {
 }
 
 function checkLicenceExpiry(shipment) {
-  const linkedId = shipment.linkedLicenceId;
-  if (!linkedId) return;
-  const licence = db.prepare('SELECT expiryDate FROM licences WHERE id = ?').get(linkedId);
-  if (!licence || !licence.expiryDate) return;
+  const ids = new Set();
+  if (shipment.linkedLicenceId) ids.add(shipment.linkedLicenceId);
+  if (Array.isArray(shipment.licenceAllocations)) shipment.licenceAllocations.forEach(a => { if (a.licenceId) ids.add(a.licenceId); });
   const shipmentDate = shipment.expectedShipmentDate || shipment.invoiceDate;
   if (!shipmentDate) return;
-  if (licence.expiryDate < shipmentDate) {
-    const err = new Error('Compliance Error: Selected Licence has expired.');
-    err.statusCode = 400;
-    throw err;
+  for (const linkedId of ids) {
+    const licence = db.prepare('SELECT expiryDate FROM licences WHERE id = ?').get(linkedId);
+    if (!licence || !licence.expiryDate) continue;
+    if (licence.expiryDate < shipmentDate) {
+      const err = new Error('Compliance Error: A selected licence has expired.');
+      err.statusCode = 400;
+      throw err;
+    }
   }
 }
 
@@ -262,15 +265,20 @@ function applyLCPayment(lcId, amountMajor, currency, date, shipmentId, broadcast
 }
 
 function linkShipmentToLC(shipment, broadcast) {
-  if (!shipment || !shipment.isUnderLC || !shipment.lcNumber) return;
-  const lcRef = String(shipment.lcNumber).trim();
-  if (!lcRef) return;
+  if (!shipment || !shipment.isUnderLC) return;
   const shipmentId = shipment.id;
   const shipmentValue = Number(shipment.amount) || 0;
   const shipmentValueMajor = shipmentValue / 100;
   let row = null;
   try {
-    row = db.prepare('SELECT * FROM lcs WHERE lcNumber = ?').get(lcRef);
+    // Prefer linkedLcId when user selected an LC (e.g. from New Shipment dropdown)
+    if (shipment.linkedLcId) {
+      row = db.prepare('SELECT * FROM lcs WHERE id = ?').get(shipment.linkedLcId);
+    }
+    if (!row && shipment.lcNumber) {
+      const lcRef = String(shipment.lcNumber).trim();
+      if (lcRef) row = db.prepare('SELECT * FROM lcs WHERE lcNumber = ?').get(lcRef);
+    }
   } catch (e) {
     return;
   }
@@ -361,6 +369,7 @@ function buildShipmentResponse(r) {
     documentsFolderPath: folderPath,
     licenceImportLines: safeParseJson(r.licenceImportLines_json, []),
     licenceExportLines: safeParseJson(r.licenceExportLines_json, []),
+    licenceAllocations: safeParseJson(r.licence_allocations_json, []),
   };
 }
 
@@ -684,6 +693,97 @@ function createRouter(broadcast) {
     broadcast();
   });
 
+  router.post('/import', hasPermission('shipments.create'), (req, res) => {
+    const body = req.body;
+    const rows = Array.isArray(body?.rows) ? body.rows : [];
+    const isExport = !!body?.isExport;
+    if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...], isExport?: boolean } with shipment row objects' });
+    const now = new Date().toISOString();
+    const stmt = db.prepare(SHIPMENT_INSERT_OR_REPLACE_SQL);
+    let imported = 0;
+    try {
+      for (const r of rows) {
+        let supplierId = null;
+        let buyerId = null;
+        if (isExport) {
+          const bRow = r.buyerId ? { id: r.buyerId } : (r.buyerName ? db.prepare('SELECT id FROM buyers WHERE name = ? LIMIT 1').get(r.buyerName) : null);
+          buyerId = bRow ? bRow.id : null;
+          if (!buyerId) continue; // skip row without valid buyer
+        } else {
+          const sRow = r.supplierId ? { id: r.supplierId } : (r.supplierName ? db.prepare('SELECT id FROM suppliers WHERE name = ? LIMIT 1').get(r.supplierName) : null);
+          supplierId = sRow ? sRow.id : null;
+          if (!supplierId) continue;
+        }
+        const productName = r.productName || r.ProductName || r.product_name || '';
+        const hsnCode = r.hsnCode || r.HSNCode || r.hsn_code || '';
+        const quantity = Number(r.quantity) || Number(r.Quantity) || 0;
+        const unit = r.unit || r.Unit || 'KGS';
+        const rate = Number(r.rate) || Number(r.ratePerUnit) || 0;
+        const amount = Number(r.amount) || Number(r.Amount) || (quantity * rate) || 0;
+        const exchangeRate = Number(r.exchangeRate) || Number(r.exchange_rate) || 1;
+        const invoiceValueINR = Math.round((amount * exchangeRate) * 100) / 100;
+        const id = r.id && /^[a-zA-Z0-9_-]+$/.test(r.id) ? r.id : 'sh_' + Math.random().toString(36).slice(2, 11);
+        const invoiceNumber = r.invoiceNumber || r.InvoiceNo || r.invoice_number || id;
+        const company = (r.company === 'GTEX' || r.company === 'GFPL') ? r.company : 'GFPL';
+        const expectedShipmentDate = r.expectedShipmentDate || r.ExpectedShipmentDate || r.expected_shipment_date || null;
+        const invoiceDate = r.invoiceDate || r.InvoiceDate || r.invoice_date || now.slice(0, 10);
+        const history = [{ status: 'ORDERED', date: now, location: 'Import', remarks: 'Bulk import' }];
+        const items = [{
+          productId: r.productId || null,
+          productName: productName || 'Product',
+          description: r.description || null,
+          hsnCode: hsnCode || '',
+          quantity,
+          unit,
+          rate,
+          amount,
+          productType: r.productType || 'RAW_MATERIAL',
+        }];
+        const sNorm = clientToCents({
+          id,
+          supplierId,
+          buyerId,
+          invoiceNumber,
+          company,
+          amount,
+          currency: r.currency || 'USD',
+          exchangeRate,
+          rate,
+          quantity,
+          expectedShipmentDate,
+          createdAt: now,
+          invoiceDate,
+          fobValueFC: amount,
+          fobValueINR: invoiceValueINR,
+          invoiceValueINR,
+          isUnderLC: false,
+          isUnderLicence: false,
+          status: r.status || 'ORDERED',
+          history,
+          items,
+          documents: {},
+          payments: [],
+        });
+        const documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
+        try {
+          stmt.run(getShipmentValues(sNorm, documentsFolderPath));
+          setShipmentItems(id, items);
+          setShipmentHistory(id, history);
+          imported++;
+        } catch (rowErr) {
+          console.warn('shipment import row skip:', id, rowErr.message);
+        }
+      }
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'SHIPMENTS_IMPORTED', null, { count: imported, isExport, message: `Imported ${imported} shipment(s)` });
+      broadcast();
+      res.json({ success: true, imported });
+    } catch (e) {
+      console.error('shipments import:', e);
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
   router.put('/:id', hasPermission('shipments.edit'), (req, res) => {
     const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
@@ -716,7 +816,7 @@ function createRouter(broadcast) {
         fobValueFC=?, fobValueINR=?,
         isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, linkedLcId=?, fileStatus=?, consigneeId=?, lcSettled=?,
         shipperSealNumber=?, lineSealNumber=?, sbNo=?, sbDate=?, dbk=?, rodtep=?,
-        licenceImportLines_json=?, licenceExportLines_json=?,
+        licenceImportLines_json=?, licenceExportLines_json=?, licence_allocations_json=?,
         version = version + 1
       WHERE id=? AND version=?
     `);
@@ -740,6 +840,7 @@ function createRouter(broadcast) {
           const lcSettledVal = s.lcSettled !== undefined ? (s.lcSettled ? 1 : 0) : (existing?.lcSettled ?? 0);
           const licenceImportLinesJson = Array.isArray(s.licenceImportLines) ? JSON.stringify(s.licenceImportLines) : null;
           const licenceExportLinesJson = Array.isArray(s.licenceExportLines) ? JSON.stringify(s.licenceExportLines) : null;
+          const licenceAllocationsJson = Array.isArray(s.licenceAllocations) && s.licenceAllocations.length > 0 ? JSON.stringify(s.licenceAllocations) : null;
           const result = updateStmt.run(
             s.status, sNorm.containerNumber, sNorm.blNumber, sNorm.blDate, sNorm.beNumber, sNorm.beDate,
             sNorm.shippingLine, sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
@@ -763,6 +864,7 @@ function createRouter(broadcast) {
             sNorm.rodtep ?? null,
             licenceImportLinesJson,
             licenceExportLinesJson,
+            licenceAllocationsJson,
             id,
             version
           );

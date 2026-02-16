@@ -47,6 +47,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     lcDate: '',
     isUnderLicence: false,
     linkedLicenceId: '',
+    selectedLicenceIds: [] as string[],
     fobValueFC: '',
     portOfLoading: '',
     portOfDischarge: '',
@@ -209,8 +210,9 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
         linkedLcId: formData.isUnderLC && formData.linkedLcId ? formData.linkedLcId : undefined,
         lcAmount: formData.isUnderLC ? (typeof formData.lcAmount === 'number' ? formData.lcAmount : (formData.lcAmount ? parseFloat(formData.lcAmount) : (isExport ? totalOrAmountFC : 0))) : 0,
         lcDate: formData.lcDate || undefined,
-        isUnderLicence: formData.isUnderLicence,
-        linkedLicenceId: formData.isUnderLicence ? formData.linkedLicenceId : undefined,
+        isUnderLicence: formData.isUnderLicence && (formData.selectedLicenceIds?.length > 0 || formData.linkedLicenceId),
+        linkedLicenceId: formData.isUnderLicence ? (formData.selectedLicenceIds?.[0] || formData.linkedLicenceId) : undefined,
+        licenceAllocations: [],
         licenceObligationAmount: 0,
         createdAt: new Date().toISOString(),
         status: ShipmentStatus.INITIATED,
@@ -507,12 +509,34 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                   {filteredLicences.length > 0 ? (
                     <>
                       <label className="block text-[9px] font-black uppercase text-slate-500 mb-2">
-                        {detectedLicenceType ? `Select Active ${detectedLicenceType} Licence` : 'Select Active Licence'}
+                        {detectedLicenceType ? `Select Active ${detectedLicenceType} Licence(s)` : 'Select Active Licence(s)'}
                       </label>
-                      <select className="w-full px-4 py-3 rounded-xl border text-sm font-bold" value={formData.linkedLicenceId} onChange={e => handleChange('linkedLicenceId', e.target.value)}>
-                        <option value="">-- Active Licences --</option>
-                        {filteredLicences.map(l => <option key={l.id} value={l.id}>{l.number} ({l.type}) — Balance: {formatINR(l.eoRequired - l.eoFulfilled)}</option>)}
-                      </select>
+                      <p className="text-[10px] text-slate-500 mb-2">You can select multiple licences. Allocate quantities and amounts per line in Shipment Details after saving.</p>
+                      <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-100 rounded-xl p-3 bg-slate-50">
+                        {filteredLicences.map(l => {
+                          const selectedIds = formData.selectedLicenceIds ?? [];
+                          const checked = selectedIds.includes(l.id);
+                          return (
+                            <label key={l.id} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-white transition-colors">
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 rounded accent-emerald-600"
+                                checked={checked}
+                                onChange={() => {
+                                  const next = checked ? selectedIds.filter(id => id !== l.id) : [...selectedIds, l.id];
+                                  setFormData((prev: any) => ({
+                                    ...prev,
+                                    selectedLicenceIds: next,
+                                    linkedLicenceId: next[0] || ''
+                                  }));
+                                }}
+                              />
+                              <span className="text-sm font-bold text-slate-800">{l.number} ({l.type})</span>
+                              <span className="text-[10px] text-slate-500">— Balance: {formatINR(l.eoRequired - l.eoFulfilled)}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
                       {!detectedLicenceType && <p className="text-[10px] text-slate-500 mt-2">Add items to auto-detect licence type (Advance/EPCG). You can still link any active licence above.</p>}
                     </>
                   ) : (

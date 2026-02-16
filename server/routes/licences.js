@@ -72,6 +72,23 @@ function createRouter(broadcast) {
     broadcast();
   });
 
+  router.delete('/:id', hasPermission('licences.delete'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'Licence ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    try {
+      const row = db.prepare('SELECT number, type, company FROM licences WHERE id = ?').get(idCheck.value);
+      if (!row) return res.status(404).json({ success: false, error: 'Licence not found' });
+      db.prepare('DELETE FROM licences WHERE id = ?').run(idCheck.value);
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'LICENCE_DELETED', idCheck.value, { number: row.number, type: row.type, company: row.company });
+      res.json({ success: true });
+      broadcast();
+    } catch (e) {
+      console.error('DELETE /licences/:id', e);
+      res.status(500).json({ success: false, error: e.message || 'Failed to delete licence' });
+    }
+  });
+
   return router;
 }
 

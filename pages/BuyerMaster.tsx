@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Buyer, User, UserRole, SupplierStatus, Consignee } from '../types';
-import { Search, CheckCircle, XCircle, Clock, CheckSquare, Square, Plus, X, Eye, Edit3, Upload } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Clock, CheckSquare, Square, Plus, X, Eye, Edit3, Upload, FileQuestion, FileDown } from 'lucide-react';
 import BuyerRequest from './BuyerRequest';
 import { api } from '../api';
 import * as XLSX from 'xlsx';
@@ -10,9 +10,10 @@ interface BuyerMasterProps {
   user: User;
   onUpdateItem: (updated: Buyer) => Promise<void>;
   onAddItem: (item: Buyer) => Promise<void>;
+  onRefreshData?: () => Promise<void>;
 }
 
-const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, onAddItem }) => {
+const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, onAddItem, onRefreshData }) => {
   const [filterStatus, setFilterStatus] = useState<SupplierStatus | 'ALL'>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
@@ -20,6 +21,7 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
   const [viewingBuyer, setViewingBuyer] = useState<Buyer | null>(null);
   const [editingBuyer, setEditingBuyer] = useState<Buyer | null>(null);
   const [importing, setImporting] = useState(false);
+  const [showFormatHelp, setShowFormatHelp] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canApprove = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
@@ -60,6 +62,7 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
         const country = r.Country ?? r.country ?? '';
         const bankName = r['Bank Name'] ?? r.bankName ?? r.Bank ?? '';
         const accountHolder = r['Account Holder'] ?? r['A/C Holder'] ?? r.accountHolderName ?? r.AccountHolder ?? '';
+        const accountNumber = r['Account Number'] ?? r.accountNumber ?? r.account_number ?? '';
         const swift = r.SWIFT ?? r.Swift ?? r.swiftCode ?? r['SWIFT Code'] ?? '';
         const bankAddress = r['Bank Address'] ?? r.bankAddress ?? '';
         const contactPerson = r['Contact Person'] ?? r.contactPerson ?? r['Contact Name'] ?? '';
@@ -78,6 +81,7 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
           country,
           bankName,
           accountHolderName: accountHolder,
+          accountNumber: accountNumber || undefined,
           swiftCode: swift,
           bankAddress,
           contactPerson,
@@ -94,19 +98,34 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
         };
       }).filter((r) => r.name && r.country);
       if (rows.length === 0) {
-        alert('No rows with Name and Country found. Use columns: Name, Address, Country, Bank Name, Account Holder, SWIFT Code, Bank Address, Contact Person, Contact Number, Contact Email, Sales Person Name, Sales Person Contact, Consignee Name, Consignee Address.');
+        alert('No rows with Name and Country found. Use the Excel format (see "Excel format" button).');
         return;
       }
       const result = await api.buyers.import(rows);
       const count = (result as any)?.imported ?? rows.length;
-      alert(`Imported ${count} export buyer(s). Refreshing the list.`);
-      window.location.reload();
+      if (onRefreshData) {
+        await onRefreshData();
+        setFilterStatus('ALL');
+        setSearchTerm('');
+        alert(`Imported ${count} buyer(s). List updated.`);
+      } else {
+        alert(`Imported ${count} buyer(s). Refreshing the list.`);
+        window.location.reload();
+      }
     } catch (err: any) {
       alert(err?.message || 'Import failed.');
     } finally {
       setImporting(false);
       e.target.value = '';
     }
+  };
+
+  const downloadBuyerTemplate = () => {
+    const headers = ['Name', 'Address', 'Country', 'Bank Name', 'Account Holder', 'Account Number', 'SWIFT Code', 'Bank Address', 'Contact Person', 'Contact Number', 'Contact Email', 'Sales Person Name', 'Sales Person Contact', 'Consignee Name', 'Consignee Address'];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([headers, ['London Fashion Hub', '22 Savile Row, London', 'United Kingdom', 'Barclays Bank', 'London Fashion Hub PLC', '12345678', 'BARCGB22XXX', 'Canary Wharf, London', 'James Miller', '+44 20 7123 4567', 'james@londonfashion.co.uk', 'Rahul Sharma', '9876543210', '', '']]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Buyers');
+    XLSX.writeFile(wb, 'buyers_import_template.xlsx');
   };
 
   return (
@@ -127,6 +146,12 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
           >
             <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
+          <button type="button" onClick={() => setShowFormatHelp(true)} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Excel format">
+            <FileQuestion size={16} /> Excel format
+          </button>
+          <button type="button" onClick={downloadBuyerTemplate} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Download template">
+            <FileDown size={16} /> Download template
+          </button>
           <button 
             onClick={() => setShowAddForm(true)}
             className="px-6 py-3 bg-amber-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-amber-700 transition-all shadow-lg shadow-amber-100"
@@ -145,6 +170,16 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
           </div>
         </div>
       </header>
+
+      {showFormatHelp && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowFormatHelp(false)}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg p-6 space-y-3" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900">Buyer Excel format</h3>
+            <p className="text-sm text-slate-600">First row = headers. Required: <strong>Name</strong>, <strong>Country</strong>. Optional: Address, Bank Name, Account Holder, Account Number, SWIFT Code, Bank Address, Contact Person, Contact Number, Contact Email, Sales Person Name, Sales Person Contact, Consignee Name, Consignee Address.</p>
+            <button type="button" onClick={() => setShowFormatHelp(false)} className="mt-2 px-4 py-2 bg-amber-600 text-white rounded-xl font-bold text-sm">Close</button>
+          </div>
+        </div>
+      )}
 
       {showAddForm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
@@ -233,6 +268,11 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
               <button onClick={() => setViewingBuyer(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={22} /></button>
             </div>
             <div className="p-8 space-y-6">
+              <div className="pb-4 border-b border-slate-100">
+                <span className="text-xs font-bold text-slate-400 uppercase">Buyer ID</span>
+                <p className="text-slate-900 font-mono text-sm mt-1">{viewingBuyer.id}</p>
+                <p className="text-slate-500 text-xs mt-1">Use this in shipment Excel import (Buyer ID column), or use the name below (Buyer Name).</p>
+              </div>
               <div>
                 <span className="text-xs font-bold text-slate-400 uppercase">Legal Name</span>
                 <p className="text-slate-900 font-semibold mt-1">{viewingBuyer.name}</p>
@@ -267,6 +307,12 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
                 <span className="text-xs font-bold text-slate-400 uppercase">Account Holder</span>
                 <p className="text-slate-700 mt-1">{viewingBuyer.accountHolderName}</p>
               </div>
+              {viewingBuyer.accountNumber && (
+                <div>
+                  <span className="text-xs font-bold text-slate-400 uppercase">Account Number</span>
+                  <p className="text-slate-700 mt-1 font-mono">{viewingBuyer.accountNumber}</p>
+                </div>
+              )}
               <div>
                 <span className="text-xs font-bold text-slate-400 uppercase">Bank Address</span>
                 <p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewingBuyer.bankAddress}</p>

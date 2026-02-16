@@ -17,6 +17,7 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
     country: '',
     bankName: '',
     accountHolderName: '',
+    accountNumber: '',
     swiftCode: '',
     bankAddress: '',
     contactPerson: '',
@@ -119,6 +120,10 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
               <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Bank A/C Beneficiary Name</label>
                 <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.accountHolderName} onChange={e => setFormData({...formData, accountHolderName: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Account Number</label>
+                <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} placeholder="e.g. 1234567890" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

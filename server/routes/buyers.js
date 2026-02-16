@@ -22,8 +22,8 @@ function createRouter(broadcast) {
     const idCheck = validateId(b.id, 'Buyer ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const consigneesJson = (b.consignees && Array.isArray(b.consignees)) ? JSON.stringify(b.consignees) : null;
-    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
+    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'BUYER_CREATED', idCheck.value, { name: b.name });
     res.json({ success: true });
@@ -35,7 +35,7 @@ function createRouter(broadcast) {
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...] } with buyer objects' });
     const now = new Date().toISOString();
-    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     let count = 0;
     try {
       for (const r of rows) {
@@ -49,6 +49,7 @@ function createRouter(broadcast) {
           r.country || '',
           r.bankName || r.bank_name || '',
           r.accountHolderName || r.accountHolder || r.account_holder_name || '',
+          r.accountNumber || r.account_number || null,
           r.swiftCode || r.swift || r.swift_code || '',
           r.bankAddress || r.bank_address || '',
           r.contactPerson || r.contact_person || '',
@@ -79,8 +80,8 @@ function createRouter(broadcast) {
     const b = req.body;
     if (!b || typeof b !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const consigneesJson = (b.consignees && Array.isArray(b.consignees)) ? JSON.stringify(b.consignees) : null;
-    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
+    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'BUYER_UPDATED', idCheck.value, { name: b.name });
     res.json({ success: true });

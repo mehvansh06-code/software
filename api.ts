@@ -218,6 +218,7 @@ export const api = {
     list: () => fetchApi('suppliers'),
     create: (data: any) => fetchApi('suppliers', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    import: (rows: any[]) => fetchApi('suppliers/import', { method: 'POST', body: JSON.stringify({ rows }) }),
   },
   buyers: {
     list: () => fetchApi('buyers'),
@@ -232,6 +233,7 @@ export const api = {
       return fetchApi(`shipments/${id}`);
     },
     create: (data: any) => fetchApi('shipments', { method: 'POST', body: JSON.stringify(data) }),
+    import: (rows: any[], isExport?: boolean) => fetchApi('shipments/import', { method: 'POST', body: JSON.stringify({ rows, isExport: !!isExport }) }),
     update: (id: string, data: any) => fetchApi(`shipments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     /** PUT with full response for optimistic locking: returns { status, data } so caller can handle 409. */
     updateWithResponse: async (id: string, data: any): Promise<{ status: number; data: any }> => {
@@ -324,6 +326,7 @@ export const api = {
     list: () => fetchApi('licences'),
     create: (data: any) => fetchApi('licences', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`licences/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchApi(`licences/${id}`, { method: 'DELETE' }),
   },
   lcs: {
     list: () => fetchApi('lcs'),
@@ -336,6 +339,7 @@ export const api = {
     list: () => fetchApi('materials'),
     create: (data: any) => fetchApi('materials', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`materials/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    import: (rows: any[]) => fetchApi('materials/import', { method: 'POST', body: JSON.stringify({ rows }) }),
   },
   domesticBuyers: {
     list: () => fetchApi('domestic-buyers'),

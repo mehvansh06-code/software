@@ -20,6 +20,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
     country: '',
     bankName: '',
     accountHolderName: '',
+    accountNumber: '',
     swiftCode: '',
     bankAddress: '',
     contactPerson: '',
@@ -41,6 +42,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
         country: initialBuyer.country,
         bankName: initialBuyer.bankName,
         accountHolderName: initialBuyer.accountHolderName,
+        accountNumber: initialBuyer.accountNumber ?? '',
         swiftCode: initialBuyer.swiftCode,
         bankAddress: initialBuyer.bankAddress,
         contactPerson: initialBuyer.contactPerson,
@@ -160,6 +162,10 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">A/C Holder Name (As per Bank)</label>
                 <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.accountHolderName} onChange={e => setFormData({...formData, accountHolderName: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Account Number</label>
+                <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} placeholder="e.g. 1234567890" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

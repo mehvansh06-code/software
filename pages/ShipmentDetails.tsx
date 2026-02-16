@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType, ShipmentLicenceImportLine, ShipmentLicenceExportLine } from '../types';
+import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType, ShipmentLicenceImportLine, ShipmentLicenceExportLine, LicenceAllocation } from '../types';
 import { SHIPMENT_STATUS_ORDER_IMPORT, SHIPMENT_STATUS_ORDER_EXPORT, getShipmentStatusLabel, formatINR, formatDate, formatCurrency } from '../constants';
 import { 
   ArrowLeft, 
@@ -113,6 +113,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   });
   const [licenceImportLines, setLicenceImportLines] = useState<ShipmentLicenceImportLine[]>([]);
   const [licenceExportLines, setLicenceExportLines] = useState<ShipmentLicenceExportLine[]>([]);
+  const [licenceAllocations, setLicenceAllocations] = useState<LicenceAllocation[]>([]);
+  const [allocateModalProduct, setAllocateModalProduct] = useState<{ productId: string; productName: string; hsnCode?: string; lineQuantity?: number; lineUnit?: string; exchangeRate?: number } | null>(null);
+  const [allocateModalRows, setAllocateModalRows] = useState<{ licenceId: string; allocatedQuantity: number; allocatedUom?: string; allocatedAmountUSD: number; allocatedAmountINR: number }[]>([]);
   const [editInvoice, setEditInvoice] = useState(false);
   const [invoiceEditData, setInvoiceEditData] = useState({
     invoiceNumber: shipment?.invoiceNumber || '',
@@ -314,6 +317,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     });
     setLicenceImportLines(Array.isArray(shipment.licenceImportLines) ? shipment.licenceImportLines : []);
     setLicenceExportLines(Array.isArray(shipment.licenceExportLines) ? shipment.licenceExportLines : []);
+    setLicenceAllocations(Array.isArray(shipment.licenceAllocations) ? shipment.licenceAllocations : []);
     const linkedLic = shipment.linkedLicenceId ? licences.find(l => l.id === shipment.linkedLicenceId) : null;
     setExportDocData({
       sbNo: (shipment as any).sbNo || '',
@@ -415,8 +419,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   }, [shipment, isExport]);
 
   const linkedLC = useMemo(() => {
-    if (!shipment?.isUnderLC || !shipment?.lcNumber || !lcs.length) return null;
-    return lcs.find(lc => lc.lcNumber === shipment.lcNumber || lc.id === (shipment as any).linkedLcId) || null;
+    if (!shipment?.isUnderLC || !lcs.length) return null;
+    const lid = (shipment as any).linkedLcId;
+    return lcs.find(lc => lc.id === lid || lc.lcNumber === shipment.lcNumber) || null;
   }, [shipment?.isUnderLC, shipment?.lcNumber, (shipment as any)?.linkedLcId, lcs]);
 
   /** Import: raw material → Advance Licence, capital goods → EPCG */
@@ -523,16 +528,17 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleSaveDuties = async () => {
     try {
-      // When a licence is selected, invoice is reference-only — BOE/product details are in Licence system, so don't send licenceImportLines.
+      const hasAllocations = licenceAllocations.length > 0;
       const updated = {
         ...shipment,
         ...dutiesData,
         portCode: dutiesData.portCode,
-        isUnderLicence: !!licenceImportData.linkedLicenceId,
-        linkedLicenceId: licenceImportData.linkedLicenceId || undefined,
+        isUnderLicence: hasAllocations || !!licenceImportData.linkedLicenceId,
+        linkedLicenceId: (hasAllocations ? licenceAllocations[0]?.licenceId : licenceImportData.linkedLicenceId) || undefined,
         licenceObligationAmount: licenceImportData.licenceObligationAmount || undefined,
         licenceObligationQuantity: licenceImportData.licenceObligationQuantity || undefined,
-        licenceImportLines: licenceImportData.linkedLicenceId ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined),
+        licenceImportLines: licenceImportData.linkedLicenceId && !hasAllocations ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined),
+        licenceAllocations: licenceAllocations.length > 0 ? licenceAllocations : undefined,
       };
       await onUpdate(updated);
       setEditDuties(false);
@@ -544,9 +550,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   };
   const handleSaveExportDoc = async () => {
     try {
+      const hasAllocations = licenceAllocations.length > 0;
       const updated: any = { ...shipment, ...exportDocData };
-      // When a licence is selected, invoice is reference-only — product fulfillment is in Licence system.
       if (licenceExportLines.length > 0 && !epcgLicenceId && !advLicenceId) updated.licenceExportLines = licenceExportLines;
+      updated.licenceAllocations = licenceAllocations.length > 0 ? licenceAllocations : undefined;
+      updated.isUnderLicence = hasAllocations || !!epcgLicenceId || !!advLicenceId;
+      updated.linkedLicenceId = (hasAllocations ? licenceAllocations[0]?.licenceId : epcgLicenceId || advLicenceId) || undefined;
       await onUpdate(updated);
       setEditExportDoc(false);
     } catch (e: any) {
@@ -581,25 +590,24 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         ...logisticsData,
         ...dutiesData
       } as Shipment;
+      const hasAllocations = licenceAllocations.length > 0;
+      updated.licenceAllocations = licenceAllocations.length > 0 ? licenceAllocations : undefined;
       if (isExport) {
         (updated as any).lodgement = lodgementValue || undefined;
         (updated as any).lodgementDate = lodgementDateValue || undefined;
-        // Link export to one or both licences (EPCG and/or Advance) for Licence Tracker
         updated.epcgLicenceId = epcgLicenceId || undefined;
         updated.advLicenceId = advLicenceId || undefined;
-        const exportLicenceId = epcgLicenceId || advLicenceId || undefined;
-        updated.linkedLicenceId = exportLicenceId; // backward compat: first selected
-        updated.isUnderLicence = !!exportLicenceId;
+        const exportLicenceId = epcgLicenceId || advLicenceId || (hasAllocations ? licenceAllocations[0]?.licenceId : undefined);
+        updated.linkedLicenceId = exportLicenceId;
+        updated.isUnderLicence = !!exportLicenceId || hasAllocations;
       } else {
-        updated.isUnderLicence = !!licenceImportData.linkedLicenceId;
-        updated.linkedLicenceId = licenceImportData.linkedLicenceId || undefined;
+        updated.isUnderLicence = hasAllocations || !!licenceImportData.linkedLicenceId;
+        updated.linkedLicenceId = (hasAllocations ? licenceAllocations[0]?.licenceId : licenceImportData.linkedLicenceId) || undefined;
         updated.licenceObligationAmount = licenceImportData.licenceObligationAmount || undefined;
         updated.licenceObligationQuantity = licenceImportData.licenceObligationQuantity || undefined;
-        // When licence selected, invoice is reference-only — don't send licenceImportLines (managed in Licence system).
-        updated.licenceImportLines = licenceImportData.linkedLicenceId ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined);
+        updated.licenceImportLines = (licenceImportData.linkedLicenceId && !hasAllocations) ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined);
       }
-      // When export licence(s) selected, invoice is reference-only — don't send licenceExportLines (managed in Licence system).
-      if (isExport) (updated as any).licenceExportLines = (epcgLicenceId || advLicenceId) ? undefined : (licenceExportLines.length > 0 ? licenceExportLines : undefined);
+      if (isExport) (updated as any).licenceExportLines = (epcgLicenceId || advLicenceId || hasAllocations) ? undefined : (licenceExportLines.length > 0 ? licenceExportLines : undefined);
       await onUpdate(updated);
       setEditAll(false);
       setEditInvoice(false);
@@ -672,6 +680,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     });
     setLicenceImportLines(Array.isArray(shipment.licenceImportLines) ? shipment.licenceImportLines : []);
     setLicenceExportLines(Array.isArray(shipment.licenceExportLines) ? shipment.licenceExportLines : []);
+    setLicenceAllocations(Array.isArray(shipment.licenceAllocations) ? shipment.licenceAllocations : []);
     setLodgementValue((shipment as any).lodgement || '');
     setLodgementDateValue((shipment as any).lodgementDate || '');
     setEditAll(false);
@@ -1000,6 +1009,30 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 </>
                 )}
               </div>
+              {!isExport && (licenceAllocations.length > 0 || licenceImportData.linkedLicenceId) && (
+                <div className="mb-6 p-4 rounded-2xl border border-amber-100 bg-amber-50/50">
+                  <h3 className="text-[10px] font-black uppercase text-amber-700 tracking-widest mb-3">Invoice linkage (import under licence)</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Invoice No.</span><span className="font-bold text-slate-800">{shipment?.invoiceNumber || '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Supplier</span><span className="font-bold text-slate-800">{partnerName || '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">BOE No.</span><span className="font-bold text-slate-800">{dutiesData.beNumber || shipment?.beNumber || '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">BOE Date</span><span className="font-bold text-slate-800">{dutiesData.beDate || shipment?.beDate ? formatDate(dutiesData.beDate || shipment?.beDate!) : '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Exchange rate</span><span className="font-bold text-slate-800">{dutiesData.exchangeRate || shipment?.exchangeRate || '—'}</span></div>
+                  </div>
+                </div>
+              )}
+              {isExport && (licenceAllocations.length > 0 || epcgLicenceId || advLicenceId) && (
+                <div className="mb-6 p-4 rounded-2xl border border-emerald-100 bg-emerald-50/50">
+                  <h3 className="text-[10px] font-black uppercase text-emerald-700 tracking-widest mb-3">Invoice linkage (export under licence)</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Invoice No.</span><span className="font-bold text-slate-800">{shipment?.invoiceNumber || '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Buyer</span><span className="font-bold text-slate-800">{partnerName || '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">SB No.</span><span className="font-bold text-slate-800">{(shipment as any)?.sbNo || '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">SB Date</span><span className="font-bold text-slate-800">{(shipment as any)?.sbDate ? formatDate((shipment as any).sbDate) : '—'}</span></div>
+                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Exchange rate</span><span className="font-bold text-slate-800">{shipment?.exchangeRate ?? exportDocData.exchangeRate ?? '—'}</span></div>
+                  </div>
+                </div>
+              )}
               {!isExport && (
               <table className="w-full">
                 <thead>
@@ -1010,11 +1043,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     <th className="pb-4 text-right">Unit</th>
                     <th className="pb-4 text-right">Rate (per unit)</th>
                     <th className="pb-4 text-right">Amount</th>
+                    {(editAll || editDuties) && (isExport ? licences?.length : importLicencesFiltered.length) ? <th className="pb-4 text-right">Licence</th> : null}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {(editAll ? invoiceEditData.items : (shipment.items || [])).map((item, idx) => {
                     const mergedNameDesc = `${item.productName || ''}${(item as any).description ? ' — ' + (item as any).description : ''}`.trim();
+                    const allocationsForItem = licenceAllocations.filter(a => a.productId === item.productId);
+                    const licenceList = isExport ? (licences || []).filter(l => l.company === shipment?.company && l.status === 'ACTIVE') : importLicencesFiltered;
                     return (
                     <tr key={idx} className="group">
                       <td className="py-2">
@@ -1060,6 +1096,23 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                         )}
                       </td>
                       <td className="py-2 text-right text-sm font-black text-slate-900">{formatCurrency(editAll ? (invoiceEditData.items[idx]?.amount ?? item.amount) : item.amount, shipment.currency)}</td>
+                      {(editAll || editDuties) && licenceList.length > 0 ? (
+                        <td className="py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const lineQty = editAll ? (invoiceEditData.items[idx]?.quantity ?? item.quantity) : item.quantity;
+                              const lineUnit = editAll ? (invoiceEditData.items[idx]?.unit ?? item.unit) : item.unit;
+                              setAllocateModalProduct({ productId: item.productId, productName: item.productName || '', hsnCode: item.hsnCode, lineQuantity: lineQty, lineUnit: lineUnit || 'KGS', exchangeRate: dutiesData.exchangeRate || shipment?.exchangeRate || 1 });
+                              const existing = licenceAllocations.filter(a => a.productId === item.productId);
+                              setAllocateModalRows(existing.length > 0 ? existing.map(a => ({ licenceId: a.licenceId, allocatedQuantity: a.allocatedQuantity, allocatedUom: a.allocatedUom || item.unit || 'KGS', allocatedAmountUSD: a.allocatedAmountUSD, allocatedAmountINR: a.allocatedAmountINR })) : [{ licenceId: '', allocatedQuantity: 0, allocatedUom: item.unit || 'KGS', allocatedAmountUSD: 0, allocatedAmountINR: 0 }]);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-200 text-[10px] font-bold text-slate-700"
+                          >
+                            {allocationsForItem.length > 0 ? `Split · ${allocationsForItem.length}` : 'Split / Allocate'}
+                          </button>
+                        </td>
+                      ) : null}
                     </tr>
                   );})}
                 </tbody>
@@ -1690,7 +1743,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                    )}
                </div>
                <button 
-                  onClick={() => { setNewPayment(prev => ({ ...prev, currency: shipment.currency })); setShowPaymentModal(true); }}
+                  onClick={() => {
+                    setNewPayment(prev => ({
+                      ...prev,
+                      currency: shipment.currency,
+                      ...(shipment.isUnderLC && linkedLC ? { mode: 'LC' } : {})
+                    }));
+                    setShowPaymentModal(true);
+                  }}
                   className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
                >
                  <Plus size={14} /> Add Payment
@@ -2246,6 +2306,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                        <option value="CHECK">Check / DD</option>
                        <option value="LC">Letter of Credit</option>
                     </select>
+                    {shipment.isUnderLC && linkedLC && (newPayment.mode === 'LC' || newPayment.mode === 'Letter of Credit') && (
+                      <p className="mt-2 text-[10px] text-indigo-600 font-medium bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100">
+                        This payment will be recorded under LC <span className="font-bold">{linkedLC.lcNumber}</span> in the LC Tracker with the same details (invoice, reference, date, amount) as in this Payment Ledger.
+                      </p>
+                    )}
                  </div>
                  <button onClick={handleAddPayment} className="w-full py-3 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-700 mt-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled={exceedsInvoice}>
                     Save Transaction
@@ -2255,6 +2320,115 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         </div>
         );
       })()}
+
+      {allocateModalProduct && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-4xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div>
+                <h2 className="text-lg font-black text-slate-900">Split / Allocate — {allocateModalProduct.productName}</h2>
+                {allocateModalProduct.hsnCode && <p className="text-[10px] text-slate-500 mt-0.5">HSN: {allocateModalProduct.hsnCode}</p>}
+                {!isExport && allocateModalProduct.lineQuantity != null && (
+                  <p className="text-[10px] text-amber-600 font-bold mt-1">Max quantity in this shipment: {allocateModalProduct.lineQuantity} {allocateModalProduct.lineUnit || 'KGS'} — total allocated must not exceed this.</p>
+                )}
+              </div>
+              <button type="button" onClick={() => { setAllocateModalProduct(null); setAllocateModalRows([]); }} className="p-2 hover:bg-slate-200 rounded-full"><X size={20} className="text-slate-500" /></button>
+            </div>
+            <p className="px-6 py-2 text-[10px] text-slate-500">Add rows to allocate to one or more licences (same type only for import). Quantity, UOM, Amount INR, Amount USD. USD is auto-calculated from INR using exchange rate when you enter INR.</p>
+            <div className="flex-1 overflow-auto px-6">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-[9px] font-black text-slate-500 uppercase border-b">
+                    <th className="pb-2 pt-2">Licence</th>
+                    <th className="pb-2 pt-2 text-right">Quantity</th>
+                    <th className="pb-2 pt-2">UOM</th>
+                    <th className="pb-2 pt-2 text-right">Amount (INR)</th>
+                    <th className="pb-2 pt-2 text-right">Amount (USD)</th>
+                    <th className="pb-2 pt-2 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {allocateModalRows.map((row, rIdx) => {
+                    const exch = allocateModalProduct?.exchangeRate || shipment?.exchangeRate || 1;
+                    return (
+                    <tr key={rIdx}>
+                      <td className="py-2">
+                        <select
+                          className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm bg-white"
+                          value={row.licenceId}
+                          onChange={e => setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, licenceId: e.target.value } : r))}
+                        >
+                          <option value="">— Select licence —</option>
+                          {(isExport ? (licences || []).filter(l => l.company === shipment?.company && l.status === 'ACTIVE') : importLicencesFiltered).map(l => (
+                            <option key={l.id} value={l.id}>{l.number} ({l.type})</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2 text-right">
+                        <input type="number" step="any" className="w-24 px-2 py-1.5 rounded-lg border font-bold text-sm text-right" value={row.allocatedQuantity || ''} onChange={e => setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedQuantity: parseFloat(e.target.value) || 0 } : r))} />
+                      </td>
+                      <td className="py-2">
+                        <select className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm bg-white" value={row.allocatedUom || allocateModalProduct?.lineUnit || 'KGS'} onChange={e => setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedUom: e.target.value } : r))}>
+                          {STANDARDISED_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                      </td>
+                      <td className="py-2 text-right">
+                        <input type="number" step="any" className="w-28 px-2 py-1.5 rounded-lg border font-bold text-sm text-right" value={row.allocatedAmountINR || ''} onChange={e => {
+                          const inr = parseFloat(e.target.value) || 0;
+                          setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedAmountINR: inr, allocatedAmountUSD: exch > 0 ? inr / exch : 0 } : r));
+                        }} />
+                      </td>
+                      <td className="py-2 text-right">
+                        <input type="number" step="any" className="w-28 px-2 py-1.5 rounded-lg border font-bold text-sm text-right" value={row.allocatedAmountUSD || ''} onChange={e => {
+                          const usd = parseFloat(e.target.value) || 0;
+                          setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedAmountUSD: usd, allocatedAmountINR: usd * exch } : r));
+                        }} />
+                      </td>
+                      <td className="py-2">
+                        <button type="button" onClick={() => setAllocateModalRows(prev => prev.filter((_, i) => i !== rIdx))} className="p-1.5 text-slate-400 hover:text-red-600 rounded"><Trash2 size={14} /></button>
+                      </td>
+                    </tr>
+                  );})}
+                </tbody>
+              </table>
+              <div className="py-3">
+                <button type="button" onClick={() => setAllocateModalRows(prev => [...prev, { licenceId: '', allocatedQuantity: 0, allocatedUom: allocateModalProduct?.lineUnit || 'KGS', allocatedAmountUSD: 0, allocatedAmountINR: 0 }])} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"><Plus size={14} /> Add row</button>
+              </div>
+            </div>
+            <div className="p-6 border-t border-slate-100 flex justify-end gap-3 bg-slate-50">
+              <button type="button" onClick={() => { setAllocateModalProduct(null); setAllocateModalRows([]); }} className="px-4 py-2 rounded-xl font-bold text-slate-500 hover:text-slate-700 uppercase text-xs">Cancel</button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!allocateModalProduct) return;
+                  const productId = allocateModalProduct.productId;
+                  const totalQty = allocateModalRows.reduce((s, r) => s + (r.allocatedQuantity || 0), 0);
+                  if (!isExport && allocateModalProduct.lineQuantity != null && totalQty > allocateModalProduct.lineQuantity) {
+                    alert(`Total allocated quantity (${totalQty} ${allocateModalProduct.lineUnit || 'KGS'}) cannot exceed shipment line quantity (${allocateModalProduct.lineQuantity} ${allocateModalProduct.lineUnit || 'KGS'}).`);
+                    return;
+                  }
+                  const newRows = allocateModalRows.filter(r => r.licenceId).map(r => ({
+                    licenceId: r.licenceId,
+                    productId,
+                    productName: allocateModalProduct.productName,
+                    hsnCode: allocateModalProduct.hsnCode,
+                    allocatedQuantity: r.allocatedQuantity,
+                    allocatedUom: r.allocatedUom || allocateModalProduct.lineUnit || 'KGS',
+                    allocatedAmountUSD: r.allocatedAmountUSD,
+                    allocatedAmountINR: r.allocatedAmountINR,
+                  }));
+                  setLicenceAllocations(prev => [...prev.filter(a => a.productId !== productId), ...newRows]);
+                  setAllocateModalProduct(null);
+                  setAllocateModalRows([]);
+                }}
+                className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-indigo-700"
+              >
+                Save allocation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
     </>
   );

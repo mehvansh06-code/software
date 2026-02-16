@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Material } from '../types';
-import { Search, Plus, Edit3, X } from 'lucide-react';
+import { Search, Plus, Edit3, X, Upload, FileQuestion, FileDown } from 'lucide-react';
 import { api } from '../api';
 import { STANDARDISED_UNITS } from '../types';
+import * as XLSX from 'xlsx';
 
 const MaterialsMaster: React.FC = () => {
   const [materials, setMaterials] = useState<Material[]>([]);
@@ -10,6 +11,9 @@ const MaterialsMaster: React.FC = () => {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Material | null>(null);
   const [form, setForm] = useState({ name: '', description: '', hsnCode: '', unit: 'KGS', type: 'RAW_MATERIAL' });
+  const [importing, setImporting] = useState(false);
+  const [showFormatHelp, setShowFormatHelp] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     const list = await api.materials.list();
@@ -56,6 +60,46 @@ const MaterialsMaster: React.FC = () => {
     setShowForm(true);
   };
 
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const rows = json.map((r) => ({
+        name: r.Name ?? r.name ?? r['Material Name'] ?? '',
+        description: r.Description ?? r.description ?? '',
+        hsnCode: r['HSN Code'] ?? r.hsnCode ?? r.HSN ?? '',
+        unit: r.Unit ?? r.unit ?? 'KGS',
+        type: r.Type ?? r.type ?? 'RAW_MATERIAL',
+      })).filter((r) => r.name.trim());
+      if (rows.length === 0) {
+        alert('No rows with Name found. Use the Excel format (see "Excel format" button).');
+        return;
+      }
+      const result = await api.materials.import(rows);
+      const count = (result as any)?.imported ?? rows.length;
+      alert(`Imported ${count} material(s). Refreshing the list.`);
+      await load();
+    } catch (err: any) {
+      alert(err?.message || 'Import failed.');
+    } finally {
+      setImporting(false);
+      e.target.value = '';
+    }
+  };
+
+  const downloadMaterialsTemplate = () => {
+    const headers = ['Name', 'Description', 'HSN Code', 'Unit', 'Type'];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([headers, ['Cotton Yarn 40s', 'Combed cotton', '5205', 'KGS', 'RAW_MATERIAL']]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Materials');
+    XLSX.writeFile(wb, 'materials_import_template.xlsx');
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-24">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -64,6 +108,16 @@ const MaterialsMaster: React.FC = () => {
           <p className="text-slate-500 font-medium">Materials we import — select these when creating a shipment.</p>
         </div>
         <div className="flex items-center gap-4">
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50 transition-all">
+            <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
+          </button>
+          <button type="button" onClick={() => setShowFormatHelp(true)} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Excel format">
+            <FileQuestion size={16} /> Excel format
+          </button>
+          <button type="button" onClick={downloadMaterialsTemplate} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Download template">
+            <FileDown size={16} /> Download template
+          </button>
           <button
             onClick={() => { setEditing(null); setForm({ name: '', description: '', hsnCode: '', unit: 'KGS', type: 'RAW_MATERIAL' }); setShowForm(true); }}
             className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
@@ -82,6 +136,16 @@ const MaterialsMaster: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {showFormatHelp && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowFormatHelp(false)}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg p-6 space-y-3" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900">Materials Excel format</h3>
+            <p className="text-sm text-slate-600">First row = headers. Required: <strong>Name</strong>. Optional: Description, HSN Code, Unit (default KGS), Type (RAW_MATERIAL or CAPITAL_GOOD).</p>
+            <button type="button" onClick={() => setShowFormatHelp(false)} className="mt-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm">Close</button>
+          </div>
+        </div>
+      )}
 
       {showForm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">

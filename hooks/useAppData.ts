@@ -30,6 +30,7 @@ export interface UseAppDataReturn {
     handleDeleteShipment: (id: string) => Promise<void>;
     handleAddLicence: (licence: Licence) => Promise<void>;
     handleUpdateLicence: (updated: Licence) => Promise<void>;
+    handleDeleteLicence: (id: string) => Promise<void>;
     handleUpdateLC: (updated: LetterOfCredit) => Promise<void>;
     handleDeleteLC: (id: string) => Promise<void>;
   };
@@ -257,6 +258,11 @@ export function useAppData(): UseAppDataReturn {
     setLicences(prev => prev.map(l => (l.id === updated.id ? updated : l)));
   }, []);
 
+  const handleDeleteLicence = useCallback(async (id: string) => {
+    await api.licences.delete(id);
+    setLicences(prev => prev.filter(l => l.id !== id));
+  }, []);
+
   const handleUpdateLC = useCallback(async (updated: LetterOfCredit) => {
     await api.lcs.update(updated.id, updated);
     setLcs(prev => prev.map(l => (l.id === updated.id ? updated : l)));
@@ -320,6 +326,7 @@ export function useAppData(): UseAppDataReturn {
       handleDeleteShipment,
       handleAddLicence,
       handleUpdateLicence,
+      handleDeleteLicence,
       handleUpdateLC,
       handleDeleteLC,
     },

@@ -21,7 +21,13 @@ function createRouter(broadcast) {
         if (row.shipmentId && row.payments_json) {
           try {
             const payments = JSON.parse(row.payments_json || '[]');
-            const match = payments.find(p => p.linkedLcId === lcId && Number(p.amount) === Number(row.amount) && (p.date === row.date || !row.date));
+            const rowDate = row.date ? String(row.date).slice(0, 10) : null;
+            const match = payments.find(p => {
+              if (p.linkedLcId !== lcId || Number(p.amount) !== Number(row.amount)) return false;
+              if (!rowDate) return true;
+              const pDate = p.date ? String(p.date).slice(0, 10) : null;
+              return pDate === rowDate;
+            });
             if (match && match.reference) reference = match.reference;
           } catch (_) {}
         }

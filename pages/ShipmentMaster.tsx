@@ -1,12 +1,13 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
 import { Shipment, Supplier, Buyer, User, UserRole, Licence, LetterOfCredit } from '../types';
-import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square, Calendar } from 'lucide-react';
+import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square, Calendar, Upload, FileQuestion } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
 import { usePermissions } from '../hooks/usePermissions';
 import * as XLSX from 'xlsx';
 import NewShipment from './NewShipment';
+import { api } from '../api';
 
 interface ShipmentMasterProps {
   shipments: Shipment[];
@@ -93,7 +94,7 @@ const EXPORT_COLUMN_DEFS: { key: string; label: string; defaultSelected: boolean
   { key: 'lcAmount', label: 'LC Amount', defaultSelected: true },
   { key: 'lcDate', label: 'LC Date', defaultSelected: true },
   { key: 'isUnderLicence', label: 'Under Licence', defaultSelected: true },
-  { key: 'linkedLicenceId', label: 'Licence ID', defaultSelected: true },
+  { key: 'linkedLicenceId', label: 'Licence(s)', defaultSelected: true },
   { key: 'licenceObligationAmount', label: 'Licence Obligation Amount', defaultSelected: true },
   { key: 'containerNumber', label: 'Container No.', defaultSelected: true },
   { key: 'blNumber', label: 'BL No.', defaultSelected: true },
@@ -145,6 +146,9 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   const [sortOrder, setSortOrder] = useState<SortKey>('date_new');
   const [showAddForm, setShowAddForm] = useState(false);
   const [showExportColumnsModal, setShowExportColumnsModal] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [showFormatHelp, setShowFormatHelp] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const exportColumnsForMode = useMemo(() =>
     EXPORT_COLUMN_DEFS.filter(c => c.exportOnly !== true || isExport),
@@ -294,7 +298,9 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       freightCharges: sh.freightCharges ?? 0,
       otherCharges: sh.otherCharges ?? 0,
       isUnderLicence: !!sh.isUnderLicence,
-      linkedLicenceId: sh.linkedLicenceId ?? '',
+      linkedLicenceId: (Array.isArray((sh as any).licenceAllocations) && (sh as any).licenceAllocations.length > 0)
+        ? `Multi (${(sh as any).licenceAllocations.length})`
+        : (sh.linkedLicenceId ?? ''),
       licenceObligationAmount: sh.licenceObligationAmount ?? 0,
       status: sh.status ?? '',
       materialStatusLabel: getShipmentStatusLabel(sh.status),
@@ -317,6 +323,64 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   const openExportModal = () => {
     setSelectedExportColumns(new Set(defaultSelectedSet));
     setShowExportColumnsModal(true);
+  };
+
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const rows = json.map((r) => {
+        const partnerId = isExport ? (r['Buyer ID'] ?? r.buyerId) : (r['Supplier ID'] ?? r.supplierId);
+        const partnerName = isExport ? (r['Buyer Name'] ?? r.buyerName ?? r.Buyer) : (r['Supplier Name'] ?? r.supplierName ?? r.Supplier);
+        const productName = r['Product Name'] ?? r.productName ?? r.Product ?? '';
+        const hsnCode = r['HSN Code'] ?? r.hsnCode ?? r.HSN ?? '';
+        const quantity = Number(r.Quantity ?? r.quantity) || 0;
+        const unit = r.Unit ?? r.unit ?? 'KGS';
+        const rate = Number(r.Rate ?? r.rate ?? r.ratePerUnit) || 0;
+        const amount = Number(r.Amount ?? r.amount) || (quantity * rate) || 0;
+        const exchangeRate = Number(r['Exchange Rate'] ?? r.exchangeRate) || 1;
+        const invoiceNumber = r['Invoice No'] ?? r.invoiceNumber ?? r.InvoiceNo ?? '';
+        const company = (r.Company === 'GTEX' || r.Company === 'GFPL' || r.company === 'GTEX' || r.company === 'GFPL') ? (r.Company || r.company) : 'GFPL';
+        const currency = r.Currency ?? r.currency ?? 'USD';
+        const expectedShipmentDate = r['Expected Shipment Date'] ?? r.expectedShipmentDate ?? r.expected_shipment_date ?? null;
+        const invoiceDate = r['Invoice Date'] ?? r.invoiceDate ?? r.invoice_date ?? null;
+        if (isExport) {
+          return { buyerId: partnerId, buyerName: partnerName, productName, hsnCode, quantity, unit, rate, amount, exchangeRate, invoiceNumber, company, currency, expectedShipmentDate, invoiceDate };
+        }
+        return { supplierId: partnerId, supplierName: partnerName, productName, hsnCode, quantity, unit, rate, amount, exchangeRate, invoiceNumber, company, currency, expectedShipmentDate, invoiceDate };
+      }).filter((r) => (isExport ? (r.buyerId || (r as any).buyerName) : (r.supplierId || (r as any).supplierName)) && (r as any).invoiceNumber && (r as any).productName);
+      if (rows.length === 0) {
+        alert(isExport ? 'No rows with Buyer ID/Name, Invoice No and Product Name found. See Excel format.' : 'No rows with Supplier ID/Name, Invoice No and Product Name found. See Excel format.');
+        return;
+      }
+      const result = await api.shipments.import(rows, isExport);
+      const count = (result as any)?.imported ?? 0;
+      alert(`Imported ${count} shipment(s). Refreshing the list.`);
+      window.location.reload();
+    } catch (err: any) {
+      alert(err?.message || 'Import failed.');
+    } finally {
+      setImporting(false);
+      e.target.value = '';
+    }
+  };
+
+  const downloadShipmentTemplate = () => {
+    const importHeaders = ['Supplier ID', 'Supplier Name', 'Invoice No', 'Company', 'Currency', 'Exchange Rate', 'Product Name', 'HSN Code', 'Quantity', 'Unit', 'Rate', 'Amount', 'Expected Shipment Date', 'Invoice Date'];
+    const exportHeaders = ['Buyer ID', 'Buyer Name', 'Invoice No', 'Company', 'Currency', 'Exchange Rate', 'Product Name', 'HSN Code', 'Quantity', 'Unit', 'Rate', 'Amount', 'Expected Shipment Date', 'Invoice Date'];
+    const headers = isExport ? exportHeaders : importHeaders;
+    const sample = isExport
+      ? ['b1', 'London Fashion Hub', 'INV/EXP/001', 'GFPL', 'USD', 84, 'Cotton Yarn', '5205', 1000, 'KGS', 5, 5000, '2025-03-01', '2025-02-15']
+      : ['s1', 'Shenzhen Global', 'INV/IMP/001', 'GFPL', 'USD', 84, 'Cotton Yarn', '5205', 5000, 'KGS', 3.5, 17500, '2025-03-01', '2025-02-15'];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+    XLSX.utils.book_append_sheet(wb, ws, isExport ? 'Export Shipments' : 'Import Shipments');
+    XLSX.writeFile(wb, `shipments_${isExport ? 'export' : 'import'}_template.xlsx`);
   };
 
   const runExportExcel = useCallback(() => {
@@ -393,6 +457,16 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           <p className="text-slate-500 font-medium">Tracking {isExport ? 'sales' : 'purchase'} flows and compliance.</p>
         </div>
         <div className="flex gap-3">
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-700 rounded-2xl font-bold hover:bg-slate-200 disabled:opacity-50 transition-all shadow-sm">
+            <Upload size={18} /> {importing ? 'Importing...' : 'Import from Excel'}
+          </button>
+          <button type="button" onClick={() => setShowFormatHelp(true)} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all shadow-sm" title="Excel format">
+            <FileQuestion size={18} /> Format
+          </button>
+          <button type="button" onClick={downloadShipmentTemplate} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all shadow-sm" title="Download template">
+            <FileDown size={18} /> Template
+          </button>
           <button 
             onClick={() => setShowAddForm(true)}
             className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-white shadow-lg transition-all ${isExport ? 'bg-amber-600 shadow-amber-100 hover:bg-amber-700' : 'bg-indigo-600 shadow-indigo-100 hover:bg-indigo-700'}`}
@@ -409,6 +483,26 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           )}
         </div>
       </header>
+
+      {showFormatHelp && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowFormatHelp(false)}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg p-6 space-y-3" onClick={ev => ev.stopPropagation()}>
+            <h3 className="font-bold text-slate-900">{isExport ? 'Export' : 'Import'} Shipment Excel format</h3>
+            <p className="text-sm text-slate-600">
+              First row = headers. Required: {isExport ? 'Buyer ID or Buyer Name' : 'Supplier ID or Supplier Name'}, Invoice No, Product Name. Optional: Company (GFPL/GTEX), Currency, Exchange Rate, HSN Code, Quantity, Unit, Rate, Amount, Expected Shipment Date, Invoice Date.
+            </p>
+            <div className="bg-slate-50 rounded-xl p-3 text-sm text-slate-700">
+              <strong>How to fill {isExport ? 'Buyer ID' : 'Supplier ID'}?</strong>
+              <ul className="mt-2 list-disc list-inside space-y-1 text-slate-600">
+                <li><strong>Easiest:</strong> Leave ID blank and use <strong>{isExport ? 'Buyer Name' : 'Supplier Name'}</strong> with the exact name as shown in {isExport ? 'Buyer' : 'Supplier'} Master.</li>
+                <li><strong>Or:</strong> Open {isExport ? 'Buyer' : 'Supplier'} Master → click the eye icon to view a {isExport ? 'buyer' : 'supplier'} → copy the <strong>{isExport ? 'Buyer ID' : 'Supplier ID'}</strong> shown there into your Excel.</li>
+              </ul>
+            </div>
+            <p className="text-xs text-slate-500">Use &quot;Download template&quot; to get the exact column names and a sample row.</p>
+            <button type="button" onClick={() => setShowFormatHelp(false)} className="mt-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm">Close</button>
+          </div>
+        </div>
+      )}
 
       {showAddForm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
