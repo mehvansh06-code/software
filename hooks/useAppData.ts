@@ -223,7 +223,12 @@ export function useAppData(): UseAppDataReturn {
 
   const handleAddSupplier = useCallback(async (s: Supplier) => {
     await api.suppliers.create(s);
-    await loadAllData();
+    setSuppliers((prev) => [...prev, s]);
+    try {
+      await loadAllData();
+    } catch {
+      // Keep optimistic update if refetch fails (e.g. permission or offline)
+    }
   }, [loadAllData]);
 
   const handleUpdateSupplier = useCallback(async (updated: Supplier) => {

@@ -183,6 +183,7 @@ export interface Supplier {
   hasIntermediaryBank?: boolean;
   intermediaryBankName?: string;
   intermediaryAccountHolderName?: string;
+  intermediaryAccountNumber?: string;
   intermediarySwiftCode?: string;
   intermediaryBankAddress?: string;
 }
@@ -239,6 +240,7 @@ export interface ShipmentHistory {
 export interface PaymentLog {
   id: string;
   date: string;
+  /** Amount that counts toward invoice (for export: settled amount after bank charges). */
   amount: number;
   currency: string;
   reference: string;
@@ -248,6 +250,8 @@ export interface PaymentLog {
   received?: boolean;
   /** Link to LC id when payment is via LC */
   linkedLcId?: string;
+  /** Export only: bank charges deducted from incoming payment. Total received = amount + bankCharges. */
+  bankCharges?: number;
 }
 
 export interface Material {
@@ -261,6 +265,8 @@ export interface Material {
 
 /** Per–Bill of Entry product line when linking an import shipment to a licence. */
 export interface ShipmentLicenceImportLine {
+  /** Invoice line (shipment item) this utilization line refers to. */
+  productId?: string;
   productName: string;
   quantity: number;
   unit: string;
@@ -274,6 +280,7 @@ export interface ShipmentLicenceExportLine {
   productName: string;
   hsnCode: string;
   quantity: number;
+  unit?: string;
   valueINR: number;
   valueUSD: number;
 }

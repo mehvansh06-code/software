@@ -23,7 +23,8 @@ export const exportPathMatch = (path: string) =>
   ['/', '/buyers', '/export-shipments', '/export-lcs', '/shipments', '/users', '/audit-logs'].includes(path) ||
   /^\/shipments\/[^/]+$/.test(path);
 
-export const licencePathMatch = (path: string) => path === '/' || path === '/users' || path === '/audit-logs';
+export const licencePathMatch = (path: string) =>
+  path === '/' || path === '/users' || path === '/audit-logs' || /^\/licences\/[^/]+$/.test(path);
 
 export const salesIndentPathMatch = (path: string) =>
   path === '/' || path === '/domestic-buyers' || path === '/indent-buyers' || path === '/indent-products' || path === '/users' || path === '/audit-logs';
@@ -108,6 +109,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
       {domain === AppDomain.LICENCE ? (
         <>
           <Route path="/" element={<Layout {...layoutProps}><LicenceTracker licences={licences} shipments={shipments} user={user} onAddItem={handleAddLicence} onUpdateItem={handleUpdateLicence} onDeleteItem={handleDeleteLicence} onUpdateShipment={handleUpdateShipment} /></Layout>} />
+          <Route path="/licences/:id" element={<Layout {...layoutProps}><LicenceTracker licences={licences} shipments={shipments} user={user} onAddItem={handleAddLicence} onUpdateItem={handleUpdateLicence} onDeleteItem={handleDeleteLicence} onUpdateShipment={handleUpdateShipment} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
           <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
           <Route path="*" element={<Navigate to="/" replace />} />

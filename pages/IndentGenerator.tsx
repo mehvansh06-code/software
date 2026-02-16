@@ -569,7 +569,8 @@ function ProductSelectModal({
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-slate-50 z-10">
               <tr className="border-b border-slate-200">
-                <th className="px-4 py-3 text-left font-black text-slate-500 uppercase text-xs">Design / Shade</th>
+                <th className="px-4 py-3 text-left font-black text-slate-500 uppercase text-xs">Design</th>
+                <th className="px-4 py-3 text-left font-black text-slate-500 uppercase text-xs">Shade</th>
                 <th className="px-4 py-3 text-left font-black text-slate-500 uppercase text-xs">Description</th>
                 <th className="px-4 py-3 text-right font-black text-slate-500 uppercase text-xs w-28">Rate ({currency})</th>
                 <th className="px-4 py-3 text-right font-black text-slate-500 uppercase text-xs w-24">Quantity</th>
@@ -584,7 +585,8 @@ function ProductSelectModal({
                 const rate = s?.rate ?? defaultRate;
                 return (
                   <tr key={p.id} className="border-b border-slate-100 hover:bg-rose-50/30 transition-colors">
-                    <td className="px-4 py-3 font-medium text-slate-900">{p.designNo || '—'} / {p.shadeNo || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">{p.designNo || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">{p.shadeNo || '—'}</td>
                     <td className="px-4 py-3 text-slate-600 max-w-xs">{p.description || '—'}</td>
                     <td className="px-4 py-3 text-right">
                       <input type="number" min={0} step={0.01} className="w-full max-w-[100px] px-3 py-2 rounded-lg border border-slate-200 text-right outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent" value={rate || ''} onChange={(e) => setRow(p.id, qty, parseFloat(e.target.value) || 0)} placeholder="0" />

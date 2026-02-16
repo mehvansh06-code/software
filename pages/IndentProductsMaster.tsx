@@ -126,7 +126,8 @@ export const IndentProductsMaster: React.FC = () => {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-3 text-left font-black text-slate-500 uppercase">Quality</th>
-                <th className="px-4 py-3 text-left font-black text-slate-500 uppercase">Design / Shade</th>
+                <th className="px-4 py-3 text-left font-black text-slate-500 uppercase">Design</th>
+                <th className="px-4 py-3 text-left font-black text-slate-500 uppercase">Shade</th>
                 <th className="px-4 py-3 text-left font-black text-slate-500 uppercase">Description</th>
                 <th className="px-4 py-3 text-right font-black text-slate-500 uppercase">Rate INR</th>
                 <th className="px-4 py-3 text-right font-black text-slate-500 uppercase">Rate USD</th>
@@ -139,7 +140,8 @@ export const IndentProductsMaster: React.FC = () => {
               {filtered.map((p) => (
                 <tr key={p.id} className="border-b border-slate-100 hover:bg-rose-50/20">
                   <td className="px-4 py-3 font-semibold">{p.quality}</td>
-                  <td className="px-4 py-3 text-slate-600">{p.designNo} / {p.shadeNo}</td>
+                  <td className="px-4 py-3 text-slate-600">{p.designNo || '—'}</td>
+                  <td className="px-4 py-3 text-slate-600">{p.shadeNo || '—'}</td>
                   <td className="px-4 py-3 text-slate-600 max-w-xs truncate">{p.description}</td>
                   <td className="px-4 py-3 text-right">{p.rateInr}</td>
                   <td className="px-4 py-3 text-right">{p.rateUsd}</td>

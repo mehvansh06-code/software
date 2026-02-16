@@ -32,8 +32,8 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
       await onDeleteItem(lc.id);
       setShowModal(false);
       setEditData(null);
-    } catch (err) {
-      alert('Failed to delete LC.');
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete LC.');
     }
   };
 
@@ -97,6 +97,7 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
         <div>
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">LC Management Hub</h1>
           <p className="text-slate-500 font-medium">Tracking Letters of Credit, Bank Guarantees & Payment Dues.</p>
+          <p className="text-xs text-slate-400 mt-1">Payment against an LC is made only from Shipments (Payment Ledger). This tracker shows how much you have paid and the current status — an LC is honoured only when total payment lodged in shipments against that LC reaches the LC amount.</p>
         </div>
         <button onClick={openCreateModal} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
           <Plus size={18} /> Open New LC
@@ -290,7 +291,7 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
               {manageLc.remarks && <div><span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Remarks</span><p className="font-bold text-slate-800">{manageLc.remarks}</p></div>}
               <div>
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">Payment track</h3>
-                <p className="text-xs text-slate-500 mb-3">Payments made against this LC (invoice, reference, date, amount).</p>
+                <p className="text-xs text-slate-500 mb-3">Payments are lodged only from Shipments. Below are payments recorded against this LC from the shipment Payment Ledger. Status is updated when total paid reaches the LC amount.</p>
                 {(manageLc.paymentSummary && manageLc.paymentSummary.length > 0) ? (
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
                     <table className="w-full text-sm">
@@ -399,6 +400,7 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
                      <select className="w-full px-4 py-2 rounded-xl border font-bold" value={editData.status} onChange={e => setEditData({...editData, status: e.target.value as LCStatus})}>
                        {Object.values(LCStatus).map(s => <option key={s} value={s}>{s}</option>)}
                      </select>
+                     <p className="text-[10px] text-slate-400 mt-1">Status is derived from payments lodged in Shipments; an LC shows as PAID when total payment against it reaches the LC amount.</p>
                    </div>
                  )}
 

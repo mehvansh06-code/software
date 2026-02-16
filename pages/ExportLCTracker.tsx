@@ -79,6 +79,7 @@ const ExportLCTracker: React.FC<ExportLCTrackerProps> = ({ lcs, buyers, onUpdate
         <div>
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Export LC Tracker</h1>
           <p className="text-slate-500 font-medium">LCs from which you have to get payment (buyer&apos;s LC in your favor).</p>
+          <p className="text-xs text-slate-400 mt-1">Payment is received only when lodged in Shipments (Payment Ledger). This tracker shows how much has been received against each LC and the current status — an LC is settled only when total payment lodged in shipments against that LC and buyer reaches the LC amount.</p>
         </div>
         <button onClick={openCreateModal} className="bg-amber-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-amber-700 transition-all shadow-lg shadow-amber-100">
           <Plus size={18} /> Add Export LC

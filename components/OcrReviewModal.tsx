@@ -183,7 +183,7 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-900">{isExport ? 'Shipping Bill (SB)' : 'Bill of Entry (BOE)'} — Review & Confirm</h2>
+          <h2 className="text-lg font-bold text-slate-900">{isExport ? 'Shipping Bill' : 'Bill of Entry'} — Review & Confirm</h2>
           {highConfidence && (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wide border border-emerald-200">
               <CheckCircle size={12} /> High Confidence (Digital PDF)

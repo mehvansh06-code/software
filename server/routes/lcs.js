@@ -49,12 +49,22 @@ function createRouter(broadcast) {
 
   router.get('/', hasPermission('lc.view'), (req, res) => {
     const rows = db.prepare('SELECT * FROM lcs').all();
-    res.json(rows.map(r => ({
-      ...r,
-      shipments: (() => { try { return JSON.parse(r.shipments_json || '[]'); } catch (_) { return []; } })(),
-      balanceAmount: r.balanceAmount != null ? Number(r.balanceAmount) : (r.amount != null ? Number(r.amount) : undefined),
-      paymentSummary: getLCPaymentSummary(r.id)
-    })));
+    res.json(rows.map(r => {
+      const paymentSummary = getLCPaymentSummary(r.id);
+      const totalPaid = paymentSummary.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+      const amount = Number(r.amount) || 0;
+      const balanceAmount = r.balanceAmount != null ? Number(r.balanceAmount) : amount;
+      // Status is derived from payments lodged in shipments: LC is honoured only when that much payment has been made
+      const derivedPaid = totalPaid >= amount || balanceAmount <= 0;
+      const status = derivedPaid ? 'PAID' : (r.status || 'OPEN');
+      return {
+        ...r,
+        status,
+        shipments: (() => { try { return JSON.parse(r.shipments_json || '[]'); } catch (_) { return []; } })(),
+        balanceAmount,
+        paymentSummary
+      };
+    }));
   });
 
   router.post('/', (req, res) => {
@@ -98,9 +108,7 @@ function createRouter(broadcast) {
       maturityDate != null ? maturityDate : (existing && existing.maturityDate),
       id
     );
-    if ((newStatus === 'HONORED' || newStatus === 'PAID') && prev && prev.status !== newStatus) {
-      settleLC(id, l.amount, maturityDate || new Date().toISOString().split('T')[0]);
-    }
+    // Payment against LC is made only from Shipments (payment ledger). Do not settle from tracker.
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'LC_UPDATED', id, { lcNumber: l.lcNumber, status: l.status });
     res.json({ success: true });
@@ -113,6 +121,23 @@ function createRouter(broadcast) {
     const id = idCheck.value;
     const row = db.prepare('SELECT id, lcNumber FROM lcs WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ success: false, error: 'LC not found' });
+    const shipmentRows = db.prepare('SELECT id, payments_json FROM shipments').all();
+    let shipmentsWithPayments = 0;
+    for (const sh of shipmentRows) {
+      let payments = [];
+      try {
+        payments = JSON.parse(sh.payments_json || '[]');
+      } catch (_) {}
+      if (!Array.isArray(payments)) continue;
+      const hasLinkedPayment = payments.some(p => p && String(p.linkedLcId) === String(id));
+      if (hasLinkedPayment) shipmentsWithPayments++;
+    }
+    if (shipmentsWithPayments > 0) {
+      return res.status(409).json({
+        success: false,
+        error: `Cannot delete LC: ${shipmentsWithPayments} shipment(s) have payment(s) lodged against this LC. Remove or unlink those payments first.`
+      });
+    }
     try {
       db.prepare('DELETE FROM lc_transactions WHERE lcId = ?').run(id);
       db.prepare('DELETE FROM lcs WHERE id = ?').run(id);

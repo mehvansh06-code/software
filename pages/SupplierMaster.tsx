@@ -333,6 +333,7 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                   <span className="text-xs font-bold text-slate-400 uppercase">Intermediary Bank</span>
                   <p className="text-slate-700 mt-1">{viewingSupplier.intermediaryBankName} — {viewingSupplier.intermediarySwiftCode}</p>
                   <p className="text-slate-600 text-sm mt-1">{viewingSupplier.intermediaryAccountHolderName}</p>
+                  {viewingSupplier.intermediaryAccountNumber && <p className="text-slate-600 text-sm mt-1">A/C No. {viewingSupplier.intermediaryAccountNumber}</p>}
                   {viewingSupplier.intermediaryBankAddress && <p className="text-slate-600 text-sm mt-1 whitespace-pre-wrap">{viewingSupplier.intermediaryBankAddress}</p>}
                 </div>
               )}
@@ -417,6 +418,10 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Intermediary Account Holder</label>
                     <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.intermediaryAccountHolderName ?? ''} onChange={e => setEditingSupplier({...editingSupplier, intermediaryAccountHolderName: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Intermediary Bank Account Number</label>
+                    <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.intermediaryAccountNumber ?? ''} onChange={e => setEditingSupplier({...editingSupplier, intermediaryAccountNumber: e.target.value})} placeholder="e.g. 1234567890" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Intermediary SWIFT</label>

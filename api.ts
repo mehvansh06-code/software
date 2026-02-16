@@ -104,7 +104,9 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'response not ok', data: { endpoint: safeEndpoint, status: response.status }, timestamp: Date.now(), hypothesisId: 'C' }) }).catch(() => {});
       // #endregion
-      throw new Error('Offline');
+      const errBody = await response.json().catch(() => ({}));
+      const msg = errBody?.error || (response.status === 409 ? 'Conflict: the request could not be completed.' : 'Request failed.');
+      throw new Error(msg);
     }
 
     return await response.json();
@@ -495,5 +497,7 @@ export const api = {
       const qs = q.toString();
       return fetchApi('audit-logs', qs ? { queryString: qs } : {});
     },
+    exportAndArchive: (params?: { olderThanDays?: number }): Promise<{ success: boolean; count: number; filePath: string | null }> =>
+      fetchApi('audit-logs/export-and-archive', { method: 'POST', body: JSON.stringify(params || {}) }),
   }
 };

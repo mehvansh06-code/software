@@ -10,7 +10,8 @@ const bcrypt = require('bcrypt');
 
 require('./server/db');
 const db = require('./server/db');
-const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER, DOCUMENTS_BASE } = require('./server/config');
+const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER, DOCUMENTS_BASE, AUDIT_ARCHIVE_DAYS } = require('./server/config');
+const { exportAndArchive } = require('./server/services/auditService');
 const { verifyToken, JWT_SECRET } = require('./server/middleware');
 const { PRESETS, PERMISSION_GROUPS } = require('./server/constants/permissions');
 
@@ -258,6 +259,18 @@ app.use('/api/users', userRoutes());
 app.use('/api/ocr', ocrRoutes);
 app.use('/api/audit-logs', auditRoutes());
 
+// Audit log export: every 10 days, export logs older than AUDIT_ARCHIVE_DAYS to CSV and remove from DB
+const AUDIT_EXPORT_INTERVAL_MS = 10 * 24 * 60 * 60 * 1000;
+setInterval(() => {
+  try {
+    const result = exportAndArchive(db, {});
+    if (result.count > 0) {
+      console.log(`Audit export: ${result.count} log(s) archived to ${result.filePath}`);
+    }
+  } catch (e) {
+    console.error('Audit export-and-archive failed:', e.message);
+  }
+}, AUDIT_EXPORT_INTERVAL_MS);
 
 app.get('/api/lc-transactions', (req, res) => {
   try {

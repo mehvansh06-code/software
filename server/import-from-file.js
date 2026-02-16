@@ -100,7 +100,7 @@ function importSuppliers(rows) {
   if (filtered.length === 0) return 0;
   const now = new Date().toISOString();
   const insert = db.prepare(
-    `INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const r of filtered) {
     const id = 's_' + Math.random().toString(36).slice(2, 11);
@@ -120,6 +120,7 @@ function importSuppliers(rows) {
       'File import',
       now,
       0,
+      null,
       null,
       null,
       null,

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType, ShipmentLicenceImportLine, ShipmentLicenceExportLine, LicenceAllocation } from '../types';
+import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType, ShipmentLicenceImportLine, ShipmentLicenceExportLine } from '../types';
 import { SHIPMENT_STATUS_ORDER_IMPORT, SHIPMENT_STATUS_ORDER_EXPORT, getShipmentStatusLabel, formatINR, formatDate, formatCurrency } from '../constants';
 import { 
   ArrowLeft, 
@@ -99,23 +99,23 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     dutyBCD: 0,
     dutySWS: 0,
     dutyINT: 0,
+    dutyInterest: 0,
+    dutyPenalty: 0,
+    dutyFine: 0,
     gst: 0,
     beNumber: '',
     beDate: '',
     incoTerm: '',
     portCode: '',
-    exchangeRate: Number(shipment?.exchangeRate) || 0
+    exchangeRate: Number(shipment?.exchangeRate) || 0,
+    dbk: 0,
+    rodtep: 0,
+    scripNo: ''
   });
-  const [licenceImportData, setLicenceImportData] = useState({
-    linkedLicenceId: '',
-    licenceObligationAmount: 0,
-    licenceObligationQuantity: 0
-  });
+  /** Import: only the selected licence (link). Obligation/allocations are managed in Licence Tracker. */
+  const [licenceImportData, setLicenceImportData] = useState({ linkedLicenceId: '' });
   const [licenceImportLines, setLicenceImportLines] = useState<ShipmentLicenceImportLine[]>([]);
   const [licenceExportLines, setLicenceExportLines] = useState<ShipmentLicenceExportLine[]>([]);
-  const [licenceAllocations, setLicenceAllocations] = useState<LicenceAllocation[]>([]);
-  const [allocateModalProduct, setAllocateModalProduct] = useState<{ productId: string; productName: string; hsnCode?: string; lineQuantity?: number; lineUnit?: string; exchangeRate?: number } | null>(null);
-  const [allocateModalRows, setAllocateModalRows] = useState<{ licenceId: string; allocatedQuantity: number; allocatedUom?: string; allocatedAmountUSD: number; allocatedAmountINR: number }[]>([]);
   const [editInvoice, setEditInvoice] = useState(false);
   const [invoiceEditData, setInvoiceEditData] = useState({
     invoiceNumber: shipment?.invoiceNumber || '',
@@ -144,6 +144,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     reference: '',
     adviceUploaded: false
   });
+  const [paymentAdviceFile, setPaymentAdviceFile] = useState<File | null>(null);
+  const paymentAdviceInputRef = React.useRef<HTMLInputElement>(null);
 
   const [documentsFolderPath, setDocumentsFolderPath] = useState<string | null>(shipment?.documentsFolderPath ?? null);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -220,6 +222,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         if (dutyBCD !== undefined) update.dutyBCD = dutyBCD;
         if (dutySWS !== undefined) update.dutySWS = dutySWS;
         update.dutyINT = dutyINT;
+        (update as any).dutyPenalty = penaltyVal;
+        (update as any).dutyFine = fineVal;
         if (gstVal !== undefined) update.gst = gstVal;
       } else {
         // Shipping Bill (export): SB number, date, port, inco term, FOB FC/INR, exchange rate, DBK, RODTEP
@@ -298,26 +302,30 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       shipperSealNumber: (shipment as any).shipperSealNumber || '',
       lineSealNumber: (shipment as any).lineSealNumber || ''
     });
+    const dutyPenalty = (shipment as any).dutyPenalty ?? 0;
+    const dutyFine = (shipment as any).dutyFine ?? 0;
+    const dutyINTCombined = shipment.dutyINT ?? 0;
     setDutiesData({
       assessedValue: shipment.assessedValue || 0,
       dutyBCD: shipment.dutyBCD || 0,
       dutySWS: shipment.dutySWS || 0,
-      dutyINT: shipment.dutyINT || 0,
+      dutyINT: dutyINTCombined,
+      dutyInterest: Math.max(0, dutyINTCombined - dutyPenalty - dutyFine),
+      dutyPenalty,
+      dutyFine,
       gst: shipment.gst || 0,
       beNumber: shipment.beNumber || '',
       beDate: shipment.beDate || '',
       incoTerm: shipment.incoTerm || 'FOB',
       portCode: shipment.portCode || '',
-      exchangeRate: Number(shipment.exchangeRate) || 0
+      exchangeRate: Number(shipment.exchangeRate) || 0,
+      dbk: (shipment as any).dbk ?? 0,
+      rodtep: (shipment as any).rodtep ?? 0,
+      scripNo: (shipment as any).scripNo || ''
     });
-    setLicenceImportData({
-      linkedLicenceId: shipment.linkedLicenceId || '',
-      licenceObligationAmount: shipment.licenceObligationAmount ?? 0,
-      licenceObligationQuantity: shipment.licenceObligationQuantity ?? 0
-    });
+    setLicenceImportData({ linkedLicenceId: shipment.linkedLicenceId || '' });
     setLicenceImportLines(Array.isArray(shipment.licenceImportLines) ? shipment.licenceImportLines : []);
     setLicenceExportLines(Array.isArray(shipment.licenceExportLines) ? shipment.licenceExportLines : []);
-    setLicenceAllocations(Array.isArray(shipment.licenceAllocations) ? shipment.licenceAllocations : []);
     const linkedLic = shipment.linkedLicenceId ? licences.find(l => l.id === shipment.linkedLicenceId) : null;
     setExportDocData({
       sbNo: (shipment as any).sbNo || '',
@@ -447,7 +455,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const canEdit = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
   const handleDeleteShipment = async () => {
     if (!onDelete || !shipment?.id) return;
-    if (!window.confirm('Delete this shipment? This cannot be undone.')) return;
+    const hasLicenceLink = !!(shipment.linkedLicenceId || (shipment as { epcgLicenceId?: string }).epcgLicenceId || (shipment as { advLicenceId?: string }).advLicenceId);
+    const confirmMsg = hasLicenceLink
+      ? 'This shipment is linked to a licence. Delete anyway?'
+      : 'Delete this shipment? This cannot be undone.';
+    if (!window.confirm(confirmMsg)) return;
     try {
       await onDelete(shipment.id);
       navigate(isExport ? '/export-shipments' : '/shipments');
@@ -528,18 +540,17 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleSaveDuties = async () => {
     try {
-      const hasAllocations = licenceAllocations.length > 0;
+      const dutyINT = dutiesData.dutyInterest + dutiesData.dutyPenalty + dutiesData.dutyFine;
+      const linkedId = licenceImportData.linkedLicenceId || undefined;
       const updated = {
         ...shipment,
         ...dutiesData,
+        dutyINT,
         portCode: dutiesData.portCode,
-        isUnderLicence: hasAllocations || !!licenceImportData.linkedLicenceId,
-        linkedLicenceId: (hasAllocations ? licenceAllocations[0]?.licenceId : licenceImportData.linkedLicenceId) || undefined,
-        licenceObligationAmount: licenceImportData.licenceObligationAmount || undefined,
-        licenceObligationQuantity: licenceImportData.licenceObligationQuantity || undefined,
-        licenceImportLines: licenceImportData.linkedLicenceId && !hasAllocations ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined),
-        licenceAllocations: licenceAllocations.length > 0 ? licenceAllocations : undefined,
+        isUnderLicence: !!linkedId,
+        linkedLicenceId: linkedId,
       };
+      delete (updated as any).licenceImportLines;
       await onUpdate(updated);
       setEditDuties(false);
     } catch (e: any) {
@@ -550,12 +561,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   };
   const handleSaveExportDoc = async () => {
     try {
-      const hasAllocations = licenceAllocations.length > 0;
+      const linkedId = epcgLicenceId || advLicenceId || undefined;
       const updated: any = { ...shipment, ...exportDocData };
-      if (licenceExportLines.length > 0 && !epcgLicenceId && !advLicenceId) updated.licenceExportLines = licenceExportLines;
-      updated.licenceAllocations = licenceAllocations.length > 0 ? licenceAllocations : undefined;
-      updated.isUnderLicence = hasAllocations || !!epcgLicenceId || !!advLicenceId;
-      updated.linkedLicenceId = (hasAllocations ? licenceAllocations[0]?.licenceId : epcgLicenceId || advLicenceId) || undefined;
+      updated.isUnderLicence = !!linkedId;
+      updated.linkedLicenceId = linkedId;
+      delete updated.licenceExportLines;
       await onUpdate(updated);
       setEditExportDoc(false);
     } catch (e: any) {
@@ -573,6 +583,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         ? (Number(invoiceEditData.amountFC) || 0)
         : subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
       const exchRate = isExport ? (exportDocData.exchangeRate || 1) : (dutiesData.exchangeRate || 1);
+      const dutyINT = !isExport ? (dutiesData.dutyInterest + dutiesData.dutyPenalty + dutiesData.dutyFine) : undefined;
       const updated: Shipment = {
         ...shipment,
         invoiceNumber: invoiceEditData.invoiceNumber,
@@ -588,26 +599,24 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         ...(isExport ? { fobValueFC: totalAmount, fobValueINR: totalAmount * exchRate } : {}),
         ...exportDocData,
         ...logisticsData,
-        ...dutiesData
+        ...dutiesData,
+        ...(dutyINT !== undefined ? { dutyINT } : {})
       } as Shipment;
-      const hasAllocations = licenceAllocations.length > 0;
-      updated.licenceAllocations = licenceAllocations.length > 0 ? licenceAllocations : undefined;
       if (isExport) {
+        const exportLicenceId = epcgLicenceId || advLicenceId || undefined;
         (updated as any).lodgement = lodgementValue || undefined;
         (updated as any).lodgementDate = lodgementDateValue || undefined;
         updated.epcgLicenceId = epcgLicenceId || undefined;
         updated.advLicenceId = advLicenceId || undefined;
-        const exportLicenceId = epcgLicenceId || advLicenceId || (hasAllocations ? licenceAllocations[0]?.licenceId : undefined);
         updated.linkedLicenceId = exportLicenceId;
-        updated.isUnderLicence = !!exportLicenceId || hasAllocations;
+        updated.isUnderLicence = !!exportLicenceId;
+        delete (updated as any).licenceExportLines;
       } else {
-        updated.isUnderLicence = hasAllocations || !!licenceImportData.linkedLicenceId;
-        updated.linkedLicenceId = (hasAllocations ? licenceAllocations[0]?.licenceId : licenceImportData.linkedLicenceId) || undefined;
-        updated.licenceObligationAmount = licenceImportData.licenceObligationAmount || undefined;
-        updated.licenceObligationQuantity = licenceImportData.licenceObligationQuantity || undefined;
-        updated.licenceImportLines = (licenceImportData.linkedLicenceId && !hasAllocations) ? undefined : (licenceImportLines.length > 0 ? licenceImportLines : undefined);
+        const importLicenceId = licenceImportData.linkedLicenceId || undefined;
+        updated.linkedLicenceId = importLicenceId;
+        updated.isUnderLicence = !!importLicenceId;
+        delete (updated as any).licenceImportLines;
       }
-      if (isExport) (updated as any).licenceExportLines = (epcgLicenceId || advLicenceId || hasAllocations) ? undefined : (licenceExportLines.length > 0 ? licenceExportLines : undefined);
       await onUpdate(updated);
       setEditAll(false);
       setEditInvoice(false);
@@ -647,6 +656,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     });
     setEpcgLicenceId((shipment as any).epcgLicenceId || (shipment as any).epcg || '');
     setAdvLicenceId((shipment as any).advLicenceId || (shipment as any).advLic || '');
+    setLicenceImportData({ linkedLicenceId: shipment.linkedLicenceId || '' });
     setLogisticsData({
       blNumber: shipment.blNumber || '',
       blDate: shipment.blDate || '',
@@ -661,26 +671,30 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       shipperSealNumber: (shipment as any).shipperSealNumber || '',
       lineSealNumber: (shipment as any).lineSealNumber || ''
     });
+    const dp = (shipment as any).dutyPenalty ?? 0;
+    const df = (shipment as any).dutyFine ?? 0;
+    const dint = shipment.dutyINT ?? 0;
     setDutiesData({
       assessedValue: shipment.assessedValue ?? 0,
       dutyBCD: shipment.dutyBCD ?? 0,
       dutySWS: shipment.dutySWS ?? 0,
-      dutyINT: shipment.dutyINT ?? 0,
+      dutyINT: dint,
+      dutyInterest: Math.max(0, dint - dp - df),
+      dutyPenalty: dp,
+      dutyFine: df,
       gst: shipment.gst ?? 0,
       beNumber: shipment.beNumber || '',
       beDate: shipment.beDate || '',
       incoTerm: shipment.incoTerm || '',
       portCode: shipment.portCode || '',
-      exchangeRate: Number(shipment.exchangeRate) || 0
+      exchangeRate: Number(shipment.exchangeRate) || 0,
+      dbk: (shipment as any).dbk ?? 0,
+      rodtep: (shipment as any).rodtep ?? 0,
+      scripNo: (shipment as any).scripNo || ''
     });
-    setLicenceImportData({
-      linkedLicenceId: shipment.linkedLicenceId || '',
-      licenceObligationAmount: shipment.licenceObligationAmount ?? 0,
-      licenceObligationQuantity: shipment.licenceObligationQuantity ?? 0
-    });
+    setLicenceImportData({ linkedLicenceId: shipment.linkedLicenceId || '' });
     setLicenceImportLines(Array.isArray(shipment.licenceImportLines) ? shipment.licenceImportLines : []);
     setLicenceExportLines(Array.isArray(shipment.licenceExportLines) ? shipment.licenceExportLines : []);
-    setLicenceAllocations(Array.isArray(shipment.licenceAllocations) ? shipment.licenceAllocations : []);
     setLodgementValue((shipment as any).lodgement || '');
     setLodgementDateValue((shipment as any).lodgementDate || '');
     setEditAll(false);
@@ -693,6 +707,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleAddPayment = async () => {
     if (!newPayment.amount || !newPayment.date) return;
+    if (!paymentAdviceFile) {
+      setToastVariant('error');
+      setToastMessage('Payment advice is required. Please attach a file before saving.');
+      setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
     const totalFC = paymentSummary.totalFC;
     const amount = Number(newPayment.amount);
     const toFC = (p: PaymentLog) => {
@@ -726,6 +746,37 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       setTimeout(() => setToastMessage(null), 5000);
       return;
     }
+    // LC payment cannot exceed the LC's remaining balance (total paid against LC cannot exceed LC amount)
+    if ((newPayment.mode === 'LC' || newPayment.mode === 'Letter of Credit') && linkedLC) {
+      const totalPaidOnLC = (linkedLC.paymentSummary || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const lcAmount = Number(linkedLC.amount) || 0;
+      const lcRemaining = linkedLC.balanceAmount != null ? Number(linkedLC.balanceAmount) : Math.max(0, lcAmount - totalPaidOnLC);
+      if (amount > lcRemaining) {
+        setToastVariant('error');
+        setToastMessage(`Payment amount exceeds LC remaining balance. LC ${linkedLC.lcNumber} amount is ${formatCurrency(lcAmount, linkedLC.currency)}; remaining: ${formatCurrency(lcRemaining, linkedLC.currency)}.`);
+        setTimeout(() => setToastMessage(null), 6000);
+        return;
+      }
+    }
+    const currency = (shipment.currency || 'USD').toUpperCase();
+    const payAdvDocType = `PAY_ADV_${amount}_${currency}`;
+    const formData = new FormData();
+    formData.append('file', paymentAdviceFile);
+    try {
+      const uploadResult = await api.shipments.uploadFiles(shipment.id, formData, payAdvDocType);
+      if (!uploadResult.success) {
+        setToastVariant('error');
+        setToastMessage(uploadResult.error || 'Failed to upload payment advice.');
+        setTimeout(() => setToastMessage(null), 5000);
+        return;
+      }
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to upload payment advice.');
+      setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
+    refetchFolderFiles();
     const payment: PaymentLog = {
       id: Math.random().toString(36).substr(2, 9),
       date: newPayment.date!,
@@ -733,8 +784,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       currency: shipment.currency,
       mode: newPayment.mode || 'WIRE',
       reference: newPayment.reference || '',
-      adviceUploaded: false,
-      ...(newPayment.mode === 'LC' && linkedLC ? { linkedLcId: linkedLC.id } : {})
+      adviceUploaded: true,
+      ...(newPayment.mode === 'LC' && linkedLC ? { linkedLcId: linkedLC.id } : {}),
+      ...(isExport && (newPayment.bankCharges != null && newPayment.bankCharges !== 0) ? { bankCharges: Number(newPayment.bankCharges) } : {})
     };
     const updated = { ...shipment, payments: [...(shipment.payments || []), payment] };
     await onUpdate(updated);
@@ -742,7 +794,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       await onRefreshData();
     }
     setShowPaymentModal(false);
-    setNewPayment({ amount: 0, date: new Date().toISOString().split('T')[0], currency: shipment.currency, mode: 'WIRE', reference: '' });
+    setPaymentAdviceFile(null);
+    if (paymentAdviceInputRef.current) paymentAdviceInputRef.current.value = '';
+    setNewPayment({ amount: 0, bankCharges: isExport ? 0 : undefined, date: new Date().toISOString().split('T')[0], currency: shipment.currency, mode: 'WIRE', reference: '' });
   };
 
   const handleDeletePayment = async (payId: string) => {
@@ -818,7 +872,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setEditHistoryDraft(null);
   };
 
-  const totalDuty = dutiesData.dutyBCD + dutiesData.dutySWS + dutiesData.dutyINT;
+  const totalDuty = dutiesData.dutyBCD + dutiesData.dutySWS + dutiesData.dutyInterest + dutiesData.dutyPenalty + dutiesData.dutyFine;
 
   const handleMarkPaymentReceived = async (payId: string) => {
     const payments = (shipment.payments || []).map(p => p.id === payId ? { ...p, received: true } : p);
@@ -1009,30 +1063,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 </>
                 )}
               </div>
-              {!isExport && (licenceAllocations.length > 0 || licenceImportData.linkedLicenceId) && (
-                <div className="mb-6 p-4 rounded-2xl border border-amber-100 bg-amber-50/50">
-                  <h3 className="text-[10px] font-black uppercase text-amber-700 tracking-widest mb-3">Invoice linkage (import under licence)</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Invoice No.</span><span className="font-bold text-slate-800">{shipment?.invoiceNumber || '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Supplier</span><span className="font-bold text-slate-800">{partnerName || '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">BOE No.</span><span className="font-bold text-slate-800">{dutiesData.beNumber || shipment?.beNumber || '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">BOE Date</span><span className="font-bold text-slate-800">{dutiesData.beDate || shipment?.beDate ? formatDate(dutiesData.beDate || shipment?.beDate!) : '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Exchange rate</span><span className="font-bold text-slate-800">{dutiesData.exchangeRate || shipment?.exchangeRate || '—'}</span></div>
-                  </div>
-                </div>
-              )}
-              {isExport && (licenceAllocations.length > 0 || epcgLicenceId || advLicenceId) && (
-                <div className="mb-6 p-4 rounded-2xl border border-emerald-100 bg-emerald-50/50">
-                  <h3 className="text-[10px] font-black uppercase text-emerald-700 tracking-widest mb-3">Invoice linkage (export under licence)</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Invoice No.</span><span className="font-bold text-slate-800">{shipment?.invoiceNumber || '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Buyer</span><span className="font-bold text-slate-800">{partnerName || '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">SB No.</span><span className="font-bold text-slate-800">{(shipment as any)?.sbNo || '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">SB Date</span><span className="font-bold text-slate-800">{(shipment as any)?.sbDate ? formatDate((shipment as any).sbDate) : '—'}</span></div>
-                    <div><span className="text-slate-500 block text-[9px] font-black uppercase">Exchange rate</span><span className="font-bold text-slate-800">{shipment?.exchangeRate ?? exportDocData.exchangeRate ?? '—'}</span></div>
-                  </div>
-                </div>
-              )}
               {!isExport && (
               <table className="w-full">
                 <thead>
@@ -1043,14 +1073,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     <th className="pb-4 text-right">Unit</th>
                     <th className="pb-4 text-right">Rate (per unit)</th>
                     <th className="pb-4 text-right">Amount</th>
-                    {(editAll || editDuties) && (isExport ? licences?.length : importLicencesFiltered.length) ? <th className="pb-4 text-right">Licence</th> : null}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {(editAll ? invoiceEditData.items : (shipment.items || [])).map((item, idx) => {
                     const mergedNameDesc = `${item.productName || ''}${(item as any).description ? ' — ' + (item as any).description : ''}`.trim();
-                    const allocationsForItem = licenceAllocations.filter(a => a.productId === item.productId);
-                    const licenceList = isExport ? (licences || []).filter(l => l.company === shipment?.company && l.status === 'ACTIVE') : importLicencesFiltered;
                     return (
                     <tr key={idx} className="group">
                       <td className="py-2">
@@ -1096,23 +1123,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                         )}
                       </td>
                       <td className="py-2 text-right text-sm font-black text-slate-900">{formatCurrency(editAll ? (invoiceEditData.items[idx]?.amount ?? item.amount) : item.amount, shipment.currency)}</td>
-                      {(editAll || editDuties) && licenceList.length > 0 ? (
-                        <td className="py-2 text-right">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const lineQty = editAll ? (invoiceEditData.items[idx]?.quantity ?? item.quantity) : item.quantity;
-                              const lineUnit = editAll ? (invoiceEditData.items[idx]?.unit ?? item.unit) : item.unit;
-                              setAllocateModalProduct({ productId: item.productId, productName: item.productName || '', hsnCode: item.hsnCode, lineQuantity: lineQty, lineUnit: lineUnit || 'KGS', exchangeRate: dutiesData.exchangeRate || shipment?.exchangeRate || 1 });
-                              const existing = licenceAllocations.filter(a => a.productId === item.productId);
-                              setAllocateModalRows(existing.length > 0 ? existing.map(a => ({ licenceId: a.licenceId, allocatedQuantity: a.allocatedQuantity, allocatedUom: a.allocatedUom || item.unit || 'KGS', allocatedAmountUSD: a.allocatedAmountUSD, allocatedAmountINR: a.allocatedAmountINR })) : [{ licenceId: '', allocatedQuantity: 0, allocatedUom: item.unit || 'KGS', allocatedAmountUSD: 0, allocatedAmountINR: 0 }]);
-                            }}
-                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-200 text-[10px] font-bold text-slate-700"
-                          >
-                            {allocationsForItem.length > 0 ? `Split · ${allocationsForItem.length}` : 'Split / Allocate'}
-                          </button>
-                        </td>
-                      ) : null}
                     </tr>
                   );})}
                 </tbody>
@@ -1335,59 +1345,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 </div>
               </div>
               {isExport && (epcgLicenceId || advLicenceId) && (
-                <p className="text-xs text-slate-500 mt-2">This shipment is linked to the selected licence(s) for export. Product-level fulfillment is managed in Licence Audit Control.</p>
-              )}
-              {/* Products fulfilling this licence (export). When a licence is selected, invoice is just a reference — no product add here; that is in Licence system. */}
-              {isExport && licenceExportLines.length > 0 && !epcgLicenceId && !advLicenceId && (
-                <div className="mt-6">
-                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Products fulfilling this licence</p>
-                  <p className="text-[10px] text-slate-500 mb-2">
-                    Invoice: {shipment?.invoiceNumber ?? '—'} · Buyer: {partnerName || '—'} · SB No: {exportDocData.sbNo || (shipment as any)?.sbNo || '—'} · SB Date: {exportDocData.sbDate ? formatDate(exportDocData.sbDate) : ((shipment as any)?.sbDate ? formatDate((shipment as any).sbDate) : '—')} · Exchange rate: {exportDocData.exchangeRate ?? shipment?.exchangeRate ?? '—'}
-                  </p>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
-                          <th className="p-2">Product name</th>
-                          <th className="p-2">HSN</th>
-                          <th className="p-2">Quantity</th>
-                          <th className="p-2">Value (INR)</th>
-                          <th className="p-2">Value (USD)</th>
-                          <th className="p-2 w-10"></th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {licenceExportLines.map((row, idx) => (
-                          <tr key={idx}>
-                            <td className="p-2"><input type="text" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.productName || ''} onChange={e => setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, productName: e.target.value } : r))} placeholder="Name" /></td>
-                            <td className="p-2"><input type="text" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.hsnCode || ''} onChange={e => setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: e.target.value } : r))} placeholder="HSN" /></td>
-                            <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.quantity ?? ''} onChange={e => setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: parseFloat(e.target.value) || 0 } : r))} /></td>
-                            <td className="p-2">
-                              <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.valueINR ?? ''} onChange={e => {
-                                const v = parseFloat(e.target.value) || 0;
-                                const ex = exportDocData.exchangeRate || 1;
-                                setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, valueINR: v, valueUSD: ex > 0 ? v / ex : 0 } : r));
-                              }} />
-                            </td>
-                            <td className="p-2">
-                              <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.valueUSD ?? ''} onChange={e => {
-                                const usd = parseFloat(e.target.value) || 0;
-                                const ex = exportDocData.exchangeRate || 1;
-                                setLicenceExportLines(prev => prev.map((r, i) => i === idx ? { ...r, valueUSD: usd, valueINR: usd * ex } : r));
-                              }} />
-                            </td>
-                            <td className="p-2"><button type="button" onClick={() => setLicenceExportLines(prev => prev.filter((_, i) => i !== idx))} className="p-1 text-slate-400 hover:text-red-600 rounded"><Trash2 size={14} /></button></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {(editAll || editExportDoc) && (
-                      <div className="p-2 border-t border-slate-100">
-                        <button type="button" onClick={() => setLicenceExportLines(prev => [...prev, { productName: '', hsnCode: '', quantity: 0, valueINR: 0, valueUSD: 0 }])} className="text-xs font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1"><Plus size={12} /> Add product</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <p className="text-[10px] text-slate-500 mt-2">Quantity, amount and product lines for this licence are managed in Licence Tracker.</p>
               )}
             </div>
           </div>
@@ -1506,30 +1464,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
             </div>
             <div className="p-8">
                {/* When licence is selected: only show licence reference (dropdown + note). No BOE or product add on invoice. */}
-               {licenceImportData.linkedLicenceId ? (
-                 <div className="mb-8 pb-8 border-b border-slate-50">
-                   <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4 flex items-center gap-2"><ShieldAlert size={14} /> Licence reference</h3>
-                   <p className="text-xs text-slate-500 mb-4">This shipment is linked to the selected licence for import. Bill of Entry and product-level details are managed in Licence Audit Control.</p>
-                   <div className="max-w-sm">
-                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{importLicenceType === LicenceType.EPCG ? 'EPCG Licence' : 'Advance Licence'}</label>
-                     {(editAll || editDuties) ? (
-                       <select
-                         className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
-                         value={licenceImportData.linkedLicenceId}
-                         onChange={e => setLicenceImportData(prev => ({ ...prev, linkedLicenceId: e.target.value }))}
-                       >
-                         <option value="">— Select —</option>
-                         {importLicencesFiltered.map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
-                       </select>
-                     ) : (
-                       <p className="text-sm font-bold text-slate-800">
-                         {licences.find(l => l.id === licenceImportData.linkedLicenceId)?.number || licenceImportData.linkedLicenceId}
-                       </p>
-                     )}
-                   </div>
-                 </div>
-               ) : (
-                 <>
                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 pb-8 border-b border-slate-50">
                    <div>
                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Amount (INR)</label>
@@ -1572,121 +1506,56 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                    </div>
                </div>
 
-               {/* Licence (Import): Advance for raw material, EPCG for capital goods — only when no licence selected yet */}
+               {/* DBK, RODTEP, Scrip No. (original BOE layout) */}
+               <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8 pb-8 border-b border-slate-50">
+                   <div>
+                       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">DBK</label>
+                       {editAll ? (
+                           <input type="number" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={dutiesData.dbk || ''} onChange={e => setDutiesData({...dutiesData, dbk: parseFloat(e.target.value) || 0})} />
+                       ) : <p className="text-sm font-bold text-slate-800">{dutiesData.dbk != null && dutiesData.dbk !== 0 ? formatINR(dutiesData.dbk) : '—'}</p>}
+                   </div>
+                   <div>
+                       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">RODTEP</label>
+                       {editAll ? (
+                           <input type="number" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={dutiesData.rodtep || ''} onChange={e => setDutiesData({...dutiesData, rodtep: parseFloat(e.target.value) || 0})} />
+                       ) : <p className="text-sm font-bold text-slate-800">{dutiesData.rodtep != null && dutiesData.rodtep !== 0 ? formatINR(dutiesData.rodtep) : '—'}</p>}
+                   </div>
+                   <div>
+                       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Scrip No.</label>
+                       {editAll ? (
+                           <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={dutiesData.scripNo} onChange={e => setDutiesData({...dutiesData, scripNo: e.target.value})} />
+                       ) : <p className="text-sm font-bold text-slate-800">{dutiesData.scripNo || '—'}</p>}
+                   </div>
+               </div>
+
+               {/* Licence (Import): link only — quantities and product lines are in Licence Tracker */}
                <div className="mb-8 pb-8 border-b border-slate-50">
                    <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4 flex items-center gap-2"><ShieldAlert size={14} /> Licence</h3>
                    {importLicenceType ? (
-                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                       <div>
-                           <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{importLicenceType === LicenceType.EPCG ? 'EPCG Licence' : 'Advance Licence'}</label>
-                           {(editAll || editDuties) ? (
-                               <select
-                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
-                                 value={licenceImportData.linkedLicenceId}
-                                 onChange={e => setLicenceImportData(prev => ({ ...prev, linkedLicenceId: e.target.value }))}
-                               >
-                                 <option value="">— Select —</option>
-                                 {importLicencesFiltered.map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
-                               </select>
-                           ) : (
-                               <p className="text-sm font-bold text-slate-800">
-                                 {licenceImportData.linkedLicenceId ? (licences.find(l => l.id === licenceImportData.linkedLicenceId)?.number || licenceImportData.linkedLicenceId) : '—'}
-                               </p>
-                           )}
-                       </div>
-                       <div>
-                           <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Quantity</label>
-                           {(editAll || editDuties) ? (
-                               <input
-                                 type="number"
-                                 step="any"
-                                 min="0"
-                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
-                                 value={licenceImportData.licenceObligationQuantity || ''}
-                                 onChange={e => setLicenceImportData(prev => ({ ...prev, licenceObligationQuantity: parseFloat(e.target.value) || 0 }))}
-                               />
-                           ) : <p className="text-sm font-bold text-slate-800">{licenceImportData.licenceObligationQuantity != null && licenceImportData.licenceObligationQuantity !== 0 ? licenceImportData.licenceObligationQuantity : '—'}</p>}
-                       </div>
-                       <div>
-                           <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Amount (INR)</label>
-                           {(editAll || editDuties) ? (
-                               <input
-                                 type="number"
-                                 step="any"
-                                 min="0"
-                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
-                                 value={licenceImportData.licenceObligationAmount || ''}
-                                 onChange={e => setLicenceImportData(prev => ({ ...prev, licenceObligationAmount: parseFloat(e.target.value) || 0 }))}
-                               />
-                           ) : <p className="text-sm font-bold text-slate-800">{licenceImportData.licenceObligationAmount != null && licenceImportData.licenceObligationAmount !== 0 ? formatINR(licenceImportData.licenceObligationAmount) : '—'}</p>}
-                       </div>
+                   <div className="max-w-sm">
+                       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{importLicenceType === LicenceType.EPCG ? 'EPCG Licence' : 'Advance Licence'}</label>
+                       {(editAll || editDuties) ? (
+                           <select
+                             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                             value={licenceImportData.linkedLicenceId}
+                             onChange={e => setLicenceImportData(prev => ({ ...prev, linkedLicenceId: e.target.value }))}
+                           >
+                             <option value="">— Select —</option>
+                             {importLicencesFiltered.map(l => <option key={l.id} value={l.id}>{l.number}</option>)}
+                           </select>
+                       ) : (
+                           <p className="text-sm font-bold text-slate-800">
+                             {licenceImportData.linkedLicenceId ? (licences.find(l => l.id === licenceImportData.linkedLicenceId)?.number || licenceImportData.linkedLicenceId) : '—'}
+                           </p>
+                       )}
+                       <p className="text-[10px] text-slate-500 mt-2">Quantity, amount and product lines are managed in Licence Tracker.</p>
                    </div>
                    ) : (
                    <p className="text-xs text-slate-400 italic">Add line items with product type to show Advance (raw material) or EPCG (capital goods) licence selection.</p>
                    )}
-                   {/* Products in this Bill of Entry — only when no licence selected (when selected, BOE/product add are in Licence system) */}
-                   {licenceImportLines.length > 0 && (
-                     <div className="mt-6">
-                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Products in this Bill of Entry</p>
-                       <p className="text-[10px] text-slate-500 mb-2">Invoice: {shipment?.invoiceNumber} · Supplier: {partnerName} · BE No: {dutiesData.beNumber || '—'} · BE Date: {dutiesData.beDate ? formatDate(dutiesData.beDate) : '—'} · Exchange rate: {dutiesData.exchangeRate || '—'}</p>
-                       <div className="border border-slate-200 rounded-xl overflow-hidden">
-                         <table className="w-full text-sm">
-                           <thead>
-                             <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
-                               <th className="p-2">Product name</th>
-                               <th className="p-2">Quantity</th>
-                               <th className="p-2">Unit</th>
-                               <th className="p-2">Value (INR)</th>
-                               <th className="p-2">Amount (USD)</th>
-                               <th className="p-2 w-10"></th>
-                             </tr>
-                           </thead>
-                           <tbody className="divide-y divide-slate-100">
-                             {licenceImportLines.map((row, idx) => (
-                               <tr key={idx}>
-                                 <td className="p-2">
-                                   <input type="text" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.productName || ''} onChange={e => setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, productName: e.target.value } : r))} placeholder="Name" />
-                                 </td>
-                                 <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.quantity ?? ''} onChange={e => setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: parseFloat(e.target.value) || 0 } : r))} /></td>
-                                 <td className="p-2">
-                                   <select className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.unit || 'KGS'} onChange={e => setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r))}>
-                                     {STANDARDISED_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                                   </select>
-                                 </td>
-                                 <td className="p-2">
-                                   <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.valueINR ?? ''} onChange={e => {
-                                     const v = parseFloat(e.target.value) || 0;
-                                     const ex = dutiesData.exchangeRate || 1;
-                                     setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, valueINR: v, amountUSD: ex > 0 ? v / ex : 0 } : r));
-                                   }} />
-                                 </td>
-                                 <td className="p-2">
-                                   <input type="number" step="any" min="0" className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm" value={row.amountUSD ?? ''} onChange={e => {
-                                     const usd = parseFloat(e.target.value) || 0;
-                                     const ex = dutiesData.exchangeRate || 1;
-                                     setLicenceImportLines(prev => prev.map((r, i) => i === idx ? { ...r, amountUSD: usd, valueINR: usd * ex } : r));
-                                   }} />
-                                 </td>
-                                 <td className="p-2"><button type="button" onClick={() => setLicenceImportLines(prev => prev.filter((_, i) => i !== idx))} className="p-1 text-slate-400 hover:text-red-600 rounded"><Trash2 size={14} /></button></td>
-                               </tr>
-                             ))}
-                           </tbody>
-                         </table>
-                         {(editAll || editDuties) && (
-                           <div className="p-2 border-t border-slate-100">
-                             <button type="button" onClick={() => setLicenceImportLines(prev => [...prev, { productName: '', quantity: 0, unit: 'KGS', valueINR: 0, amountUSD: 0 }])} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"><Plus size={12} /> Add product</button>
-                           </div>
-                         )}
-                       </div>
-                     </div>
-                   )}
                </div>
-               </>
-               )}
 
-               {/* Duties / BOE details only when no licence selected (when selected, BOE is in Licence system) */}
-               {!licenceImportData.linkedLicenceId && (
-               <>
+               {/* Duties / BOE: Assessable Value, BCD, SWS, Interest, Penalty, Fine, Total Duty, IGST — always shown */}
                <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-50">
                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl"><Zap size={20} /></div>
                    <div className="flex-1">
@@ -1699,7 +1568,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                
                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                   <div>
-                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Basic Customs Duty</label>
+                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Basic Customs Duty (BCD)</label>
                      {editAll ? <input type="number" className="w-full px-2 py-1 border rounded font-bold" value={dutiesData.dutyBCD} onChange={e => setDutiesData({...dutiesData, dutyBCD: parseFloat(e.target.value)})} /> 
                      : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutyBCD)}</p>}
                   </div>
@@ -1709,9 +1578,19 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutySWS)}</p>}
                   </div>
                   <div>
-                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">INT+PNLTY+FINE</label>
-                     {editAll ? <input type="number" className="w-full px-2 py-1 border rounded font-bold" value={dutiesData.dutyINT} onChange={e => setDutiesData({...dutiesData, dutyINT: parseFloat(e.target.value)})} /> 
-                     : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutyINT)}</p>}
+                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Interest</label>
+                     {editAll ? <input type="number" className="w-full px-2 py-1 border rounded font-bold" value={dutiesData.dutyInterest} onChange={e => setDutiesData({...dutiesData, dutyInterest: parseFloat(e.target.value)})} /> 
+                     : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutyInterest)}</p>}
+                  </div>
+                  <div>
+                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Penalty</label>
+                     {editAll ? <input type="number" className="w-full px-2 py-1 border rounded font-bold" value={dutiesData.dutyPenalty} onChange={e => setDutiesData({...dutiesData, dutyPenalty: parseFloat(e.target.value)})} /> 
+                     : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutyPenalty)}</p>}
+                  </div>
+                  <div>
+                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Fine</label>
+                     {editAll ? <input type="number" className="w-full px-2 py-1 border rounded font-bold" value={dutiesData.dutyFine} onChange={e => setDutiesData({...dutiesData, dutyFine: parseFloat(e.target.value)})} /> 
+                     : <p className="font-bold text-slate-700">{formatINR(dutiesData.dutyFine)}</p>}
                   </div>
                   <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Duty</label>
@@ -1727,8 +1606,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      : <p className="font-black text-emerald-700">{formatINR(dutiesData.gst)}</p>}
                   </div>
                </div>
-               </>
-               )}
             </div>
           </div>
           )}
@@ -1747,8 +1624,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     setNewPayment(prev => ({
                       ...prev,
                       currency: shipment.currency,
+                      amount: undefined,
+                      bankCharges: isExport ? 0 : undefined,
                       ...(shipment.isUnderLC && linkedLC ? { mode: 'LC' } : {})
                     }));
+                    setPaymentAdviceFile(null);
+                    if (paymentAdviceInputRef.current) paymentAdviceInputRef.current.value = '';
                     setShowPaymentModal(true);
                   }}
                   className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
@@ -1811,7 +1692,15 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                           <th className="pb-3 pl-2">Date</th>
                           <th className="pb-3">Reference</th>
                           <th className="pb-3">Mode</th>
-                          <th className="pb-3 text-right">Amount</th>
+                          {isExport ? (
+                            <>
+                              <th className="pb-3 text-right">Settled</th>
+                              <th className="pb-3 text-right">Bank charges</th>
+                              <th className="pb-3 text-right">Total</th>
+                            </>
+                          ) : (
+                            <th className="pb-3 text-right">Amount</th>
+                          )}
                           <th className="pb-3">Status</th>
                           <th className="pb-3 text-right">Action</th>
                        </tr>
@@ -1822,9 +1711,21 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                              <td className="py-3 pl-2 text-xs font-mono text-slate-500">{formatDate(pay.date)}</td>
                              <td className="py-3 text-xs font-bold text-slate-700">{pay.reference || '-'}</td>
                              <td className="py-3 text-[10px] font-black uppercase text-slate-400">{pay.mode}</td>
-                             <td className="py-3 text-right text-sm font-black text-slate-900">{formatCurrency(pay.amount, pay.currency)}</td>
+                             {isExport ? (
+                               <>
+                                 <td className="py-3 text-right text-sm font-black text-slate-900">{formatCurrency(pay.amount, pay.currency)}</td>
+                                 <td className="py-3 text-right text-sm font-medium text-slate-600">{formatCurrency((pay as { bankCharges?: number }).bankCharges ?? 0, pay.currency)}</td>
+                                 <td className="py-3 text-right text-sm font-black text-indigo-700">{formatCurrency(pay.amount + ((pay as { bankCharges?: number }).bankCharges ?? 0), pay.currency)}</td>
+                               </>
+                             ) : (
+                               <td className="py-3 text-right text-sm font-black text-slate-900">{formatCurrency(pay.amount, pay.currency)}</td>
+                             )}
                              <td className="py-3">
-                                {pay.received ? <span className="text-[9px] font-black uppercase text-emerald-600 flex items-center gap-1"><CheckCircle size={12} /> Received</span> : <button type="button" onClick={() => handleMarkPaymentReceived(pay.id)} className="text-[9px] font-black uppercase text-amber-600 hover:text-amber-700">Mark received</button>}
+                                {pay.received ? (
+                                  <span className="text-[9px] font-black uppercase text-emerald-600 flex items-center gap-1"><CheckCircle size={12} /> {isExport ? 'Received' : 'Paid'}</span>
+                                ) : (
+                                  <button type="button" onClick={() => handleMarkPaymentReceived(pay.id)} className="text-[9px] font-black uppercase text-amber-600 hover:text-amber-700">{isExport ? 'Mark received' : 'Mark as paid'}</button>
+                                )}
                              </td>
                              <td className="py-3 text-right">
                                 <button onClick={() => handleDeletePayment(pay.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={14} /></button>
@@ -2269,21 +2170,60 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         const remainingFC = Math.max(0, paymentSummary.totalFC - existingTotalFC);
         const enteredAmount = Number(newPayment.amount) || 0;
         const exceedsInvoice = enteredAmount > 0 && enteredAmount > remainingFC;
+        const isLCMode = newPayment.mode === 'LC' || newPayment.mode === 'Letter of Credit';
+        const lcRemainingForValidation = linkedLC && isLCMode
+          ? (linkedLC.balanceAmount != null ? Number(linkedLC.balanceAmount) : Math.max(0, (Number(linkedLC.amount) || 0) - (linkedLC.paymentSummary || []).reduce((s, p) => s + (Number(p.amount) || 0), 0)))
+          : Infinity;
+        const exceedsLCRemaining = isLCMode && linkedLC && enteredAmount > 0 && enteredAmount > lcRemainingForValidation;
         return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 relative">
               <button onClick={() => setShowPaymentModal(false)} className="absolute top-6 right-6 p-2 text-slate-400 hover:text-slate-600"><X size={20} /></button>
               <h2 className="text-xl font-black text-slate-900 mb-6">Record Payment</h2>
               <div className="space-y-4">
+                 {isExport ? (
+                   <>
+                     <div>
+                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Settled amount ({shipment.currency})</label>
+                       <p className="text-[9px] text-slate-500 mb-1">Net amount received after bank charges; this is matched against the invoice to mark payment as received.</p>
+                       <input type="number" step="any" min="0" className={`w-full px-4 py-2 rounded-xl border font-bold ${exceedsInvoice || exceedsLCRemaining ? 'border-red-400 bg-red-50/50' : ''}`} value={newPayment.amount ?? ''} onChange={e => setNewPayment({...newPayment, amount: e.target.value === '' ? undefined : parseFloat(e.target.value)})} placeholder="0" />
+                       {exceedsInvoice && (
+                         <p className="mt-2 text-xs font-medium text-red-700 flex items-center gap-1.5">
+                           <AlertCircle size={14} /> Total settled cannot exceed invoice amount ({formatCurrency(paymentSummary.totalFC, shipment.currency)}). You can add up to {formatCurrency(remainingFC, shipment.currency)}.
+                         </p>
+                       )}
+                       {exceedsLCRemaining && linkedLC && (
+                         <p className="mt-2 text-xs font-medium text-red-700 flex items-center gap-1.5">
+                           <AlertCircle size={14} /> Settled amount exceeds LC remaining balance. LC {linkedLC.lcNumber} remaining: {formatCurrency(lcRemainingForValidation, linkedLC.currency)}.
+                         </p>
+                       )}
+                     </div>
+                     <div>
+                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Bank charges ({shipment.currency})</label>
+                       <input type="number" step="any" min="0" className="w-full px-4 py-2 rounded-xl border font-bold" value={newPayment.bankCharges ?? ''} onChange={e => setNewPayment({...newPayment, bankCharges: e.target.value === '' ? undefined : parseFloat(e.target.value)})} placeholder="0" />
+                     </div>
+                     <div className="bg-slate-50 rounded-xl border border-slate-100 px-4 py-3">
+                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Total (gross received)</label>
+                       <p className="text-lg font-black text-slate-900">{formatCurrency((Number(newPayment.amount) || 0) + (Number(newPayment.bankCharges) || 0), shipment.currency)}</p>
+                       <p className="text-[9px] text-slate-500 mt-0.5">Settled + Bank charges</p>
+                     </div>
+                   </>
+                 ) : (
                  <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Amount</label>
-                    <input type="number" className={`w-full px-4 py-2 rounded-xl border font-bold ${exceedsInvoice ? 'border-red-400 bg-red-50/50' : ''}`} value={newPayment.amount ?? ''} onChange={e => setNewPayment({...newPayment, amount: e.target.value === '' ? undefined : parseFloat(e.target.value)})} />
+                    <input type="number" className={`w-full px-4 py-2 rounded-xl border font-bold ${exceedsInvoice || exceedsLCRemaining ? 'border-red-400 bg-red-50/50' : ''}`} value={newPayment.amount ?? ''} onChange={e => setNewPayment({...newPayment, amount: e.target.value === '' ? undefined : parseFloat(e.target.value)})} />
                     {exceedsInvoice && (
                       <p className="mt-2 text-xs font-medium text-red-700 flex items-center gap-1.5">
                         <AlertCircle size={14} /> Total payments cannot exceed invoice amount ({formatCurrency(paymentSummary.totalFC, shipment.currency)}). You can add up to {formatCurrency(remainingFC, shipment.currency)}.
                       </p>
                     )}
+                    {exceedsLCRemaining && linkedLC && (
+                      <p className="mt-2 text-xs font-medium text-red-700 flex items-center gap-1.5">
+                        <AlertCircle size={14} /> Payment amount exceeds LC remaining balance. LC {linkedLC.lcNumber} remaining: {formatCurrency(lcRemainingForValidation, linkedLC.currency)}.
+                      </p>
+                    )}
                  </div>
+                 )}
                  <div className="grid grid-cols-2 gap-4">
                    <div>
                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Currency</label>
@@ -2306,13 +2246,40 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                        <option value="CHECK">Check / DD</option>
                        <option value="LC">Letter of Credit</option>
                     </select>
-                    {shipment.isUnderLC && linkedLC && (newPayment.mode === 'LC' || newPayment.mode === 'Letter of Credit') && (
-                      <p className="mt-2 text-[10px] text-indigo-600 font-medium bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100">
-                        This payment will be recorded under LC <span className="font-bold">{linkedLC.lcNumber}</span> in the LC Tracker with the same details (invoice, reference, date, amount) as in this Payment Ledger.
-                      </p>
-                    )}
+                    {shipment.isUnderLC && linkedLC && (newPayment.mode === 'LC' || newPayment.mode === 'Letter of Credit') && (() => {
+                      const totalPaidOnLC = (linkedLC.paymentSummary || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+                      const lcAmt = Number(linkedLC.amount) || 0;
+                      const lcRemaining = linkedLC.balanceAmount != null ? Number(linkedLC.balanceAmount) : Math.max(0, lcAmt - totalPaidOnLC);
+                      return (
+                        <div className="mt-2 space-y-1">
+                          <p className="text-[10px] text-indigo-600 font-medium bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100">
+                            This payment will be recorded under LC <span className="font-bold">{linkedLC.lcNumber}</span> in the LC Tracker.
+                          </p>
+                          <p className="text-[10px] text-slate-600 font-medium">LC remaining: <span className="font-bold">{formatCurrency(lcRemaining, linkedLC.currency)}</span> — you cannot lodge more than this amount against this LC.</p>
+                        </div>
+                      );
+                    })()}
                  </div>
-                 <button onClick={handleAddPayment} className="w-full py-3 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-700 mt-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled={exceedsInvoice}>
+                 <div>
+                   <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Payment advice (required)</label>
+                   <p className="text-[9px] text-slate-500 mb-1">You must attach the payment advice document to add a payment. The file will be saved as the expected name for this amount.</p>
+                   <input
+                     ref={paymentAdviceInputRef}
+                     type="file"
+                     accept=".pdf,.jpg,.jpeg,.png,.gif,.webp"
+                     className="w-full px-4 py-2 rounded-xl border font-bold file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-indigo-700"
+                     onChange={e => setPaymentAdviceFile(e.target.files?.[0] ?? null)}
+                   />
+                   {Number(newPayment.amount) > 0 && (
+                     <p className="text-[9px] text-slate-500 mt-1">Expected file name: <span className="font-mono font-bold">PAY_ADV_{newPayment.amount}_{(shipment.currency || 'USD').toUpperCase()}</span> (extension from your file)</p>
+                   )}
+                   {!paymentAdviceFile && (Number(newPayment.amount) > 0 || isExport) && (
+                     <p className="mt-1 text-xs font-medium text-amber-700 flex items-center gap-1.5">
+                       <AlertCircle size={14} /> Attach a file to continue.
+                     </p>
+                   )}
+                 </div>
+                 <button onClick={handleAddPayment} className="w-full py-3 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-700 mt-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled={exceedsInvoice || exceedsLCRemaining || (isExport && !(Number(newPayment.amount) > 0)) || !paymentAdviceFile}>
                     Save Transaction
                  </button>
               </div>
@@ -2321,114 +2288,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         );
       })()}
 
-      {allocateModalProduct && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-4xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <div>
-                <h2 className="text-lg font-black text-slate-900">Split / Allocate — {allocateModalProduct.productName}</h2>
-                {allocateModalProduct.hsnCode && <p className="text-[10px] text-slate-500 mt-0.5">HSN: {allocateModalProduct.hsnCode}</p>}
-                {!isExport && allocateModalProduct.lineQuantity != null && (
-                  <p className="text-[10px] text-amber-600 font-bold mt-1">Max quantity in this shipment: {allocateModalProduct.lineQuantity} {allocateModalProduct.lineUnit || 'KGS'} — total allocated must not exceed this.</p>
-                )}
-              </div>
-              <button type="button" onClick={() => { setAllocateModalProduct(null); setAllocateModalRows([]); }} className="p-2 hover:bg-slate-200 rounded-full"><X size={20} className="text-slate-500" /></button>
-            </div>
-            <p className="px-6 py-2 text-[10px] text-slate-500">Add rows to allocate to one or more licences (same type only for import). Quantity, UOM, Amount INR, Amount USD. USD is auto-calculated from INR using exchange rate when you enter INR.</p>
-            <div className="flex-1 overflow-auto px-6">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[9px] font-black text-slate-500 uppercase border-b">
-                    <th className="pb-2 pt-2">Licence</th>
-                    <th className="pb-2 pt-2 text-right">Quantity</th>
-                    <th className="pb-2 pt-2">UOM</th>
-                    <th className="pb-2 pt-2 text-right">Amount (INR)</th>
-                    <th className="pb-2 pt-2 text-right">Amount (USD)</th>
-                    <th className="pb-2 pt-2 w-10"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {allocateModalRows.map((row, rIdx) => {
-                    const exch = allocateModalProduct?.exchangeRate || shipment?.exchangeRate || 1;
-                    return (
-                    <tr key={rIdx}>
-                      <td className="py-2">
-                        <select
-                          className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm bg-white"
-                          value={row.licenceId}
-                          onChange={e => setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, licenceId: e.target.value } : r))}
-                        >
-                          <option value="">— Select licence —</option>
-                          {(isExport ? (licences || []).filter(l => l.company === shipment?.company && l.status === 'ACTIVE') : importLicencesFiltered).map(l => (
-                            <option key={l.id} value={l.id}>{l.number} ({l.type})</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="py-2 text-right">
-                        <input type="number" step="any" className="w-24 px-2 py-1.5 rounded-lg border font-bold text-sm text-right" value={row.allocatedQuantity || ''} onChange={e => setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedQuantity: parseFloat(e.target.value) || 0 } : r))} />
-                      </td>
-                      <td className="py-2">
-                        <select className="w-full px-2 py-1.5 rounded-lg border font-bold text-sm bg-white" value={row.allocatedUom || allocateModalProduct?.lineUnit || 'KGS'} onChange={e => setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedUom: e.target.value } : r))}>
-                          {STANDARDISED_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                        </select>
-                      </td>
-                      <td className="py-2 text-right">
-                        <input type="number" step="any" className="w-28 px-2 py-1.5 rounded-lg border font-bold text-sm text-right" value={row.allocatedAmountINR || ''} onChange={e => {
-                          const inr = parseFloat(e.target.value) || 0;
-                          setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedAmountINR: inr, allocatedAmountUSD: exch > 0 ? inr / exch : 0 } : r));
-                        }} />
-                      </td>
-                      <td className="py-2 text-right">
-                        <input type="number" step="any" className="w-28 px-2 py-1.5 rounded-lg border font-bold text-sm text-right" value={row.allocatedAmountUSD || ''} onChange={e => {
-                          const usd = parseFloat(e.target.value) || 0;
-                          setAllocateModalRows(prev => prev.map((r, i) => i === rIdx ? { ...r, allocatedAmountUSD: usd, allocatedAmountINR: usd * exch } : r));
-                        }} />
-                      </td>
-                      <td className="py-2">
-                        <button type="button" onClick={() => setAllocateModalRows(prev => prev.filter((_, i) => i !== rIdx))} className="p-1.5 text-slate-400 hover:text-red-600 rounded"><Trash2 size={14} /></button>
-                      </td>
-                    </tr>
-                  );})}
-                </tbody>
-              </table>
-              <div className="py-3">
-                <button type="button" onClick={() => setAllocateModalRows(prev => [...prev, { licenceId: '', allocatedQuantity: 0, allocatedUom: allocateModalProduct?.lineUnit || 'KGS', allocatedAmountUSD: 0, allocatedAmountINR: 0 }])} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"><Plus size={14} /> Add row</button>
-              </div>
-            </div>
-            <div className="p-6 border-t border-slate-100 flex justify-end gap-3 bg-slate-50">
-              <button type="button" onClick={() => { setAllocateModalProduct(null); setAllocateModalRows([]); }} className="px-4 py-2 rounded-xl font-bold text-slate-500 hover:text-slate-700 uppercase text-xs">Cancel</button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!allocateModalProduct) return;
-                  const productId = allocateModalProduct.productId;
-                  const totalQty = allocateModalRows.reduce((s, r) => s + (r.allocatedQuantity || 0), 0);
-                  if (!isExport && allocateModalProduct.lineQuantity != null && totalQty > allocateModalProduct.lineQuantity) {
-                    alert(`Total allocated quantity (${totalQty} ${allocateModalProduct.lineUnit || 'KGS'}) cannot exceed shipment line quantity (${allocateModalProduct.lineQuantity} ${allocateModalProduct.lineUnit || 'KGS'}).`);
-                    return;
-                  }
-                  const newRows = allocateModalRows.filter(r => r.licenceId).map(r => ({
-                    licenceId: r.licenceId,
-                    productId,
-                    productName: allocateModalProduct.productName,
-                    hsnCode: allocateModalProduct.hsnCode,
-                    allocatedQuantity: r.allocatedQuantity,
-                    allocatedUom: r.allocatedUom || allocateModalProduct.lineUnit || 'KGS',
-                    allocatedAmountUSD: r.allocatedAmountUSD,
-                    allocatedAmountINR: r.allocatedAmountINR,
-                  }));
-                  setLicenceAllocations(prev => [...prev.filter(a => a.productId !== productId), ...newRows]);
-                  setAllocateModalProduct(null);
-                  setAllocateModalRows([]);
-                }}
-                className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-indigo-700"
-              >
-                Save allocation
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
     </>
   );

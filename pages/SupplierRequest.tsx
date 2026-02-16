@@ -27,6 +27,7 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
     hasIntermediaryBank: false,
     intermediaryBankName: '',
     intermediaryAccountHolderName: '',
+    intermediaryAccountNumber: '',
     intermediarySwiftCode: '',
     intermediaryBankAddress: '',
   });
@@ -37,9 +38,11 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
 
     setIsSubmitting(true);
     try {
+      const contactDetails = [formData.contactNumber, formData.contactEmail].filter(Boolean).join(' / ') || formData.contactDetails || '';
       const newSupplier: Supplier = {
         ...formData,
-        id: Math.random().toString(36).substr(2, 9),
+        contactDetails,
+        id: 's_' + Math.random().toString(36).substring(2, 11),
         status: SupplierStatus.PENDING,
         products: [],
         requestedBy: user.name,
@@ -47,15 +50,17 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
         hasIntermediaryBank: formData.hasIntermediaryBank,
         intermediaryBankName: formData.hasIntermediaryBank ? formData.intermediaryBankName : undefined,
         intermediaryAccountHolderName: formData.hasIntermediaryBank ? formData.intermediaryAccountHolderName : undefined,
+        intermediaryAccountNumber: formData.hasIntermediaryBank ? formData.intermediaryAccountNumber : undefined,
         intermediarySwiftCode: formData.hasIntermediaryBank ? formData.intermediarySwiftCode : undefined,
         intermediaryBankAddress: formData.hasIntermediaryBank ? formData.intermediaryBankAddress : undefined,
       };
 
       await onSubmit(newSupplier);
       navigate('/suppliers');
-    } catch (err) {
-      console.error("Submission failed", err);
-      alert('Internal sync error.');
+    } catch (err: unknown) {
+      console.error('Submission failed', err);
+      const message = err instanceof Error ? err.message : 'Could not add supplier. Check your permissions or try again.';
+      alert(message);
       setIsSubmitting(false);
     }
   };
@@ -156,6 +161,10 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
               <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Intermediary Bank A/C Beneficiary Name</label>
                 <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.intermediaryAccountHolderName} onChange={e => setFormData({...formData, intermediaryAccountHolderName: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Intermediary Bank Account Number</label>
+                <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.intermediaryAccountNumber} onChange={e => setFormData({...formData, intermediaryAccountNumber: e.target.value})} placeholder="e.g. 1234567890" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

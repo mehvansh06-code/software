@@ -39,6 +39,12 @@ const EXPORT_DOCS_BASE = EXPORT_BASE_RAW ? resolveDocBase(EXPORT_BASE_RAW) : LOC
 // Under each root: one folder per company (Gujarat Flotex, GTEX Fabrics).
 const COMPANY_FOLDER = { GFPL: 'Gujarat Flotex Pvt Ltd', GTEX: 'GTEX Fabrics Pvt Ltd' };
 
+/** Audit log export: directory for archived CSV files; logs older than this many days are eligible for export-and-archive. */
+const AUDIT_EXPORT_DIR = process.env.AUDIT_EXPORT_DIR
+  ? path.resolve(process.env.AUDIT_EXPORT_DIR)
+  : path.join(PROJECT_ROOT, 'audit-exports');
+const AUDIT_ARCHIVE_DAYS = Math.max(1, parseInt(process.env.AUDIT_ARCHIVE_DAYS, 10) || 10);
+
 /** Sales Indent: company master (name, address, GSTIN, IEC, bank details) */
 const INDENT_COMPANY_DB = {
   'Gujarat Flotex Pvt. Ltd.': {
@@ -79,4 +85,6 @@ module.exports = {
   COMPANY_FOLDER,
   INDENT_COMPANY_DB,
   DOCUMENTS_BASE,
+  AUDIT_EXPORT_DIR,
+  AUDIT_ARCHIVE_DAYS,
 };

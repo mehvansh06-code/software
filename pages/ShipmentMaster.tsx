@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
-import { Shipment, Supplier, Buyer, User, UserRole, Licence, LetterOfCredit } from '../types';
+import { Shipment, Supplier, Buyer, User, UserRole, Licence, LetterOfCredit, ShipmentStatus } from '../types';
 import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square, Calendar, Upload, FileQuestion } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
@@ -23,33 +23,6 @@ interface ShipmentMasterProps {
 }
 
 type SortKey = 'date_new' | 'date_old' | 'value_high' | 'value_low';
-
-type DateRangePreset = '2m' | '3m' | '6m' | '1y' | 'all';
-
-const DATE_RANGE_OPTIONS: { value: DateRangePreset; label: string }[] = [
-  { value: '2m', label: 'Last 2 months' },
-  { value: '3m', label: 'Last 3 months' },
-  { value: '6m', label: 'Last 6 months' },
-  { value: '1y', label: 'Last 1 year' },
-  { value: 'all', label: 'All time' },
-];
-
-function getDateRangeForPreset(preset: DateRangePreset): { start: Date; end: Date } {
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
-  const start = new Date();
-  if (preset === 'all') {
-    start.setFullYear(2000, 0, 1);
-    start.setHours(0, 0, 0, 0);
-    return { start, end };
-  }
-  start.setHours(0, 0, 0, 0);
-  if (preset === '2m') start.setMonth(start.getMonth() - 2);
-  else if (preset === '3m') start.setMonth(start.getMonth() - 3);
-  else if (preset === '6m') start.setMonth(start.getMonth() - 6);
-  else if (preset === '1y') start.setFullYear(start.getFullYear() - 1);
-  return { start, end };
-}
 
 /** Shipment date used for range filter: invoice date when set, else created date. */
 function getShipmentDate(sh: Shipment): Date {
@@ -99,8 +72,8 @@ const EXPORT_COLUMN_DEFS: { key: string; label: string; defaultSelected: boolean
   { key: 'containerNumber', label: 'Container No.', defaultSelected: true },
   { key: 'blNumber', label: 'BL No.', defaultSelected: true },
   { key: 'blDate', label: 'BL Date', defaultSelected: true },
-  { key: 'beNumber', label: 'BE No.', defaultSelected: true },
-  { key: 'beDate', label: 'BE Date', defaultSelected: true },
+  { key: 'beNumber', label: 'Bill of Entry No.', defaultSelected: true },
+  { key: 'beDate', label: 'Bill of Entry Date', defaultSelected: true },
   { key: 'portCode', label: 'Port Code', defaultSelected: true },
   { key: 'portOfLoading', label: 'Port of Loading', defaultSelected: true },
   { key: 'portOfDischarge', label: 'Port of Discharge', defaultSelected: true },
@@ -139,10 +112,19 @@ const EXPORT_COLUMN_DEFS: { key: string; label: string; defaultSelected: boolean
   { key: 'quantity', label: 'Quantity', defaultSelected: true },
 ];
 
+/** Column label for export/display: import = Bill of Entry, export = Shipping Bill for beNumber/beDate. */
+function getExportColumnLabel(key: string, label: string, isExport: boolean): string {
+  if (key === 'beNumber') return isExport ? 'Shipping Bill No.' : 'Bill of Entry No.';
+  if (key === 'beDate') return isExport ? 'Shipping Bill Date' : 'Bill of Entry Date';
+  return label;
+}
+
 const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], user, isExport = false, onAddShipment, onUpdateShipment, onDeleteShipment }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [companyFilter, setCompanyFilter] = useState('ALL');
-  const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>('2m');
+  const [partnerFilter, setPartnerFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [sortOrder, setSortOrder] = useState<SortKey>('date_new');
   const [showAddForm, setShowAddForm] = useState(false);
   const [showExportColumnsModal, setShowExportColumnsModal] = useState(false);
@@ -170,30 +152,34 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     return suppliers.find(s => s.id === sh.supplierId)?.name || sh.supplierId || 'Unknown Vendor';
   };
 
-  const { start: dateRangeStart, end: dateRangeEnd } = useMemo(
-    () => getDateRangeForPreset(dateRangePreset),
-    [dateRangePreset]
-  );
-
   const filteredAndSorted = useMemo(() => {
     let result = shipments.filter(sh => isExport ? !!sh.buyerId : !!sh.supplierId);
 
-    if (dateRangePreset !== 'all') {
+    if (dateFrom || dateTo) {
+      const from = dateFrom ? new Date(dateFrom + 'T00:00:00') : new Date(0);
+      const to = dateTo ? new Date(dateTo + 'T23:59:59.999') : new Date(8640000000000000);
       result = result.filter(sh => {
         const d = getShipmentDate(sh);
-        return d >= dateRangeStart && d <= dateRangeEnd;
+        return d >= from && d <= to;
       });
     }
 
     if (searchTerm) {
-      result = result.filter(sh => 
-        sh.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        sh.blNumber?.toLowerCase().includes(searchTerm.toLowerCase())
+      const term = searchTerm.toLowerCase().trim();
+      result = result.filter(sh =>
+        sh.invoiceNumber?.toLowerCase().includes(term) ||
+        sh.blNumber?.toLowerCase().includes(term) ||
+        sh.beNumber?.toLowerCase().includes(term) ||
+        sh.containerNumber?.toLowerCase().includes(term)
       );
     }
 
     if (companyFilter !== 'ALL') {
       result = result.filter(sh => sh.company === companyFilter);
+    }
+
+    if (partnerFilter) {
+      result = result.filter(sh => (isExport ? sh.buyerId === partnerFilter : sh.supplierId === partnerFilter));
     }
 
     result.sort((a, b) => {
@@ -207,7 +193,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     });
 
     return result;
-  }, [shipments, searchTerm, companyFilter, sortOrder, isExport, dateRangePreset, dateRangeStart, dateRangeEnd]);
+  }, [shipments, searchTerm, companyFilter, partnerFilter, sortOrder, isExport, dateFrom, dateTo]);
 
   const getProductNames = (sh: Shipment) => (sh.items && sh.items.length) ? sh.items.map(i => i.productName).join(', ') : (sh as any).productName || '—';
   /** Import: only payments marked as received count toward Paid/Partial */
@@ -386,9 +372,13 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   const runExportExcel = useCallback(() => {
     const exportData = filteredAndSorted.map(sh => {
       const full = shipmentToExcelRow(sh);
-      const filtered: Record<string, string | number | boolean | undefined> = {};
-      selectedExportColumns.forEach(k => { if (full[k] !== undefined) filtered[k] = full[k]; });
-      return filtered;
+      const row: Record<string, string | number | boolean | undefined> = {};
+      exportColumnsForMode.forEach(col => {
+        if (selectedExportColumns.has(col.key) && full[col.key] !== undefined) {
+          row[getExportColumnLabel(col.key, col.label, isExport)] = full[col.key];
+        }
+      });
+      return row;
     });
     if (exportData.length > 0 && selectedExportColumns.size === 0) return;
     const worksheet = XLSX.utils.json_to_sheet(exportData);
@@ -396,7 +386,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Shipments');
     XLSX.writeFile(workbook, `Shipments_${isExport ? 'Export' : 'Import'}.xlsx`);
     setShowExportColumnsModal(false);
-  }, [filteredAndSorted, selectedExportColumns, isExport]);
+  }, [filteredAndSorted, selectedExportColumns, isExport, exportColumnsForMode]);
 
   /** Date of realisation: latest payment date among received payments; blank if not realised. */
   const getDateOfRealisation = (sh: Shipment): string => {
@@ -547,7 +537,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                     onChange={() => toggleExportColumn(col.key)}
                     className="sr-only"
                   />
-                  <span className="text-sm font-medium text-slate-800">{col.label}</span>
+                  <span className="text-sm font-medium text-slate-800">{getExportColumnLabel(col.key, col.label, isExport)}</span>
                 </label>
               ))}
             </div>
@@ -566,7 +556,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
           <input 
             type="text" 
-            placeholder="Search Invoice or BL..." 
+            placeholder={isExport ? 'Search Invoice, BL, Shipping Bill or Container...' : 'Search Invoice, BL, Bill of Entry or Container...'} 
             className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 text-sm font-medium"
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
@@ -575,20 +565,37 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <Calendar size={16} className="text-slate-400 shrink-0" />
-            <select
-              className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
-              value={dateRangePreset}
-              onChange={e => setDateRangePreset(e.target.value as DateRangePreset)}
-              title="Show shipments by date range"
-            >
-              {DATE_RANGE_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
+            <span className="text-xs font-bold text-slate-600">Invoice date</span>
+            <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600">
+              From
+              <input
+                type="date"
+                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
+                value={dateFrom}
+                onChange={e => setDateFrom(e.target.value)}
+                title="Show shipments from this invoice date"
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600">
+              To
+              <input
+                type="date"
+                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
+                value={dateTo}
+                onChange={e => setDateTo(e.target.value)}
+                title="Show shipments up to this invoice date"
+              />
+            </label>
           </div>
           <select className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold" value={companyFilter} onChange={e => setCompanyFilter(e.target.value)}>
             <option value="ALL">All Companies</option>
             {COMPANY_OPTIONS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700" value={partnerFilter} onChange={e => setPartnerFilter(e.target.value)} title={isExport ? 'Show shipments by buyer' : 'Show all invoices by this supplier'}>
+            <option value="">{isExport ? 'All buyers' : 'All suppliers'}</option>
+            {isExport
+              ? buyers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)
+              : suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
           <select className={`px-4 py-2.5 border rounded-2xl text-xs font-bold ${themeClass}`} value={sortOrder} onChange={e => setSortOrder(e.target.value as SortKey)}>
             <option value="date_new">Newest First</option>

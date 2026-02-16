@@ -19,8 +19,8 @@ function createRouter(broadcast) {
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(s.id, 'Supplier ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
-    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    insert.run(idCheck.value, s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress, s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0, s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null);
+    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    insert.run(idCheck.value, s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress, s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0, s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediaryAccountNumber || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null);
     if (s.products && Array.isArray(s.products)) {
       db.prepare('DELETE FROM products WHERE supplierId = ?').run(idCheck.value);
       const prodStmt = db.prepare(`INSERT INTO products VALUES (?,?,?,?,?,?,?)`);
@@ -40,7 +40,7 @@ function createRouter(broadcast) {
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...] } with supplier objects' });
     const now = new Date().toISOString();
-    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     let count = 0;
     try {
       for (const r of rows) {
@@ -63,6 +63,7 @@ function createRouter(broadcast) {
           r.hasIntermediaryBank ? 1 : 0,
           r.intermediaryBankName || null,
           r.intermediaryAccountHolderName || null,
+          r.intermediaryAccountNumber || r.intermediary_account_number || null,
           r.intermediarySwiftCode || null,
           r.intermediaryBankAddress || null
         );
@@ -91,8 +92,8 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const s = req.body;
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
-    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    insert.run(idCheck.value, s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress, s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0, s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null);
+    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    insert.run(idCheck.value, s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress, s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0, s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediaryAccountNumber || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null);
     if (s.products && Array.isArray(s.products)) {
       db.prepare('DELETE FROM products WHERE supplierId = ?').run(idCheck.value);
       const prodStmt = db.prepare(`INSERT INTO products VALUES (?,?,?,?,?,?,?)`);

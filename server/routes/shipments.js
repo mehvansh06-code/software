@@ -52,6 +52,8 @@ function rowToClient(r) {
     dutyBCD: fromCents(r.dutyBCD),
     dutySWS: fromCents(r.dutySWS),
     dutyINT: fromCents(r.dutyINT),
+    dutyPenalty: r.dutyPenalty != null ? fromCents(r.dutyPenalty) : 0,
+    dutyFine: r.dutyFine != null ? fromCents(r.dutyFine) : 0,
     gst: fromCents(r.gst),
     dbk: r.dbk != null ? fromCents(r.dbk) : 0,
     rodtep: r.rodtep != null ? fromCents(r.rodtep) : 0,
@@ -78,6 +80,8 @@ function clientToCents(s) {
     dutyBCD: toCents(s.dutyBCD) ?? 0,
     dutySWS: toCents(s.dutySWS) ?? 0,
     dutyINT: toCents(s.dutyINT) ?? 0,
+    dutyPenalty: s.dutyPenalty != null ? toCents(s.dutyPenalty) : null,
+    dutyFine: s.dutyFine != null ? toCents(s.dutyFine) : null,
     gst: toCents(s.gst) ?? 0,
     dbk: toCents(s.dbk) ?? 0,
     rodtep: toCents(s.rodtep) ?? 0,
@@ -248,8 +252,16 @@ function applyLCPayment(lcId, amountMajor, currency, date, shipmentId, broadcast
   } catch (e) { return; }
   if (!row) return;
   const balanceAmount = Number(row.balanceAmount);
-  const currentBalance = Number.isNaN(balanceAmount) ? (Number(row.amount) || 0) : balanceAmount;
-  const newBalance = Math.max(0, currentBalance - amt);
+  const lcAmount = Number(row.amount) || 0;
+  const currentBalance = Number.isNaN(balanceAmount) ? lcAmount : balanceAmount;
+  if (amt > currentBalance) {
+    const err = new Error(
+      `Payment amount (${amountMajor} ${currency || row.currency || 'USD'}) exceeds LC remaining balance. LC amount: ${lcAmount} ${row.currency || 'USD'}; remaining: ${currentBalance} ${row.currency || 'USD'}.`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const newBalance = currentBalance - amt;
   try {
     db.prepare('UPDATE lcs SET balanceAmount = ? WHERE id = ?').run(newBalance, lcId);
     const txId = 'tx_' + Math.random().toString(36).substr(2, 9);
@@ -258,6 +270,7 @@ function applyLCPayment(lcId, amountMajor, currency, date, shipmentId, broadcast
       txId, lcId, amt, currency || row.currency || 'USD', date || now.split('T')[0], 'DEBIT', shipmentId || null, now
     );
   } catch (e) {
+    if (e.statusCode) throw e;
     console.warn('applyLCPayment:', e.message);
     return;
   }
@@ -563,10 +576,17 @@ function createRouter(broadcast) {
       if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
       if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file uploaded' });
       const rawName = req.file.originalname || 'upload';
-      let baseName = sanitizeFileDownloadFilename(rawName) || rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
       const docTypeRaw = (req.query && typeof req.query.documentType === 'string') ? req.query.documentType.trim() : '';
-      const docType = docTypeRaw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
-      if (docType.length > 0) baseName = docType + '_' + baseName;
+      let baseName;
+      if (docTypeRaw.startsWith('PAY_ADV_')) {
+        const ext = path.extname(rawName) || '.pdf';
+        const safe = docTypeRaw.replace(/[/\\:*?"<>|]/g, '_').slice(0, 80);
+        baseName = safe + ext;
+      } else {
+        baseName = sanitizeFileDownloadFilename(rawName) || rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
+        const docType = docTypeRaw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
+        if (docType.length > 0) baseName = docType + '_' + baseName;
+      }
       const filename = sanitizeFileDownloadFilename(baseName) || baseName;
       const fullPath = path.join(folderPath, filename);
       const resolvedFull = path.resolve(fullPath);
@@ -808,14 +828,14 @@ function createRouter(broadcast) {
       UPDATE shipments SET
         status=?, containerNumber=?, blNumber=?, blDate=?, beNumber=?, beDate=?,
         shippingLine=?, portCode=?, portOfLoading=?, portOfDischarge=?,
-        assessedValue=?, dutyBCD=?, dutySWS=?, dutyINT=?, gst=?, trackingUrl=?,
+        assessedValue=?, dutyBCD=?, dutySWS=?, dutyINT=?, dutyPenalty=?, dutyFine=?, gst=?, trackingUrl=?,
         documents_json=?, history_json=?, payments_json=?, items_json=?,
         isUnderLicence=?, linkedLicenceId=?, epcgLicenceId=?, advLicenceId=?, licenceObligationAmount=?, licenceObligationQuantity=?,
         incoTerm=?, paymentDueDate=?, paymentTerm=?, expectedArrivalDate=?,
         invoiceDate=?, freightCharges=?, otherCharges=?, exchangeRate=?, remarks=?,
         fobValueFC=?, fobValueINR=?,
         isUnderLC=?, lcNumber=?, lcAmount=?, lcDate=?, linkedLcId=?, fileStatus=?, consigneeId=?, lcSettled=?,
-        shipperSealNumber=?, lineSealNumber=?, sbNo=?, sbDate=?, dbk=?, rodtep=?,
+        shipperSealNumber=?, lineSealNumber=?, sbNo=?, sbDate=?, dbk=?, rodtep=?, scripNo=?,
         licenceImportLines_json=?, licenceExportLines_json=?, licence_allocations_json=?,
         version = version + 1
       WHERE id=? AND version=?
@@ -831,20 +851,28 @@ function createRouter(broadcast) {
           setShipmentHistory(id, s.history || []);
         } else {
           const version = s.version;
-          const existingRow = db.prepare('SELECT exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, payments_json FROM shipments WHERE id = ?').get(id);
+          const existingRow = db.prepare('SELECT exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, payments_json, licence_allocations_json, licenceExportLines_json, licenceImportLines_json FROM shipments WHERE id = ?').get(id);
           const existing = existingRow;
           const existingPayments = safeParseJson(existingRow?.payments_json, []);
           const existingPaymentIds = new Set((existingPayments || []).map(p => p.id));
           const allowedFileStatus = ['pending', 'clearing', 'ok'].includes(s.fileStatus) ? s.fileStatus : (existing?.fileStatus ?? null);
           const consigneeIdVal = s.consigneeId !== undefined ? s.consigneeId : (existing?.consigneeId ?? null);
           const lcSettledVal = s.lcSettled !== undefined ? (s.lcSettled ? 1 : 0) : (existing?.lcSettled ?? 0);
-          const licenceImportLinesJson = Array.isArray(s.licenceImportLines) ? JSON.stringify(s.licenceImportLines) : null;
-          const licenceExportLinesJson = Array.isArray(s.licenceExportLines) ? JSON.stringify(s.licenceExportLines) : null;
-          const licenceAllocationsJson = Array.isArray(s.licenceAllocations) && s.licenceAllocations.length > 0 ? JSON.stringify(s.licenceAllocations) : null;
+          // Licence lines/allocations are managed in Licence Tracker; preserve when not sent from Shipment Master
+          const licenceImportLinesJson = s.licenceImportLines !== undefined
+            ? (Array.isArray(s.licenceImportLines) ? JSON.stringify(s.licenceImportLines) : null)
+            : (existingRow?.licenceImportLines_json ?? null);
+          const licenceExportLinesJson = s.licenceExportLines !== undefined
+            ? (Array.isArray(s.licenceExportLines) ? JSON.stringify(s.licenceExportLines) : null)
+            : (existingRow?.licenceExportLines_json ?? null);
+          // Allocations: preserve existing when not sent
+          const licenceAllocationsJson = s.licenceAllocations !== undefined
+            ? (Array.isArray(s.licenceAllocations) && s.licenceAllocations.length > 0 ? JSON.stringify(s.licenceAllocations) : null)
+            : (existingRow?.licence_allocations_json ?? null);
           const result = updateStmt.run(
             s.status, sNorm.containerNumber, sNorm.blNumber, sNorm.blDate, sNorm.beNumber, sNorm.beDate,
             sNorm.shippingLine, sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
-            sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, sNorm.gst, sNorm.trackingUrl,
+            sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, (sNorm.dutyPenalty != null ? sNorm.dutyPenalty : null), (sNorm.dutyFine != null ? sNorm.dutyFine : null), sNorm.gst, sNorm.trackingUrl,
             JSON.stringify(s.documents || {}), '[]', JSON.stringify(s.payments || []), null,
             sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.epcgLicenceId || null, sNorm.advLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,
             sNorm.incoTerm, sNorm.paymentDueDate, (s.paymentTerm !== undefined ? s.paymentTerm : (existing?.paymentTerm ?? null)), sNorm.expectedArrivalDate || null,
@@ -862,6 +890,7 @@ function createRouter(broadcast) {
             sNorm.sbDate || null,
             sNorm.dbk ?? null,
             sNorm.rodtep ?? null,
+            (sNorm.scripNo !== undefined && sNorm.scripNo !== null ? String(sNorm.scripNo) : null),
             licenceImportLinesJson,
             licenceExportLinesJson,
             licenceAllocationsJson,
@@ -888,6 +917,7 @@ function createRouter(broadcast) {
       runTx();
     } catch (e) {
       if (e.statusCode === 409) return res.status(409).json({ success: false, error: e.message });
+      if (e.statusCode === 400) return res.status(400).json({ success: false, error: e.message });
       console.error('PUT /api/shipments/:id transaction error:', e);
       return res.status(500).json({ success: false, error: e.message || 'Database error' });
     }
@@ -905,9 +935,13 @@ function createRouter(broadcast) {
       if ((p.mode === 'LC' || p.mode === 'Letter of Credit') && Number(p.amount) > 0 && !p.linkedLcId && lcNumberForBackfill) {
         const lcRow = db.prepare('SELECT id FROM lcs WHERE lcNumber = ?').get(lcNumberForBackfill);
         if (lcRow) {
-          applyLCPayment(lcRow.id, Number(p.amount), p.currency, p.date, id, broadcast);
-          p.linkedLcId = lcRow.id;
-          backfillApplied = true;
+          try {
+            applyLCPayment(lcRow.id, Number(p.amount), p.currency, p.date, id, broadcast);
+            p.linkedLcId = lcRow.id;
+            backfillApplied = true;
+          } catch (lcErr) {
+            return res.status(lcErr.statusCode || 400).json({ success: false, error: lcErr.message });
+          }
         }
       }
     }
@@ -929,6 +963,18 @@ function createRouter(broadcast) {
     try {
       const row = db.prepare('SELECT invoiceNumber FROM shipments WHERE id = ?').get(id);
       const runTx = db.transaction(() => {
+        const lcRows = db.prepare('SELECT id, shipments_json FROM lcs').all();
+        for (const lc of lcRows) {
+          let list = [];
+          try {
+            list = JSON.parse(lc.shipments_json || '[]');
+          } catch (_) {}
+          if (!Array.isArray(list)) continue;
+          const next = list.filter(sid => String(sid) !== String(id));
+          if (next.length !== list.length) {
+            db.prepare('UPDATE lcs SET shipments_json = ? WHERE id = ?').run(JSON.stringify(next), lc.id);
+          }
+        }
         db.prepare('DELETE FROM shipment_items WHERE shipmentId = ?').run(id);
         db.prepare('DELETE FROM shipment_history WHERE shipmentId = ?').run(id);
         db.prepare('DELETE FROM shipments WHERE id = ?').run(id);
