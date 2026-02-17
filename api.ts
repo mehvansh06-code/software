@@ -486,7 +486,11 @@ export const api = {
     },
     /** Disabled: pushing localStorage to server would overwrite server data with stale local data. No conflict resolution implemented. */
     syncToSQL: async () => {
-      return true;
+      throw new Error(
+        'Offline sync is disabled. Data entered while the server was ' +
+        'unreachable has not been saved to the database. ' +
+        'Please contact your administrator to restart the server.'
+      );
     },
     reset: () => {
       localStorage.removeItem(SIM_KEY);

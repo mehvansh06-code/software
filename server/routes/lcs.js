@@ -126,7 +126,9 @@ function createRouter(broadcast) {
     const id = idCheck.value;
     const row = db.prepare('SELECT id, lcNumber FROM lcs WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ success: false, error: 'LC not found' });
-    const shipmentRows = db.prepare('SELECT id, payments_json FROM shipments').all();
+    const shipmentRows = db.prepare(
+      "SELECT id, payments_json FROM shipments WHERE payments_json LIKE ?"
+    ).all(`%${id}%`);
     let shipmentsWithPayments = 0;
     for (const sh of shipmentRows) {
       let payments = [];
@@ -155,48 +157,6 @@ function createRouter(broadcast) {
     res.json({ success: true });
     broadcast();
   });
-
-  function settleLC(lcId, amount, date) {
-    let row;
-    try {
-      row = db.prepare('SELECT * FROM lcs WHERE id = ?').get(lcId);
-    } catch (e) { return; }
-    if (!row) return;
-    const isExport = !!(row.buyerId && !row.supplierId);
-    const txType = isExport ? 'CREDIT' : 'DEBIT';
-    const shipmentIds = (() => { try { return JSON.parse(row.shipments_json || '[]'); } catch (_) { return []; } })();
-    const txId = 'tx_' + Math.random().toString(36).substr(2, 9);
-    const now = new Date().toISOString();
-    try {
-      db.prepare('INSERT INTO lc_transactions (id, lcId, amount, currency, date, type, createdAt) VALUES (?,?,?,?,?,?,?)').run(
-        txId, lcId, amount || row.amount, row.currency || 'USD', date || new Date().toISOString().split('T')[0], txType, now
-      );
-    } catch (e) {
-      console.warn('settleLC insert transaction:', e.message);
-    }
-    for (const sid of shipmentIds) {
-      try {
-        const shRow = db.prepare('SELECT * FROM shipments WHERE id = ?').get(sid);
-        if (!shRow) continue;
-        const payments = (() => { try { return JSON.parse(shRow.payments_json || '[]'); } catch (_) { return []; } })();
-        const payId = 'pay_' + Math.random().toString(36).substr(2, 9);
-        const amt = Number(shRow.amount) || 0;
-        payments.push({
-          id: payId,
-          date: date || new Date().toISOString().split('T')[0],
-          amount: amt,
-          currency: shRow.currency || 'USD',
-          reference: 'LC Settled: ' + (row.lcNumber || lcId),
-          received: true,
-          adviceUploaded: false
-        });
-        db.prepare('UPDATE shipments SET payments_json = ? WHERE id = ?').run(JSON.stringify(payments), sid);
-      } catch (e) {
-        console.warn('settleLC update shipment', sid, e.message);
-      }
-    }
-    broadcast();
-  }
 
   return router;
 }

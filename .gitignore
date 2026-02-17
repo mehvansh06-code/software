@@ -32,3 +32,6 @@ shipment_documents/
 *.db
 *.db-shm
 *.db-wal
+
+# SQLite backups
+backups/

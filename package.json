@@ -27,7 +27,7 @@
     "tailwindcss": "^4.1.18",
     "tesseract.js": "^7.0.0",
     "ws": "^8.19.0",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^25.2.1",

@@ -71,6 +71,11 @@ function sanitizeFolderName(str) {
   return str.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'Unknown';
 }
 
+const LOGS_DIR = path.join(__dirname, 'logs');
+if (!fs.existsSync(LOGS_DIR)) {
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+}
+
 [IMPORT_DOCS_BASE, EXPORT_DOCS_BASE].forEach((base) => {
   try {
     if (!fs.existsSync(base)) fs.mkdirSync(base, { recursive: true });
@@ -324,6 +329,23 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`Gujarat Flotex SQL Backend running at http://localhost:${port}`);
   console.log(`Share with others on your network: http://${localIp}:${port} (API) and http://${localIp}:3000 (app)`);
 });
+
+function runDailyBackup() {
+  const backupDir = path.join(__dirname, 'backups');
+  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+  const date = new Date().toISOString().slice(0, 10);
+  const backupPath = path.join(backupDir, `ledger-${date}.db`);
+  try {
+    db.backup(backupPath);
+    console.log(`[Backup] Saved to ${backupPath}`);
+  } catch (e) {
+    console.error('[Backup] Failed:', e.message);
+  }
+}
+
+// Run once on startup, then every 24 hours
+runDailyBackup();
+setInterval(runDailyBackup, 24 * 60 * 60 * 1000);
 
 const shutdown = () => {
   console.log('\nShutting down...');
