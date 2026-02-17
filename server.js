@@ -111,16 +111,10 @@ const corsOrigin = process.env.CORS_ORIGIN || true;
 app.use(cors({ origin: corsOrigin, credentials: false }));
 app.use(express.json({ limit: '512kb' }));
 
-// Login: use .env ADMIN_USERNAME / ADMIN_PASSWORD when set; else fallback users (director, checker, employee / admin123)
+// Login: .env ADMIN_USERNAME/ADMIN_PASSWORD or DB users only
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const ADMIN_PASSWORD_HASH = ADMIN_PASSWORD ? bcrypt.hashSync(ADMIN_PASSWORD, 10) : null;
-const FALLBACK_USERS = [
-  { id: '1', username: 'director', name: 'J P Tosniwal', role: 'MANAGEMENT' },
-  { id: '2', username: 'checker', name: 'Sarah Accountant', role: 'CHECKER' },
-  { id: '3', username: 'employee', name: 'Rahul Sharma', role: 'EXECUTIONER' },
-];
-const FALLBACK_PASSWORD_HASH = bcrypt.hashSync('admin123', 10);
 const DEFAULT_ALLOWED_DOMAINS = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
 
 function handleLogin(req, res) {
@@ -157,15 +151,7 @@ function handleLogin(req, res) {
       return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
     }
   } catch (_) {}
-  // 3) Legacy in-memory fallback (no users table or no matching DB user)
-  const user = FALLBACK_USERS.find((u) => u.username === username);
-  if (!user || !bcrypt.compareSync(password, FALLBACK_PASSWORD_HASH)) {
-    return res.status(401).json({ success: false, error: 'Invalid username or password' });
-  }
-  const permissions = PRESETS[user.role] || PRESETS.VIEWER || [];
-  const allowedDomains = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
-  const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
+  return res.status(401).json({ success: false, error: 'Invalid username or password' });
 }
 
 app.post('/api/auth/login', loginLimiter, handleLogin);
