@@ -43,6 +43,7 @@ const PERMISSIONS = {
   MATERIALS_VIEW: 'materials.view',
   MATERIALS_CREATE: 'materials.create',
   MATERIALS_EDIT: 'materials.edit',
+  MATERIALS_DELETE: 'materials.delete',
   // Sales Indent (hub)
   INDENT_VIEW: 'indent.view',
   INDENT_CREATE: 'indent.create',
@@ -196,6 +197,7 @@ const PERMISSION_GROUPS = [
       PERMISSIONS.MATERIALS_VIEW,
       PERMISSIONS.MATERIALS_CREATE,
       PERMISSIONS.MATERIALS_EDIT,
+      PERMISSIONS.MATERIALS_DELETE,
     ],
   },
   {

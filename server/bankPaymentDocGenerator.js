@@ -223,35 +223,95 @@ async function generateBankPaymentDocBuffer(data) {
     items: tableItems,
   };
 
-  const content = fs.readFileSync(templatePath, 'binary');
-  const zip = new PizZip(content);
-  const documentEntry = zip.files['word/document.xml'];
-  if (documentEntry) {
-    let xml = documentEntry.asText();
-    for (let i = 0; i < 20; i++) {
-      const prev = xml;
-      xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
-      xml = xml.replace(/<w:t[^>]*>\{<\/w:t><\/w:r>(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
-      xml = xml.replace(/<w:t[^>]*>\}<\/w:t><\/w:r>(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
-      if (xml === prev) break;
+  // Template uses {{ and }}; single "}" after a tag name is normalized to "}}"
+  const DELIMITERS = { start: '{{', end: '}}' };
+
+  function loadAndNormalizeZip() {
+    const content = fs.readFileSync(templatePath, 'binary');
+    const z = new PizZip(content);
+    const documentEntry = z.files['word/document.xml'];
+    if (documentEntry) {
+      let xml = documentEntry.asText();
+      // Fix "{{ tag }" (missing second }) -> "{{ tag }}"
+      xml = xml.replace(/\{\{\s*([^}]+)\}(?!\})/g, '{{ $1 }}');
+      // Convert single-brace placeholders to double-brace: only " { tag_name } " (valid identifier)
+      xml = xml.replace(/\{\s*([#\/]?[a-zA-Z0-9_.]+)\s*\}/g, '{{ $1 }}');
+      // Remove stray " }" or " } " that can appear after "}}" (e.g. "{{ date }} }" -> "{{ date }}")
+      xml = xml.replace(/\}\}\s*\}\s*/g, '}} ');
+      // Escape any remaining lone "{" that are not part of "{{" (avoids unclosed tag from literal "{" in body text)
+      xml = xml.replace(/(?<!\{\{)\{(?!\{)/g, '\u200B{\u200B');
+      z.file('word/document.xml', xml);
     }
-    zip.file('word/document.xml', xml);
+    return z;
   }
+
+  const zip = loadAndNormalizeZip();
   const doc = new Docxtemplater(zip, {
-    delimiters: { start: '{', end: '}' },
+    delimiters: DELIMITERS,
     paragraphLoop: true,
     linebreaks: true,
     errorLogging: false,
   });
-  doc.render(context);
 
-  const buffer = doc.getZip().generate({
+  function renderToBuffer(zipInstance, ctx) {
+    const d = new Docxtemplater(zipInstance, {
+      delimiters: DELIMITERS,
+      paragraphLoop: true,
+      linebreaks: true,
+      errorLogging: false,
+    });
+    d.render(ctx);
+    return d.getZip().generate({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 9 },
+    });
+  }
+
+  try {
+    doc.render(context);
+  } catch (renderErr) {
+    const isMultiOrTemplate = renderErr && (
+      renderErr.name === 'MultiError' ||
+      (renderErr.properties && renderErr.properties.id === 'multi_error') ||
+      /Multi error|TemplateError/i.test(String(renderErr.message || ''))
+    );
+    if (isMultiOrTemplate && tableItems.length > 1) {
+      const merged = {
+        description: tableItems.map((i) => i.description).filter(Boolean).join(', ') || empty(data.goods_desc),
+        goods_desc: tableItems.map((i) => i.description).filter(Boolean).join(', ') || empty(data.goods_desc),
+        hsn_code: tableItems.map((i) => i.hsn_code).filter(Boolean).join(', ') || empty(data.hsn_code),
+        quantity: tableItems.map((i) => i.quantity_and_unit).filter(Boolean).join(', ') || empty(data.quantity),
+        quantity_and_unit: tableItems.map((i) => i.quantity_and_unit).filter(Boolean).join(', ') || empty(data.quantity),
+        unit: tableItems[0].unit || 'KGS',
+        amount: tableItems.reduce((s, i) => {
+          const n = typeof i.amount === 'number' ? i.amount : parseFloat(String(i.amount).replace(/,/g, ''));
+          return s + (Number.isNaN(n) ? 0 : n);
+        }, 0),
+        invoice_no: invNo,
+        invoice_date: invDate,
+        term: termVal,
+        currency: currCode,
+        beneficiary_country: beneficiaryCountry,
+        mode_shipment: modeShipmentVal,
+        shipment_date: shipDate,
+      };
+      const singleItemAmount = formatItemAmount(merged.amount);
+      const fallbackContext = {
+        ...context,
+        items: [{ ...merged, amount: singleItemAmount }],
+      };
+      const freshZip = loadAndNormalizeZip();
+      return renderToBuffer(freshZip, fallbackContext);
+    }
+    throw renderErr;
+  }
+
+  return doc.getZip().generate({
     type: 'nodebuffer',
     compression: 'DEFLATE',
     compressionOptions: { level: 9 },
   });
-
-  return buffer;
 }
 
 module.exports = {

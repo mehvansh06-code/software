@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Material } from '../types';
-import { Search, Plus, Edit3, X, Upload, FileDown } from 'lucide-react';
+import { Search, Plus, Edit3, Trash2, Upload, FileDown } from 'lucide-react';
 import { api } from '../api';
+import { usePermissions } from '../hooks/usePermissions';
 import { STANDARDISED_UNITS } from '../types';
 import * as XLSX from 'xlsx';
 
 const MaterialsMaster: React.FC = () => {
+  const { hasPermission } = usePermissions();
+  const canDelete = hasPermission('materials.delete');
   const [materials, setMaterials] = useState<Material[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -57,6 +60,16 @@ const MaterialsMaster: React.FC = () => {
       type: m.type || 'RAW_MATERIAL',
     });
     setShowForm(true);
+  };
+
+  const handleDelete = async (m: Material) => {
+    if (!window.confirm(`Delete material "${m.name}"? This cannot be undone.`)) return;
+    try {
+      await api.materials.delete(m.id);
+      setMaterials(prev => prev.filter(x => x.id !== m.id));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete material.');
+    }
   };
 
   const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -199,7 +212,12 @@ const MaterialsMaster: React.FC = () => {
                     <span className="text-[10px] font-black px-2 py-0.5 rounded uppercase bg-slate-100 text-slate-600">{m.type || '—'}</span>
                   </td>
                   <td className="px-6 py-5 text-right">
-                    <button onClick={() => openEdit(m)} className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-all"><Edit3 size={18} /></button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button onClick={() => openEdit(m)} className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-all" title="Edit"><Edit3 size={18} /></button>
+                      {canDelete && (
+                        <button onClick={() => handleDelete(m)} className="p-2 text-slate-400 hover:text-red-600 rounded-lg transition-all" title="Delete"><Trash2 size={18} /></button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

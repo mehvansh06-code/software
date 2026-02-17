@@ -364,6 +364,7 @@ export const api = {
     list: () => fetchApi('materials'),
     create: (data: any) => fetchApi('materials', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`materials/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchApi(`materials/${id}`, { method: 'DELETE' }),
     import: (rows: any[]) => fetchApi('materials/import', { method: 'POST', body: JSON.stringify({ rows }) }),
   },
   domesticBuyers: {

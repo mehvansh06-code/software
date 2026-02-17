@@ -82,11 +82,22 @@ function createRouter() {
       res.send(buffer);
     } catch (err) {
       console.error('Bank payment doc generate error:', err);
-      const raw = err.message || 'Failed to generate document';
-      const friendly = (raw === 'Multi error' || String(raw).includes('Multi error'))
-        ? 'One or more required fields are missing or invalid. Please check all fields (company, supplier, invoice, bank details, shipment & goods) and try again.'
+      const raw = err != null && (err.message !== undefined || err.reason !== undefined)
+        ? String(err.message != null ? err.message : err.reason)
+        : 'Failed to generate document';
+      const hasPropErrors = err && err.properties && Array.isArray(err.properties.errors);
+      const hasErrors = err && Array.isArray(err.errors);
+      const isMultiError = err && (err.name === 'MultiError' || (err.properties && err.properties.id === 'multi_error'));
+      const messageLooksTemplate = /Multi error|TemplateError|Duplicate (open|close) tag|Unclosed tag|No tag .* was found/i.test(raw) || (err && err.stack && /docxtemplater|XmlTemplater|lexer/.test(err.stack));
+      const isTemplateError = isMultiError || hasPropErrors || hasErrors || messageLooksTemplate || (raw && /multi\s*error/i.test(raw));
+      const friendly = isTemplateError
+        ? 'Document generation failed due to a template formatting issue. Try selecting the other company (e.g. GTEX instead of GFPL, or vice versa), or contact support.'
         : raw;
-      res.status(500).json({ success: false, error: friendly });
+      try {
+        if (!res.headersSent) res.status(500).json({ success: false, error: friendly });
+      } catch (sendErr) {
+        console.error('Failed to send error response:', sendErr);
+      }
     }
   });
 

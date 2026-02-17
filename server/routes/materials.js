@@ -60,6 +60,19 @@ function createRouter(broadcast) {
     broadcast();
   });
 
+  router.delete('/:id', hasPermission('materials.delete'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'Material ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    try {
+      const result = db.prepare('DELETE FROM materials WHERE id = ?').run(idCheck.value);
+      if (result.changes === 0) return res.status(404).json({ success: false, error: 'Material not found' });
+      res.json({ success: true });
+      broadcast();
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
   return router;
 }
 
