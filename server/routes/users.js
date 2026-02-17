@@ -49,7 +49,7 @@ function createRouter() {
     const role = typeof b.role === 'string' ? b.role.toUpperCase() : 'VIEWER';
     const allowedDomains = Array.isArray(b.allowedDomains) ? b.allowedDomains : [];
     if (!username) return res.status(400).json({ success: false, error: 'Username required' });
-    if (!password || String(password).length < 1) return res.status(400).json({ success: false, error: 'Password required' });
+    if (!password || String(password).length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
     const id = b.id || 'u_' + Math.random().toString(36).slice(2, 11);
     const idCheck = validateId(id, 'User ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
@@ -184,8 +184,8 @@ function createRouter() {
     const idCheck = validateId(req.params?.id, 'User ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const newPassword = req.body?.password;
-    if (!newPassword || String(newPassword).length < 1) {
-      return res.status(400).json({ success: false, error: 'Password required' });
+    if (!newPassword || String(newPassword).length < 8) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
     }
     const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(idCheck.value);
     if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
