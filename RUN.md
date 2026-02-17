@@ -1,4 +1,4 @@
-# How to Run Gujarat Flotex IMS
+# How to Run EXIM
 
 ## Quick start (both backend + frontend)
 

@@ -77,6 +77,13 @@ const INDENT_COMPANY_DB = {
   },
 };
 
+/** Bank Import Payment Document Generator: company key (GFPL/GTEX) to template filename. */
+const BANK_PAYMENT_TEMPLATES_DIR = path.join(__dirname, 'templates', 'bank-payment');
+const BANK_PAYMENT_TEMPLATES = {
+  GFPL: 'ZHEJIANG FUSHENGDA.docx',
+  GTEX: 'Templategtex.docx',
+};
+
 module.exports = {
   IMPORT_DOCS_BASE,
   EXPORT_DOCS_BASE,
@@ -84,6 +91,8 @@ module.exports = {
   LOCAL_EXPORT_DOCS,
   COMPANY_FOLDER,
   INDENT_COMPANY_DB,
+  BANK_PAYMENT_TEMPLATES,
+  BANK_PAYMENT_TEMPLATES_DIR,
   DOCUMENTS_BASE,
   AUDIT_EXPORT_DIR,
   AUDIT_ARCHIVE_DAYS,

@@ -387,7 +387,21 @@ export const api = {
       if (!safe) return Promise.reject(new Error('Invalid endpoint'));
       return fetch(`${API_BASE}/${safe}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload),
+      }).then((r) => {
+        if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j?.error || 'Generate failed')));
+        return r.blob();
+      });
+    },
+  },
+  bankPaymentDocs: {
+    generate: (payload: any): Promise<Blob> => {
+      const safe = sanitizeEndpoint('bank-payment-docs/generate');
+      if (!safe) return Promise.reject(new Error('Invalid endpoint'));
+      return fetch(`${API_BASE}/${safe}`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
         body: JSON.stringify(payload),
       }).then((r) => {
         if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j?.error || 'Generate failed')));

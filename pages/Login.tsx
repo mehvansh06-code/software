@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { ShieldCheck, Package } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { api } from '../api';
 
 interface LoginProps {
@@ -49,10 +49,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     <div className="min-h-screen flex items-center justify-center bg-indigo-900 p-4 sm:p-6">
       <div className="max-w-md w-full bg-white rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden p-6 sm:p-10">
         <div className="text-center mb-8 sm:mb-10">
-          <div className="inline-flex items-center justify-center p-3 sm:p-4 bg-indigo-50 rounded-2xl mb-4 sm:mb-6">
-            <Package size={40} className="text-indigo-600" />
+          <div className="inline-flex items-center justify-center p-3 sm:p-4 bg-white rounded-2xl mb-4 sm:mb-6 border border-slate-100">
+            <img src="/logo.png" alt="Gujarat Flotex" className="h-12 sm:h-14 w-auto object-contain" />
           </div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900">Gujarat Flotex IMS</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900">EXIM</h2>
           <p className="text-slate-500 mt-2">Log in to your workspace</p>
         </div>
 

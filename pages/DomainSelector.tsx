@@ -36,6 +36,7 @@ const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName = ''
 
       <div className="max-w-4xl w-full relative z-10">
         <header className="text-center mb-8 sm:mb-12">
+          <img src="/logo.png" alt="Gujarat Flotex" className="h-12 sm:h-14 w-auto mx-auto mb-4 object-contain" />
           <div className="inline-flex items-center gap-3 mb-3 sm:mb-4 bg-white px-3 py-2 sm:px-4 rounded-2xl shadow-sm border border-slate-100">
             <Grid className="text-indigo-600 shrink-0" size={18} />
             <span className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-widest">Management Hub Selection</span>

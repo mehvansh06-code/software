@@ -80,48 +80,71 @@ function formatDate(ts: string): string {
   }
 }
 
-function detailsToReadable(details: Record<string, unknown> | null): string {
-  if (!details || typeof details !== 'object') return '—';
-  const msg = details.message as string | undefined;
-  if (typeof msg === 'string') return msg;
-  // Build short sentence from known fields
-  const invoiceNumber = details.invoiceNumber as string | undefined;
-  const name = details.name as string | undefined;
-  const lcNumber = details.lcNumber as string | undefined;
-  const filename = details.filename as string | undefined;
-  const count = details.count as number | undefined;
-  const number = details.number as string | undefined;
-  const type = details.type as string | undefined;
-  const company = details.company as string | undefined;
-  const username = details.username as string | undefined;
-  const role = details.role as string | undefined;
-  const status = details.status as string | undefined;
-  const amount = details.amount as number | string | undefined;
-  const currency = details.currency as string | undefined;
-  if (invoiceNumber != null) return `Invoice ${invoiceNumber}`;
-  if (name != null && count != null) return `${name}; ${count} item(s)`;
-  if (name != null) return name;
-  if (lcNumber != null && amount != null && currency != null) return `LC ${lcNumber} (${currency} ${amount})`;
-  if (lcNumber != null && status != null) return `LC ${lcNumber} → ${status}`;
-  if (lcNumber != null) return `LC ${lcNumber}`;
-  if (filename != null) return filename;
-  if (count != null) return `${count} item(s)`;
-  if (number != null && type != null && company != null) return `Licence ${number} (${type}, ${company})`;
-  if (number != null && type != null) return `Licence ${number} (${type})`;
-  if (username != null && role != null) return `${username} (${role})`;
-  if (username != null) return username;
-  const keys = Object.keys(details).filter((k) => k !== 'raw');
-  if (keys.length === 0) return (details.raw as string) ?? '—';
-  return keys.map((k) => `${k}: ${JSON.stringify(details[k])}`).join(' · ');
-}
+/** Short human-readable narration for the audit log (e.g. "Created a new shipment 98"). */
+function getNarration(entry: AuditLogEntry): string {
+  const d = entry.details && typeof entry.details === 'object' ? entry.details : null;
+  const invoiceNumber = d?.invoiceNumber as string | undefined;
+  const name = d?.name as string | undefined;
+  const count = d?.count as number | undefined;
+  const username = d?.username as string | undefined;
+  const number = d?.number as string | undefined;
+  const lcNumber = d?.lcNumber as string | undefined;
+  const filename = d?.filename as string | undefined;
+  const target = entry.targetId ?? (invoiceNumber ? String(invoiceNumber) : null);
 
-function entrySummary(entry: AuditLogEntry): string {
-  const user = entry.userName || entry.userId || 'System';
-  const label = getActionLabel(entry.action);
-  const detail = detailsToReadable(entry.details);
-  if (detail && detail !== '—') return `${user} ${label}: ${detail}`;
-  const target = entry.targetId ? ` #${entry.targetId}` : '';
-  return `${user} ${label}${target}`;
+  switch (entry.action) {
+    case 'SHIPMENT_CREATED':
+      return invoiceNumber != null ? `Created a new shipment ${invoiceNumber}` : target ? `Created a new shipment ${target}` : 'Created a new shipment';
+    case 'SHIPMENT_UPDATED':
+      return invoiceNumber != null ? `Updated shipment ${invoiceNumber}` : target ? `Updated shipment ${target}` : 'Updated a shipment';
+    case 'SHIPMENT_DELETED':
+      return invoiceNumber != null ? `Deleted shipment ${invoiceNumber}` : target ? `Deleted shipment ${target}` : 'Deleted a shipment';
+    case 'DOCUMENT_UPLOADED':
+      return filename ? `Uploaded document ${filename}` : invoiceNumber != null ? `Uploaded document for shipment ${invoiceNumber}` : 'Uploaded a document';
+    case 'DOCUMENT_DELETED':
+      return filename ? `Deleted document ${filename}` : invoiceNumber != null ? `Deleted document for shipment ${invoiceNumber}` : 'Deleted a document';
+    case 'SHIPMENTS_IMPORTED':
+      return count != null ? `Imported ${count} shipment(s)` : 'Imported shipments';
+    case 'USER_CREATED':
+      return username ? `Created user ${username}` : 'Created a user';
+    case 'USER_UPDATED':
+      return username ? `Updated user ${username}` : 'Updated a user';
+    case 'USER_DELETED':
+      return username ? `Deleted user ${username}` : 'Deleted a user';
+    case 'PERMISSIONS_UPDATED':
+      return 'Updated user permissions';
+    case 'SUPPLIER_CREATED':
+      return name ? `Created supplier ${name}` : 'Created a supplier';
+    case 'SUPPLIER_UPDATED':
+      return name ? `Updated supplier ${name}` : 'Updated a supplier';
+    case 'SUPPLIER_DELETED':
+      return name ? `Deleted supplier ${name}` : 'Deleted a supplier';
+    case 'SUPPLIERS_IMPORTED':
+      return count != null ? `Imported ${count} supplier(s)` : 'Imported suppliers';
+    case 'BUYER_CREATED':
+      return name ? `Created buyer ${name}` : 'Created a buyer';
+    case 'BUYER_UPDATED':
+      return name ? `Updated buyer ${name}` : 'Updated a buyer';
+    case 'BUYER_DELETED':
+      return name ? `Deleted buyer ${name}` : 'Deleted a buyer';
+    case 'BUYERS_IMPORTED':
+      return count != null ? `Imported ${count} buyer(s)` : 'Imported buyers';
+    case 'LICENCE_CREATED':
+      return number ? `Created licence ${number}` : 'Created a licence';
+    case 'LICENCE_UPDATED':
+      return number ? `Updated licence ${number}` : 'Updated a licence';
+    case 'LICENCE_DELETED':
+      return number ? `Deleted licence ${number}` : 'Deleted a licence';
+    case 'LC_CREATED':
+      return lcNumber ? `Created LC ${lcNumber}` : 'Created an LC';
+    case 'LC_UPDATED':
+      return lcNumber ? `Updated LC ${lcNumber}` : 'Updated an LC';
+    case 'LC_DELETED':
+      return lcNumber ? `Deleted LC ${lcNumber}` : 'Deleted an LC';
+    default:
+      const label = getActionLabel(entry.action);
+      return target ? `${label} ${target}` : label;
+  }
 }
 
 export default function AuditLogs() {
@@ -344,33 +367,27 @@ export default function AuditLogs() {
           <div className="p-12 text-center text-slate-500">No audit log entries found.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
+            <table className="w-full text-left table-fixed">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80">
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Time</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Summary</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">User</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Action</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Target</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Details</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider w-[11rem]">Time</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider min-w-0">Summary</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider w-[8rem]">User</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider w-[9rem]">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {logs.map((entry) => (
                   <tr key={entry.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                    <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">{formatDate(entry.timestamp)}</td>
-                    <td className="px-4 py-3 text-sm text-slate-900 max-w-sm" title={entrySummary(entry)}>
-                      {entrySummary(entry)}
+                    <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap align-top">{formatDate(entry.timestamp)}</td>
+                    <td className="px-4 py-3 text-sm text-slate-900 min-w-0 break-words overflow-hidden align-top" title={getNarration(entry)}>
+                      <span className="block break-all">{getNarration(entry)}</span>
                     </td>
-                    <td className="px-4 py-3 text-sm font-medium text-slate-900">{entry.userName || entry.userId || '—'}</td>
-                    <td className="px-4 py-3 text-sm">
+                    <td className="px-4 py-3 text-sm font-medium text-slate-900 align-top">{entry.userName || entry.userId || '—'}</td>
+                    <td className="px-4 py-3 text-sm align-top">
                       <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-200 text-slate-800 text-xs">
                         {getActionLabel(entry.action)}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-slate-600 font-mono">{entry.targetId || '—'}</td>
-                    <td className="px-4 py-3 text-sm text-slate-600 max-w-md truncate" title={detailsToReadable(entry.details)}>
-                      {detailsToReadable(entry.details)}
                     </td>
                   </tr>
                 ))}

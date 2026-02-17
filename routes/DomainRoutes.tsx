@@ -18,6 +18,7 @@ import DomesticBuyerMaster from '../pages/DomesticBuyerMaster';
 import IndentProductsMaster from '../pages/IndentProductsMaster';
 import UserManagement from '../pages/UserManagement';
 import AuditLogs from '../pages/AuditLogs';
+import BankPaymentDocGenerator from '../pages/BankPaymentDocGenerator';
 
 export const exportPathMatch = (path: string) =>
   ['/', '/buyers', '/export-shipments', '/export-lcs', '/shipments', '/users', '/audit-logs'].includes(path) ||
@@ -94,7 +95,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
   const navigate = useNavigate();
 
   const importPathMatch = (p: string) =>
-    ['/', '/suppliers', '/materials', '/shipments', '/lcs', '/users', '/audit-logs'].includes(p) || /^\/shipments\/[^/]+$/.test(p);
+    ['/', '/suppliers', '/materials', '/shipments', '/lcs', '/bank-payment-docs', '/users', '/audit-logs'].includes(p) || /^\/shipments\/[^/]+$/.test(p);
 
   useEffect(() => {
     const path = location.pathname || '/';
@@ -141,6 +142,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
           <Route path="/shipments" element={<Layout {...layoutProps}><ShipmentMaster shipments={shipments} suppliers={suppliers} buyers={[]} licences={licences} lcs={lcs} user={user} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} onDeleteShipment={handleDeleteShipment} /></Layout>} />
           <Route path="/shipments/:id" element={<Layout {...layoutProps}><ShipmentDetails shipments={shipments} suppliers={suppliers} buyers={buyers} licences={licences} lcs={lcs} onUpdate={handleUpdateShipment} onDelete={handleDeleteShipment} onUpdateLC={handleUpdateLC} user={user} connectionMode={connectionMode} onRefreshData={onRefreshData} /></Layout>} />
           <Route path="/lcs" element={<Layout {...layoutProps}><LCTracker lcs={lcs} suppliers={suppliers} user={user} onUpdateItem={handleUpdateLC} onDeleteItem={handleDeleteLC} /></Layout>} />
+          <Route path="/bank-payment-docs" element={<Layout {...layoutProps}><BankPaymentDocGenerator suppliers={suppliers} shipments={shipments} user={user} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
           <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
           <Route path="/export-shipments" element={<Navigate to="/shipments" replace />} />

@@ -79,6 +79,7 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
     { path: '/materials', label: 'Materials Master', icon: Package, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
     { path: '/shipments', label: 'Shipment Master', icon: Truck, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
     { path: '/lcs', label: 'LC Tracker', icon: CreditCard, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+    { path: '/bank-payment-docs', label: 'Bank Import Payment Document Generator', icon: FileText, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
   ] : [
     { path: '/', label: 'Export Dashboard', icon: TrendingUp, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
     { path: '/buyers', label: 'Buyer Master', icon: ShoppingCart, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
@@ -93,6 +94,7 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
   const sidebarClass = isLicence ? 'bg-emerald-900' : isSalesIndent ? 'bg-rose-900' : isImport ? 'bg-indigo-900' : 'bg-amber-900';
   const logoIconClass = isLicence ? 'text-emerald-900' : isSalesIndent ? 'text-rose-900' : isImport ? 'text-indigo-900' : 'text-amber-900';
   const hubLabel = isLicence ? 'LIC' : isSalesIndent ? 'IND' : isImport ? 'IMP' : 'EXP';
+  const titleText = isImport ? 'EXIM' : `Flotex ${hubLabel}`;
   const activeLinkClass = isLicence ? 'bg-emerald-800 text-white shadow-lg' : isSalesIndent ? 'bg-rose-800 text-white shadow-lg' : isImport ? 'bg-indigo-800 text-white shadow-lg' : 'bg-amber-800 text-white shadow-lg';
   const userAvatarClass = isLicence ? 'bg-emerald-700' : isSalesIndent ? 'bg-rose-700' : isImport ? 'bg-indigo-700' : 'bg-amber-700';
 
@@ -108,7 +110,8 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
         >
           {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
         </button>
-        <span className="text-lg font-bold tracking-tight text-white truncate flex-1">Flotex {hubLabel}</span>
+        <img src="/logo.png" alt="Gujarat Flotex" className="h-8 w-auto object-contain shrink-0" />
+        <span className="text-xl font-bold tracking-tight text-white truncate flex-1">{titleText}</span>
         <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm uppercase shrink-0 ${userAvatarClass}`}>
           {user.name.charAt(0)}
         </div>
@@ -124,11 +127,11 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
 
       {/* Sidebar: on lg always visible; on <lg fixed overlay, slide in/out */}
       <aside className={`w-64 flex flex-col transition-colors duration-500 ${sidebarClass} fixed lg:relative inset-y-0 left-0 z-40 transform transition-transform duration-300 ease-out lg:translate-x-0 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="p-6 flex items-center gap-3 pt-8 lg:pt-6">
-          <div className="bg-white p-2 rounded-lg">
-            {isLicence ? <Award className={logoIconClass} size={24} /> : isSalesIndent ? <FileText className={logoIconClass} size={24} /> : <Package className={logoIconClass} size={24} />}
+        <div className="px-4 py-4 flex items-center gap-3 pt-5 lg:pt-4">
+          <div className="bg-white p-2 rounded-lg flex items-center justify-center shrink-0 h-10">
+            <img src="/logo.png" alt="Gujarat Flotex" className="h-8 w-auto max-h-8 object-contain" />
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">Flotex {hubLabel}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white truncate h-8 flex items-center">{titleText}</h1>
         </div>
 
         <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">

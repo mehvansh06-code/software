@@ -52,6 +52,8 @@ const PERMISSIONS = {
   INDENT_DOMESTIC_BUYERS: 'indent.domestic_buyers',
   INDENT_PRODUCTS: 'indent.products',
   INDENT_EXPORT_BUYERS: 'indent.export_buyers',
+  // Bank Import Payment Document Generator
+  BANK_PAYMENT_DOCS_GENERATE: 'bank_payment_docs.generate',
   // Reports
   REPORTS_VIEW: 'reports.view',
   REPORTS_EXPORT: 'reports.export',
@@ -98,6 +100,7 @@ const CHECKER = [
   PERMISSIONS.INDENT_DOMESTIC_BUYERS,
   PERMISSIONS.INDENT_PRODUCTS,
   PERMISSIONS.INDENT_EXPORT_BUYERS,
+  PERMISSIONS.BANK_PAYMENT_DOCS_GENERATE,
   PERMISSIONS.MATERIALS_VIEW,
   PERMISSIONS.MATERIALS_CREATE,
   PERMISSIONS.MATERIALS_EDIT,
@@ -208,6 +211,11 @@ const PERMISSION_GROUPS = [
       PERMISSIONS.INDENT_PRODUCTS,
       PERMISSIONS.INDENT_EXPORT_BUYERS,
     ],
+  },
+  {
+    id: 'bank_payment_docs',
+    label: 'Bank Import Payment Docs',
+    permissions: [PERMISSIONS.BANK_PAYMENT_DOCS_GENERATE],
   },
   {
     id: 'reports',
