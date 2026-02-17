@@ -253,9 +253,11 @@ function applyLCPayment(lcId, amountMajor, currency, date, shipmentId, broadcast
     row = db.prepare('SELECT * FROM lcs WHERE id = ?').get(lcId);
   } catch (e) { return; }
   if (!row) return;
-  const balanceAmount = Number(row.balanceAmount);
   const lcAmount = Number(row.amount) || 0;
-  const currentBalance = Number.isNaN(balanceAmount) ? lcAmount : balanceAmount;
+  const rawBalance = row.balanceAmount;
+  const currentBalance = (rawBalance != null && rawBalance !== '' && !Number.isNaN(Number(rawBalance)))
+    ? Number(rawBalance)
+    : lcAmount;
   if (amt > currentBalance) {
     const err = new Error(
       `Payment amount (${amountMajor} ${currency || row.currency || 'USD'}) exceeds LC remaining balance. LC amount: ${lcAmount} ${row.currency || 'USD'}; remaining: ${currentBalance} ${row.currency || 'USD'}.`

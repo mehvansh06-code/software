@@ -40,7 +40,7 @@
   "scripts": {
     "start": "node server.js",
     "server": "node server.js",
-    "restart": "node restart-server.js",
+    "restart": "node --no-deprecation restart-server.js",
     "dev": "vite",
     "clear-data": "node server/clear-sample-data.js",
     "import-data": "node server/import-from-file.js"

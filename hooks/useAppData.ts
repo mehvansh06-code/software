@@ -66,7 +66,9 @@ export function useAppData(): UseAppDataReturn {
       setSuppliers(Array.isArray(s) ? s : []);
       setBuyers(Array.isArray(b) ? b : []);
       const fromApi = Array.isArray(sh) ? sh : [];
-      const fromLocal = api.system.getLocalShipments();
+      // When server is available, use only server data so all browsers show the same list.
+      // Don't merge localStorage (per-browser) — that caused different data in different browsers.
+      const fromLocal = api.system.getMode() === 'OFFLINE' ? api.system.getLocalShipments() : [];
       setShipments(prev => {
         const inApi = (id: string) => fromApi.some((x: Shipment) => x.id === id);
         const fromPrev = prev.filter(p => !inApi(p.id));

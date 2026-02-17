@@ -123,8 +123,11 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
     const isNetworkFailure =
       error?.name === 'AbortError' ||
       /failed to fetch|network error|load failed|connection refused/i.test(error?.message || '');
-    if (isNetworkFailure) serverAvailable = false;
-    return handleSimulatedRequest(safeEndpoint, options);
+    if (isNetworkFailure) {
+      serverAvailable = false;
+      return handleSimulatedRequest(safeEndpoint, options);
+    }
+    throw error;
   }
 }
 

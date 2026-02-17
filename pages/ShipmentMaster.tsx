@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
 import { Shipment, Supplier, Buyer, User, UserRole, Licence, LetterOfCredit, ShipmentStatus } from '../types';
-import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square, Calendar, Upload, FileQuestion } from 'lucide-react';
+import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square, Calendar, Upload } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
 import { usePermissions } from '../hooks/usePermissions';
@@ -129,7 +129,6 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   const [showAddForm, setShowAddForm] = useState(false);
   const [showExportColumnsModal, setShowExportColumnsModal] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [showFormatHelp, setShowFormatHelp] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const exportColumnsForMode = useMemo(() =>
@@ -341,7 +340,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
         return { supplierId: partnerId, supplierName: partnerName, productName, hsnCode, quantity, unit, rate, amount, exchangeRate, invoiceNumber, company, currency, expectedShipmentDate, invoiceDate };
       }).filter((r) => (isExport ? (r.buyerId || (r as any).buyerName) : (r.supplierId || (r as any).supplierName)) && (r as any).invoiceNumber && (r as any).productName);
       if (rows.length === 0) {
-        alert(isExport ? 'No rows with Buyer ID/Name, Invoice No and Product Name found. See Excel format.' : 'No rows with Supplier ID/Name, Invoice No and Product Name found. See Excel format.');
+        alert(isExport ? 'No rows with Buyer ID/Name, Invoice No and Product Name found. Use the Download template for the correct format.' : 'No rows with Supplier ID/Name, Invoice No and Product Name found. Use the Download template for the correct format.');
         return;
       }
       const result = await api.shipments.import(rows, isExport);
@@ -451,9 +450,6 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-700 rounded-2xl font-bold hover:bg-slate-200 disabled:opacity-50 transition-all shadow-sm">
             <Upload size={18} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
-          <button type="button" onClick={() => setShowFormatHelp(true)} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all shadow-sm" title="Excel format">
-            <FileQuestion size={18} /> Format
-          </button>
           <button type="button" onClick={downloadShipmentTemplate} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all shadow-sm" title="Download template">
             <FileDown size={18} /> Template
           </button>
@@ -473,26 +469,6 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           )}
         </div>
       </header>
-
-      {showFormatHelp && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowFormatHelp(false)}>
-          <div className="bg-white rounded-2xl shadow-xl max-w-lg p-6 space-y-3" onClick={ev => ev.stopPropagation()}>
-            <h3 className="font-bold text-slate-900">{isExport ? 'Export' : 'Import'} Shipment Excel format</h3>
-            <p className="text-sm text-slate-600">
-              First row = headers. Required: {isExport ? 'Buyer ID or Buyer Name' : 'Supplier ID or Supplier Name'}, Invoice No, Product Name. Optional: Company (GFPL/GTEX), Currency, Exchange Rate, HSN Code, Quantity, Unit, Rate, Amount, Expected Shipment Date, Invoice Date.
-            </p>
-            <div className="bg-slate-50 rounded-xl p-3 text-sm text-slate-700">
-              <strong>How to fill {isExport ? 'Buyer ID' : 'Supplier ID'}?</strong>
-              <ul className="mt-2 list-disc list-inside space-y-1 text-slate-600">
-                <li><strong>Easiest:</strong> Leave ID blank and use <strong>{isExport ? 'Buyer Name' : 'Supplier Name'}</strong> with the exact name as shown in {isExport ? 'Buyer' : 'Supplier'} Master.</li>
-                <li><strong>Or:</strong> Open {isExport ? 'Buyer' : 'Supplier'} Master → click the eye icon to view a {isExport ? 'buyer' : 'supplier'} → copy the <strong>{isExport ? 'Buyer ID' : 'Supplier ID'}</strong> shown there into your Excel.</li>
-              </ul>
-            </div>
-            <p className="text-xs text-slate-500">Use &quot;Download template&quot; to get the exact column names and a sample row.</p>
-            <button type="button" onClick={() => setShowFormatHelp(false)} className="mt-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm">Close</button>
-          </div>
-        </div>
-      )}
 
       {showAddForm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">

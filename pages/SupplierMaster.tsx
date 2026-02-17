@@ -15,7 +15,6 @@ import {
   PackagePlus,
   Eye,
   Upload,
-  FileQuestion,
   FileDown
 } from 'lucide-react';
 import { formatDate } from '../constants';
@@ -39,7 +38,6 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
-  const [showFormatHelp, setShowFormatHelp] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canApprove = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
@@ -104,7 +102,7 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
         };
       }).filter((r) => r.name && r.country);
       if (rows.length === 0) {
-        alert('No rows with Name and Country found. Use the Excel format (see "Excel format" button).');
+        alert('No rows with Name and Country found. Use the Download template for the correct column format.');
         return;
       }
       const result = await api.suppliers.import(rows);
@@ -147,9 +145,6 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50 transition-all">
             <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
-          <button type="button" onClick={() => setShowFormatHelp(true)} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Excel format">
-            <FileQuestion size={16} /> Excel format
-          </button>
           <button type="button" onClick={downloadSupplierTemplate} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Download template">
             <FileDown size={16} /> Download template
           </button>
@@ -185,17 +180,6 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
             <button onClick={() => handleBulkAction(SupplierStatus.REJECTED)} className="px-6 py-2 bg-red-500 hover:bg-red-600 rounded-xl font-bold flex items-center gap-2 transition-all">
               <XCircle size={16} /> Reject Selected
             </button>
-          </div>
-        </div>
-      )}
-
-      {showFormatHelp && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowFormatHelp(false)}>
-          <div className="bg-white rounded-2xl shadow-xl max-w-lg p-6 space-y-3" onClick={e => e.stopPropagation()}>
-            <h3 className="font-bold text-slate-900">Supplier Excel format</h3>
-            <p className="text-sm text-slate-600">First row = headers. Required: <strong>Name</strong>, <strong>Country</strong>. Optional: Address, Bank Name, Account Holder, Account Number, SWIFT Code, Bank Address, Contact Person, Contact Number, Contact Email.</p>
-            <p className="text-xs text-slate-500">Column names are case-insensitive. You can use &quot;Supplier Name&quot; for Name.</p>
-            <button type="button" onClick={() => setShowFormatHelp(false)} className="mt-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm">Close</button>
           </div>
         </div>
       )}

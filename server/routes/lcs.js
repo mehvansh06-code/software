@@ -79,12 +79,16 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const buyerId = l.buyerId || null;
     const supplierId = l.supplierId || null;
+    const amountNum = Number(l.amount) || 0;
     try {
-      const ins = db.prepare(`INSERT OR REPLACE INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, currency, issueDate, expiryDate, maturityDate, company, status, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-      ins.run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, buyerId, l.amount, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks || null);
+      const ins = db.prepare(`INSERT OR REPLACE INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, balanceAmount, currency, issueDate, expiryDate, maturityDate, company, status, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      ins.run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, buyerId, amountNum, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks || null);
     } catch (e) {
-      if (/no such column: buyerId/.test(e.message)) {
-        db.prepare(`INSERT OR REPLACE INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, l.amount, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks);
+      if (/no such column: balanceAmount/.test(e.message)) {
+        const insLegacy = db.prepare(`INSERT OR REPLACE INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, currency, issueDate, expiryDate, maturityDate, company, status, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+        insLegacy.run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, buyerId, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks || null);
+      } else if (/no such column: buyerId/.test(e.message)) {
+        db.prepare(`INSERT OR REPLACE INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks);
       } else throw e;
     }
     const userId = req.user && req.user.id;

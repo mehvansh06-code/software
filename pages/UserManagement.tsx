@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserPlus, Users, X, Pencil } from 'lucide-react';
+import { UserPlus, Users, X, Pencil, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { usePermissions } from '../hooks/usePermissions';
 import { AppDomain } from '../types';
@@ -80,6 +80,9 @@ export default function UserManagement() {
   });
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<ApiUser | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -163,6 +166,7 @@ export default function UserManagement() {
   const canView = hasPermission('users.view');
   const canCreate = hasPermission('users.create');
   const canEdit = hasPermission('users.edit');
+  const canDelete = hasPermission('users.delete');
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -260,6 +264,21 @@ export default function UserManagement() {
     }));
   };
 
+  const handleDeleteUser = async () => {
+    if (!deleteConfirm) return;
+    setDeleteError(null);
+    setDeleting(true);
+    try {
+      await api.users.delete(deleteConfirm.id);
+      await loadUsers();
+      setDeleteConfirm(null);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to delete user');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const toggleModalScreen = (domain: string) => {
     setModalAllowedDomains((prev) =>
       prev.includes(domain) ? prev.filter((d) => d !== domain) : [...prev, domain]
@@ -348,6 +367,13 @@ export default function UserManagement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
+              {users.length === 0 && !error && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                    No users yet. Use <strong>New User</strong> to add the first user.
+                  </td>
+                </tr>
+              )}
               {users.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-5">
@@ -390,6 +416,15 @@ export default function UserManagement() {
                         className="px-4 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 font-bold text-sm hover:bg-indigo-100 transition-colors"
                       >
                         Manage Permissions
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button
+                        type="button"
+                        onClick={() => { setDeleteConfirm(u); setDeleteError(null); }}
+                        className="px-4 py-2 rounded-xl border border-red-200 bg-red-50 text-red-700 font-bold text-sm hover:bg-red-100 transition-colors flex items-center gap-1.5"
+                      >
+                        <Trash2 size={14} /> Delete
                       </button>
                     )}
                   </td>
@@ -615,6 +650,43 @@ export default function UserManagement() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => !deleting && setDeleteConfirm(null)}>
+          <div
+            className="bg-white rounded-[2.5rem] shadow-2xl max-w-md w-full p-8 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-xl font-black text-slate-900 mb-2">Delete user</h2>
+            <p className="text-slate-600 text-sm mb-6">
+              Are you sure you want to delete <strong>{deleteConfirm.name || deleteConfirm.username}</strong>? This cannot be undone.
+            </p>
+            {deleteError && (
+              <div className="mb-6 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm font-medium">
+                {deleteError}
+              </div>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => !deleting && setDeleteConfirm(null)}
+                className="px-6 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-50 transition-colors"
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteUser}
+                disabled={deleting}
+                className="px-6 py-2.5 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+              >
+                {deleting ? 'Deleting…' : <><Trash2 size={16} /> Delete user</>}
+              </button>
+            </div>
           </div>
         </div>
       )}
