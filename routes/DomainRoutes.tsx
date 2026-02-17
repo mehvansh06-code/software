@@ -59,6 +59,15 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
   const {
     domain,
     user,
+  } = props;
+  if (!domain || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100">
+        <p className="text-slate-500">Loading…</p>
+      </div>
+    );
+  }
+  const {
     setDomain,
     onLogout,
     shipments,

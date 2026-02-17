@@ -9,6 +9,8 @@ const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, LOCAL_IMPORT_DOCS, LOCAL_EXPORT_DOCS
 const { validateId, hasPermission } = require('../middleware');
 const { log: auditLog, getUserName } = require('../services/auditService');
 
+const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.xlsx', '.docx', '.csv', '.txt'];
+
 function safeParseJson(str, fallback) {
   if (str == null || str === '') return fallback;
   try {
@@ -283,33 +285,26 @@ function linkShipmentToLC(shipment, broadcast) {
   const shipmentValue = Number(shipment.amount) || 0;
   const shipmentValueMajor = shipmentValue / 100;
   let row = null;
+  let lcRef = (shipment.lcNumber != null && shipment.lcNumber !== '') ? String(shipment.lcNumber).trim() : '';
   try {
     // Prefer linkedLcId when user selected an LC (e.g. from New Shipment dropdown)
     if (shipment.linkedLcId) {
       row = db.prepare('SELECT * FROM lcs WHERE id = ?').get(shipment.linkedLcId);
     }
-    if (!row && shipment.lcNumber) {
-      const lcRef = String(shipment.lcNumber).trim();
-      if (lcRef) row = db.prepare('SELECT * FROM lcs WHERE lcNumber = ?').get(lcRef);
+    if (!row && lcRef) {
+      row = db.prepare('SELECT * FROM lcs WHERE lcNumber = ?').get(lcRef);
     }
   } catch (e) {
     return;
   }
   if (row) {
+    // Only link shipment to LC (add to shipments_json). Do not change balanceAmount here;
+    // balance is reduced only by applyLCPayment() when a payment is lodged.
     const shipments = (() => { try { return JSON.parse(row.shipments_json || '[]'); } catch (_) { return []; } })();
     if (shipments.indexOf(shipmentId) !== -1) return;
-    const balanceAmount = Number(row.balanceAmount);
-    const currentBalance = (Number.isNaN(balanceAmount) ? (Number(row.amount) || 0) : balanceAmount);
-    const shipmentValueMajor = shipmentValue / 100;
-    if (currentBalance - shipmentValueMajor < 0) {
-      const err = new Error('Transaction Declined: Letter of Credit limit exceeded.');
-      err.statusCode = 400;
-      throw err;
-    }
-    const newBalance = currentBalance - shipmentValueMajor;
     shipments.push(shipmentId);
     try {
-      db.prepare('UPDATE lcs SET shipments_json = ?, balanceAmount = ? WHERE id = ?').run(JSON.stringify(shipments), newBalance, row.id);
+      db.prepare('UPDATE lcs SET shipments_json = ? WHERE id = ?').run(JSON.stringify(shipments), row.id);
     } catch (e) {
       if (/no such column/.test(e.message)) return;
       throw e;
@@ -320,17 +315,18 @@ function linkShipmentToLC(shipment, broadcast) {
   const isExport = !!(shipment.buyerId && !shipment.supplierId);
   const newId = 'lc_' + Math.random().toString(36).substr(2, 9);
   const now = new Date().toISOString().split('T')[0];
+  // Auto-create LC: amount and balanceAmount both set to shipment value; balance will be reduced by applyLCPayment when payments are lodged
   try {
     const ins = db.prepare('INSERT INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, balanceAmount, currency, issueDate, expiryDate, maturityDate, company, status, remarks, shipments_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
     ins.run(
-      newId, lcRef, '—', isExport ? null : (shipment.supplierId || null), isExport ? (shipment.buyerId || null) : null,
-      shipmentValueMajor, 0, shipment.currency || 'USD', now, now, now, shipment.company || 'GFPL', 'DRAFT', 'Auto-created from shipment',
+      newId, lcRef || ('AUTO-' + shipmentId), '—', isExport ? null : (shipment.supplierId || null), isExport ? (shipment.buyerId || null) : null,
+      shipmentValueMajor, shipmentValueMajor, shipment.currency || 'USD', now, now, now, shipment.company || 'GFPL', 'DRAFT', 'Auto-created from shipment',
       JSON.stringify([shipmentId])
     );
   } catch (e) {
     if (/no such column/.test(e.message)) {
       db.prepare('INSERT OR REPLACE INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, currency, issueDate, expiryDate, maturityDate, company, status, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
-        newId, lcRef, '—', isExport ? null : (shipment.supplierId || null), isExport ? (shipment.buyerId || null) : null,
+        newId, lcRef || ('AUTO-' + shipmentId), '—', isExport ? null : (shipment.supplierId || null), isExport ? (shipment.buyerId || null) : null,
         shipmentValueMajor, shipment.currency || 'USD', now, now, now, shipment.company || 'GFPL', 'DRAFT', 'Auto-created from shipment'
       );
     } else throw e;
@@ -576,10 +572,13 @@ function createRouter(broadcast) {
       if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
       if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file uploaded' });
       const rawName = req.file.originalname || 'upload';
+      const ext = (path.extname(rawName) || '').toLowerCase();
+      if (!ALLOWED_FILE_EXTENSIONS.includes(ext)) {
+        return res.status(400).json({ error: 'File type not allowed. Allowed types: PDF, JPG, PNG, XLSX, DOCX.' });
+      }
       const docTypeRaw = (req.query && typeof req.query.documentType === 'string') ? req.query.documentType.trim() : '';
       let baseName;
       if (docTypeRaw.startsWith('PAY_ADV_')) {
-        const ext = path.extname(rawName) || '.pdf';
         const safe = docTypeRaw.replace(/[/\\:*?"<>|]/g, '_').slice(0, 80);
         baseName = safe + ext;
       } else {

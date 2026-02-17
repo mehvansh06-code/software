@@ -28,13 +28,7 @@ const SIM_KEY = 'FLOTEX_PERSISTENT_V1';
 
 // Initialize Simulated Store with a "User Data Only" flag to prevent Sample data overwrites
 const getSimData = () => {
-  const saved = localStorage.getItem(SIM_KEY);
-  if (saved) {
-    const data = JSON.parse(saved);
-    if (!data.materials) data.materials = [];
-    return data;
-  }
-  return {
+  const defaultState = () => ({
     suppliers: [],
     buyers: [],
     shipments: [],
@@ -43,7 +37,20 @@ const getSimData = () => {
     materials: [],
     lastSync: new Date().toISOString(),
     isDirty: false
-  };
+  });
+  const saved = localStorage.getItem(SIM_KEY);
+  if (saved) {
+    try {
+      const data = JSON.parse(saved);
+      if (!data.materials) data.materials = [];
+      return data;
+    } catch {
+      console.warn('Corrupt or invalid data in localStorage (SIM_KEY), clearing entry.');
+      localStorage.removeItem(SIM_KEY);
+      return defaultState();
+    }
+  }
+  return defaultState();
 };
 
 const saveSimData = (data: any) => {
@@ -90,9 +97,6 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
     serverAvailable = true;
 
     if (response.status === 401) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'response 401', data: { endpoint: safeEndpoint }, timestamp: Date.now(), hypothesisId: 'C' }) }).catch(() => {});
-      // #endregion
       if (typeof window !== 'undefined') localStorage.removeItem('token');
       throw new Error('Session expired. Please log in again.');
     }
@@ -101,25 +105,24 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
       throw new Error(data?.error || 'Insufficient permissions for this action.');
     }
     if (!response.ok) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'response not ok', data: { endpoint: safeEndpoint, status: response.status }, timestamp: Date.now(), hypothesisId: 'C' }) }).catch(() => {});
-      // #endregion
-      const errBody = await response.json().catch(() => ({}));
-      const msg = errBody?.error || (response.status === 409 ? 'Conflict: the request could not be completed.' : 'Request failed.');
+      let errBody: any = {};
+      try {
+        errBody = await response.json();
+      } catch (_) {}
+      const msg = (errBody && typeof errBody === 'object' && errBody.error) ? errBody.error : (response.status === 409 ? 'Conflict: the request could not be completed.' : 'Request failed.');
       throw new Error(msg);
     }
 
-    return await response.json();
+    try {
+      return await response.json();
+    } catch (_) {
+      throw new Error('Invalid response from server');
+    }
   } catch (error: any) {
     clearTimeout(timeoutId);
     const isNetworkFailure =
       error?.name === 'AbortError' ||
       /failed to fetch|network error|load failed|connection refused/i.test(error?.message || '');
-    // #region agent log
-    if (isNetworkFailure) {
-      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:fetchApi', message: 'fetch catch', data: { endpoint: safeEndpoint, errName: error?.name, isNetworkFailure: true }, timestamp: Date.now(), hypothesisId: 'C' }) }).catch(() => {});
-    }
-    // #endregion
     if (isNetworkFailure) serverAvailable = false;
     return handleSimulatedRequest(safeEndpoint, options);
   }
@@ -194,8 +197,10 @@ export const api = {
     return fetch(`${API_BASE}/${safe}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    }).then((r) => r.json());
+      body: JSON.stringify({ username: String(username ?? ''), password: String(password ?? '') }),
+    })
+      .then((r) => r.json().catch(() => ({ success: false, error: 'Invalid response from server' })))
+      .then((data) => (data && typeof data === 'object' ? data : { success: false, error: 'Invalid response' }));
   },
   /** Permission groups and presets for UI matrix. */
   getPermissionGroups: (): Promise<{ groups: Array<{ id: string; label: string; permissions: string[] }>; presets: Record<string, string[]> }> =>
@@ -203,14 +208,17 @@ export const api = {
   /** Current user and fresh permissions from DB. Call after login or to re-sync without logging out. */
   auth: {
     me: (): Promise<{ id: string; username: string; name: string; role: string; permissions: string[]; allowedDomains?: string[] }> =>
-      fetchApi('auth/me').then((data: any) => ({
-        id: data.id,
-        username: data.username,
-        name: data.name,
-        role: data.role,
-        permissions: Array.isArray(data.permissions) ? data.permissions : [],
-        allowedDomains: Array.isArray(data.allowedDomains) ? data.allowedDomains : undefined,
-      })),
+      fetchApi('auth/me').then((data: any) => {
+        if (!data || typeof data !== 'object') throw new Error('Invalid response from server');
+        return {
+          id: String(data.id ?? ''),
+          username: String(data.username ?? ''),
+          name: String(data.name ?? ''),
+          role: String(data.role ?? 'VIEWER'),
+          permissions: Array.isArray(data.permissions) ? data.permissions : [],
+          allowedDomains: Array.isArray(data.allowedDomains) ? data.allowedDomains : undefined,
+        };
+      }),
   },
   users: {
     list: (): Promise<Array<{ id: string; username: string; name: string; role: string; permissions: string[]; allowedDomains?: string[] }>> =>

@@ -12,13 +12,13 @@ function createRouter() {
    * Requires system.audit_logs permission.
    * Exports logs older than olderThanDays to CSV and removes them from the DB.
    */
-  router.post('/export-and-archive', hasPermission('system.audit_logs'), (req, res) => {
+  router.post('/export-and-archive', hasPermission('system.audit_logs'), async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const query = req.query || {};
       const olderThanDays = body.olderThanDays ?? query.olderThanDays;
       const options = olderThanDays != null ? { olderThanDays: Math.max(1, parseInt(olderThanDays, 10)) } : {};
-      const result = exportAndArchive(db, options);
+      const result = await exportAndArchive(db, options);
       res.json({ success: true, count: result.count, filePath: result.filePath });
     } catch (e) {
       console.error('POST /api/audit-logs/export-and-archive:', e);

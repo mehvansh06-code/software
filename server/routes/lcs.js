@@ -47,9 +47,10 @@ function createRouter(broadcast) {
     }
   }
 
-  router.get('/', hasPermission('lc.view'), (req, res) => {
-    const rows = db.prepare('SELECT * FROM lcs').all();
-    res.json(rows.map(r => {
+  router.get('/', hasPermission('lc.view'), (req, res, next) => {
+    try {
+      const rows = db.prepare('SELECT * FROM lcs').all();
+      const result = (Array.isArray(rows) ? rows : []).map(r => {
       const paymentSummary = getLCPaymentSummary(r.id);
       const totalPaid = paymentSummary.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
       const amount = Number(r.amount) || 0;
@@ -64,10 +65,14 @@ function createRouter(broadcast) {
         balanceAmount,
         paymentSummary
       };
-    }));
+    });
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', hasPermission('lc.create'), (req, res) => {
     const l = req.body;
     if (!l || typeof l !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(l.id, 'LC ID');

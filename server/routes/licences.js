@@ -27,9 +27,13 @@ function createRouter(broadcast) {
     }
   }
 
-  router.get('/', hasPermission('licences.view'), (req, res) => {
-    const rows = db.prepare('SELECT * FROM licences').all();
-    res.json(rows.map(parseLicenceRow));
+  router.get('/', hasPermission('licences.view'), (req, res, next) => {
+    try {
+      const rows = db.prepare('SELECT * FROM licences').all();
+      res.json((Array.isArray(rows) ? rows : []).map(parseLicenceRow));
+    } catch (e) {
+      next(e);
+    }
   });
 
   router.post('/', hasPermission('licences.create'), (req, res) => {

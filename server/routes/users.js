@@ -103,21 +103,53 @@ function createRouter() {
     const allowedDomains = Array.isArray(b.allowedDomains) ? b.allowedDomains : undefined;
     const existing = db.prepare('SELECT id, username, name, role FROM users WHERE id = ?').get(idCheck.value);
     if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
+    const setClauses = [];
+    const values = [];
+    if (username !== undefined && username !== '') {
+      setClauses.push('username = ?');
+      values.push(username);
+    }
+    if (name !== undefined) {
+      setClauses.push('name = ?');
+      values.push(name);
+    }
+    if (role !== undefined) {
+      setClauses.push('role = ?');
+      values.push(role);
+    }
+    if (allowedDomains !== undefined) {
+      setClauses.push('allowedDomains = ?');
+      values.push(JSON.stringify(allowedDomains));
+    }
+    if (setClauses.length === 0) {
+      const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(idCheck.value);
+      let perms = [];
+      let domains = [];
+      try {
+        perms = JSON.parse(row.permissions || '[]');
+      } catch (_) {}
+      try {
+        domains = JSON.parse(row.allowedDomains || '[]');
+      } catch (_) {}
+      return res.json({
+        id: row.id,
+        username: row.username,
+        name: row.name,
+        role: row.role,
+        permissions: perms,
+        allowedDomains: domains,
+      });
+    }
     try {
-      if (username !== undefined && username !== '') {
-        const conflict = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, idCheck.value);
-        if (conflict) return res.status(400).json({ success: false, error: 'Username already in use' });
-        db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, idCheck.value);
-      }
-      if (name !== undefined) {
-        db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, idCheck.value);
-      }
-      if (role !== undefined) {
-        db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, idCheck.value);
-      }
-      if (allowedDomains !== undefined) {
-        db.prepare('UPDATE users SET allowedDomains = ? WHERE id = ?').run(JSON.stringify(allowedDomains), idCheck.value);
-      }
+      db.transaction(() => {
+        if (username !== undefined && username !== '') {
+          const conflict = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, idCheck.value);
+          if (conflict) throw new Error('USERNAME_IN_USE');
+        }
+        const sql = `UPDATE users SET ${setClauses.join(', ')} WHERE id = ?`;
+        values.push(idCheck.value);
+        db.prepare(sql).run(...values);
+      });
       const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(idCheck.value);
       let perms = [];
       let domains = [];
@@ -138,6 +170,9 @@ function createRouter() {
         allowedDomains: domains,
       });
     } catch (e) {
+      if (e.message === 'USERNAME_IN_USE') {
+        return res.status(400).json({ success: false, error: 'Username already in use' });
+      }
       console.error('PUT /users/:id:', e);
       res.status(500).json({ success: false, error: e.message });
     }

@@ -2,7 +2,10 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 const { PRESETS } = require('../constants/permissions');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'flotex-ims-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || typeof JWT_SECRET !== 'string' || JWT_SECRET.trim() === '') {
+  throw new Error('JWT_SECRET environment variable is required. Set it in .env with a long random string (e.g. 64 characters).');
+}
 
 /**
  * Middleware: verifies JWT from 'Authorization: Bearer <token>' header.
@@ -12,14 +15,6 @@ const JWT_SECRET = process.env.JWT_SECRET || 'flotex-ims-secret-change-in-produc
 function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
-    // #region agent log
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      const logPath = path.join(__dirname, '..', '..', '.cursor', 'debug.log');
-      fs.appendFileSync(logPath, JSON.stringify({ location: 'auth.js:verifyToken', message: '401 no bearer', data: { hasHeader: !!authHeader }, hypothesisId: 'A', timestamp: Date.now() }) + '\n');
-    } catch (_) {}
-    // #endregion
     return res.status(401).json({ success: false, error: 'Authorization required' });
   }
   const token = authHeader.slice(7).trim();
@@ -52,14 +47,6 @@ function verifyToken(req, res, next) {
     req.user = { id: userId, role: role || 'VIEWER', permissions: Array.isArray(preset) ? preset : [] };
     next();
   } catch (err) {
-    // #region agent log
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      const logPath = path.join(__dirname, '..', '..', '.cursor', 'debug.log');
-      fs.appendFileSync(logPath, JSON.stringify({ location: 'auth.js:verifyToken', message: '401 invalid or expired token', data: { errName: err && err.name }, hypothesisId: 'A', timestamp: Date.now() }) + '\n');
-    } catch (_) {}
-    // #endregion
     return res.status(401).json({ success: false, error: 'Invalid or expired token' });
   }
 }

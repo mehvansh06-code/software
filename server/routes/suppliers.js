@@ -6,12 +6,17 @@ const { log: auditLog } = require('../services/auditService');
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', hasPermission('suppliers.view'), (req, res) => {
-    const rows = db.prepare('SELECT * FROM suppliers').all();
-    rows.forEach(s => {
-      s.products = db.prepare('SELECT * FROM products WHERE supplierId = ?').all(s.id);
-    });
-    res.json(rows);
+  router.get('/', hasPermission('suppliers.view'), (req, res, next) => {
+    try {
+      const rows = db.prepare('SELECT * FROM suppliers').all();
+      const result = Array.isArray(rows) ? rows.map(s => {
+        const products = db.prepare('SELECT * FROM products WHERE supplierId = ?').all(s.id);
+        return { ...s, products: Array.isArray(products) ? products : [] };
+      }) : [];
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
   });
 
   router.post('/', hasPermission('suppliers.create'), (req, res) => {
@@ -106,6 +111,33 @@ function createRouter(broadcast) {
     auditLog(db, userId, 'SUPPLIER_UPDATED', idCheck.value, { name: s.name });
     res.json({ success: true });
     broadcast();
+  });
+
+  router.delete('/:id', hasPermission('suppliers.delete'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'Supplier ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const id = idCheck.value;
+    try {
+      const row = db.prepare('SELECT id, name FROM suppliers WHERE id = ?').get(id);
+      if (!row) return res.status(404).json({ success: false, error: 'Supplier not found' });
+      const linked = db.prepare('SELECT COUNT(*) AS n FROM shipments WHERE supplierId = ?').get(id);
+      const count = linked && linked.n != null ? Number(linked.n) : 0;
+      if (count > 0) {
+        return res.status(409).json({
+          success: false,
+          error: `Cannot delete supplier: ${count} shipment(s) are linked. Unlink them first.`
+        });
+      }
+      db.prepare('DELETE FROM products WHERE supplierId = ?').run(id);
+      db.prepare('DELETE FROM suppliers WHERE id = ?').run(id);
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'SUPPLIER_DELETED', id, { name: row.name });
+      res.json({ success: true });
+      broadcast();
+    } catch (e) {
+      console.error('DELETE /suppliers/:id', e);
+      res.status(500).json({ success: false, error: e.message || 'Failed to delete supplier' });
+    }
   });
 
   return router;

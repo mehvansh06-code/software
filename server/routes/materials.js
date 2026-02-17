@@ -5,8 +5,13 @@ const { validateId } = require('../middleware');
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
-    res.json(db.prepare('SELECT * FROM materials').all());
+  router.get('/', (req, res, next) => {
+    try {
+      const rows = db.prepare('SELECT * FROM materials').all();
+      res.json(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      next(e);
+    }
   });
 
   router.post('/', (req, res) => {

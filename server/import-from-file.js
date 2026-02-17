@@ -99,13 +99,17 @@ function importSuppliers(rows) {
   const filtered = rows.map(mapToSupplier).filter((r) => r.name && r.country);
   if (filtered.length === 0) return 0;
   const now = new Date().toISOString();
+  const findByName = db.prepare('SELECT id FROM suppliers WHERE name = ? LIMIT 1');
+  const update = db.prepare(
+    `UPDATE suppliers SET name=?, address=?, country=?, bankName=?, accountHolderName=?, accountNumber=?, swiftCode=?, bankAddress=?, contactPerson=?, contactDetails=?, status=?, requestedBy=?, createdAt=?, hasIntermediaryBank=?, intermediaryBankName=?, intermediaryAccountHolderName=?, intermediaryAccountNumber=?, intermediarySwiftCode=?, intermediaryBankAddress=? WHERE id=?`
+  );
   const insert = db.prepare(
-    `INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const r of filtered) {
-    const id = 's_' + Math.random().toString(36).slice(2, 11);
-    insert.run(
-      id,
+    const existing = findByName.get(r.name.trim());
+    const id = existing ? existing.id : 's_' + Math.random().toString(36).slice(2, 11);
+    const vals = [
       r.name,
       r.address || '',
       r.country,
@@ -124,8 +128,13 @@ function importSuppliers(rows) {
       null,
       null,
       null,
-      null
-    );
+      null,
+    ];
+    if (existing) {
+      update.run(...vals, id);
+    } else {
+      insert.run(id, ...vals);
+    }
   }
   return filtered.length;
 }
@@ -134,13 +143,17 @@ function importBuyers(rows) {
   const filtered = rows.map(mapToBuyer).filter((r) => r.name && r.country);
   if (filtered.length === 0) return 0;
   const now = new Date().toISOString();
-  const stmt = db.prepare(
-    `INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  const findByName = db.prepare('SELECT id FROM buyers WHERE name = ? LIMIT 1');
+  const update = db.prepare(
+    `UPDATE buyers SET name=?, address=?, country=?, bankName=?, accountHolderName=?, accountNumber=?, swiftCode=?, bankAddress=?, contactPerson=?, contactDetails=?, salesPersonName=?, salesPersonContact=?, hasConsignee=?, status=?, requestedBy=?, createdAt=?, consignees_json=? WHERE id=?`
+  );
+  const insert = db.prepare(
+    `INSERT INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const r of filtered) {
-    const id = 'b_' + Math.random().toString(36).slice(2, 11);
-    stmt.run(
-      id,
+    const existing = findByName.get(r.name.trim());
+    const id = existing ? existing.id : 'b_' + Math.random().toString(36).slice(2, 11);
+    const vals = [
       r.name,
       r.address || '',
       r.country,
@@ -157,8 +170,13 @@ function importBuyers(rows) {
       'APPROVED',
       'File import',
       now,
-      null
-    );
+      null,
+    ];
+    if (existing) {
+      update.run(...vals, id);
+    } else {
+      insert.run(id, ...vals);
+    }
   }
   return filtered.length;
 }
@@ -166,16 +184,22 @@ function importBuyers(rows) {
 function importMaterials(rows) {
   const filtered = rows.map(mapToMaterial).filter((r) => r.name && r.name.trim());
   if (filtered.length === 0) return 0;
+  const findByName = db.prepare('SELECT id FROM materials WHERE name = ? LIMIT 1');
+  const update = db.prepare('UPDATE materials SET name=?, description=?, hsnCode=?, unit=?, type=? WHERE id=?');
+  const insert = db.prepare('INSERT INTO materials (id, name, description, hsnCode, unit, type) VALUES (?,?,?,?,?,?)');
   for (const r of filtered) {
-    const id = 'm_' + Math.random().toString(36).slice(2, 11);
-    db.prepare('INSERT OR REPLACE INTO materials VALUES (?,?,?,?,?,?)').run(
-      id,
-      r.name,
-      r.description || null,
-      r.hsnCode || null,
-      r.unit || 'KGS',
-      r.type || null
-    );
+    const existing = findByName.get(r.name.trim());
+    const id = existing ? existing.id : 'm_' + Math.random().toString(36).slice(2, 11);
+    const name = r.name;
+    const description = r.description || null;
+    const hsnCode = r.hsnCode || null;
+    const unit = r.unit || 'KGS';
+    const type = r.type || null;
+    if (existing) {
+      update.run(name, description, hsnCode, unit, type, id);
+    } else {
+      insert.run(id, name, description, hsnCode, unit, type);
+    }
   }
   return filtered.length;
 }

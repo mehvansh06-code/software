@@ -76,19 +76,27 @@ const App: React.FC = () => {
     );
   }
 
+  const safeUser = user ?? null;
+  const safeDomain = domain ?? null;
+  const safeShipments = Array.isArray(shipments) ? shipments : [];
+  const safeSuppliers = Array.isArray(suppliers) ? suppliers : [];
+  const safeBuyers = Array.isArray(buyers) ? buyers : [];
+  const safeLicences = Array.isArray(licences) ? licences : [];
+  const safeLcs = Array.isArray(lcs) ? lcs : [];
+
   return (
     <HashRouter>
       <DomainRoutes
-        domain={domain}
-        user={user}
+        domain={safeDomain!}
+        user={safeUser!}
         setDomain={setDomain}
         onLogout={handleLogout}
-        shipments={shipments}
-        suppliers={suppliers}
-        buyers={buyers}
-        licences={licences}
-        lcs={lcs}
-        connectionMode={connectionMode}
+        shipments={safeShipments}
+        suppliers={safeSuppliers}
+        buyers={safeBuyers}
+        licences={safeLicences}
+        lcs={safeLcs}
+        connectionMode={connectionMode ?? 'SQL'}
         onRefreshData={refreshData}
         handleAddShipment={handleAddShipment}
         handleUpdateShipment={handleUpdateShipment}

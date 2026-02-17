@@ -16,6 +16,9 @@ const db = require('../db');
 
 const router = express.Router();
 
+const maxConcurrentOcrJobs = 2;
+let currentOcrJobs = 0;
+
 function isPdfBuffer(buffer) {
   return Buffer.isBuffer(buffer) && buffer.length >= 4 && buffer.subarray(0, 4).toString() === '%PDF';
 }
@@ -53,6 +56,13 @@ router.post('/extract', verifyToken, (req, res, next) => {
     next();
   });
 }, async (req, res) => {
+  if (currentOcrJobs >= maxConcurrentOcrJobs) {
+    return res.status(429).json({
+      success: false,
+      error: 'Server is busy processing other documents. Please try again in a moment.',
+    });
+  }
+  currentOcrJobs++;
   try {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ success: false, error: 'No file uploaded. Use field name "file".' });
@@ -150,6 +160,8 @@ router.post('/extract', verifyToken, (req, res, next) => {
       success: false,
       error: err.message || 'OCR extraction failed.',
     });
+  } finally {
+    currentOcrJobs--;
   }
 });
 
@@ -167,6 +179,13 @@ router.post('/upload-and-scan', verifyToken, hasPermission('documents.upload'), 
     next();
   });
 }, async (req, res) => {
+  if (currentOcrJobs >= maxConcurrentOcrJobs) {
+    return res.status(429).json({
+      success: false,
+      error: 'Server is busy processing other documents. Please try again in a moment.',
+    });
+  }
+  currentOcrJobs++;
   try {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ success: false, error: 'No file uploaded. Use field name "file".' });
@@ -223,6 +242,8 @@ router.post('/upload-and-scan', verifyToken, hasPermission('documents.upload'), 
       success: false,
       error: err.message || 'Upload and scan failed.',
     });
+  } finally {
+    currentOcrJobs--;
   }
 });
 

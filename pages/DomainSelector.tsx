@@ -18,7 +18,9 @@ interface DomainSelectorProps {
   onLogout: () => void;
 }
 
-const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName, role, allowedDomains, onLogout }) => {
+const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName = '', role, allowedDomains, onLogout }) => {
+  const safeName = typeof userName === 'string' ? userName : 'User';
+  const safeRole = (role ?? 'VIEWER') as UserRole;
   const domainsToShow =
     Array.isArray(allowedDomains) && allowedDomains.length > 0
       ? ALL_DOMAINS.filter((d) => allowedDomains.includes(d.domain))
@@ -38,10 +40,10 @@ const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName, rol
             <Grid className="text-indigo-600 shrink-0" size={18} />
             <span className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-widest">Management Hub Selection</span>
           </div>
-          <h1 className="text-2xl sm:text-4xl font-black text-slate-900 mb-2">Welcome back, {userName.split(' ')[0]}</h1>
+          <h1 className="text-2xl sm:text-4xl font-black text-slate-900 mb-2">Welcome back, {safeName.split(' ')[0] || 'User'}</h1>
           <div className="flex items-center justify-center gap-2 text-slate-500 font-medium">
              <ShieldCheck size={16} className="text-emerald-500" />
-             <span>Logged in as <span className="text-slate-900 font-black">{role}</span></span>
+             <span>Logged in as <span className="text-slate-900 font-black">{safeRole}</span></span>
           </div>
         </header>
 

@@ -57,15 +57,15 @@ export function useAppData(): UseAppDataReturn {
     lastLoadAllDataRef.current = Date.now();
     try {
       const [s, b, sh, l, lc] = await Promise.all([
-        api.suppliers.list(),
-        api.buyers.list(),
-        api.shipments.list(),
-        api.licences.list(),
-        api.lcs.list()
+        api.suppliers.list().catch(() => []),
+        api.buyers.list().catch(() => []),
+        api.shipments.list().catch(() => []),
+        api.licences.list().catch(() => []),
+        api.lcs.list().catch(() => []),
       ]);
-      setSuppliers(s || []);
-      setBuyers(b || []);
-      const fromApi = sh || [];
+      setSuppliers(Array.isArray(s) ? s : []);
+      setBuyers(Array.isArray(b) ? b : []);
+      const fromApi = Array.isArray(sh) ? sh : [];
       const fromLocal = api.system.getLocalShipments();
       setShipments(prev => {
         const inApi = (id: string) => fromApi.some((x: Shipment) => x.id === id);
@@ -78,16 +78,10 @@ export function useAppData(): UseAppDataReturn {
         });
         return merged;
       });
-      setLicences(l || []);
-      setLcs(lc || []);
+      setLicences(Array.isArray(l) ? l : []);
+      setLcs(Array.isArray(lc) ? lc : []);
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:loadAllData', message: 'loadAllData success', data: { suppliers: (s || []).length, buyers: (b || []).length, shipments: (fromApi || []).length, licences: (l || []).length, lcs: (lc || []).length }, timestamp: Date.now(), hypothesisId: 'B' }) }).catch(() => {});
-      // #endregion
     } catch (err) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:loadAllData', message: 'loadAllData failed', data: { err: String((err as Error).message) }, timestamp: Date.now(), hypothesisId: 'B' }) }).catch(() => {});
-      // #endregion
       console.error('Data refresh failed:', err);
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
     }
@@ -109,9 +103,6 @@ export function useAppData(): UseAppDataReturn {
     }
 
     const init = async () => {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:init', message: 'init started', data: {}, timestamp: Date.now(), hypothesisId: 'B' }) }).catch(() => {});
-      // #endregion
       // Set server online/offline from health check first (no auth), so UI shows correct status
       await api.system.ping();
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
@@ -121,9 +112,6 @@ export function useAppData(): UseAppDataReturn {
       if (token) {
         try {
           const me = await api.auth.me();
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:init', message: 'auth/me success', data: { userId: me.id, allowedDomainsCount: Array.isArray(me.allowedDomains) ? me.allowedDomains.length : 0 }, timestamp: Date.now(), hypothesisId: 'A' }) }).catch(() => {});
-          // #endregion
           const updated: User = {
             id: me.id,
             username: me.username,
@@ -143,9 +131,14 @@ export function useAppData(): UseAppDataReturn {
             }
           }
         } catch (e) {
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'useAppData.ts:init', message: 'auth/me catch', data: { err: String((e as Error).message) }, timestamp: Date.now(), hypothesisId: 'A' }) }).catch(() => {});
-          // #endregion
+          // Session invalid or API failed: clear token and user so UI shows login
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            localStorage.removeItem('domain');
+          }
+          setUser(null);
+          setDomain(null);
         }
       }
       setIsLoading(false);
@@ -277,22 +270,26 @@ export function useAppData(): UseAppDataReturn {
   const handleUpdateLicence = useCallback(async (updated: Licence) => {
     await api.licences.update(updated.id, updated);
     setLicences(prev => prev.map(l => (l.id === updated.id ? updated : l)));
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleDeleteLicence = useCallback(async (id: string) => {
     await api.licences.delete(id);
     setLicences(prev => prev.filter(l => l.id !== id));
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleUpdateLC = useCallback(async (updated: LetterOfCredit) => {
     await api.lcs.update(updated.id, updated);
     setLcs(prev => prev.map(l => (l.id === updated.id ? updated : l)));
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleDeleteLC = useCallback(async (id: string) => {
     await api.lcs.delete(id);
     setLcs(prev => prev.filter(l => l.id !== id));
-  }, []);
+    await loadAllData();
+  }, [loadAllData]);
 
   const handleLogin = useCallback((u: User) => {
     setUser(u);

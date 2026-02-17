@@ -2,6 +2,13 @@ const MAX_ID_LENGTH = 128;
 const SAFE_ID_REGEX = /^[a-zA-Z0-9_\-\.]+$/;
 const { verifyToken, requireRole, hasPermission, JWT_SECRET } = require('./middleware/auth');
 
+/** Wraps async route handlers so rejections are passed to Express error handler. */
+function asyncHandler(fn) {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 function validateId(id, label) {
   if (id == null || typeof id !== 'string') return { valid: false, message: (label || 'ID') + ' is required' };
   const trimmed = id.trim();
@@ -12,4 +19,4 @@ function validateId(id, label) {
   return { valid: true, value: trimmed };
 }
 
-module.exports = { validateId, verifyToken, requireRole, hasPermission, JWT_SECRET };
+module.exports = { validateId, verifyToken, requireRole, hasPermission, JWT_SECRET, asyncHandler };

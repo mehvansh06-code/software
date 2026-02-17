@@ -12,30 +12,13 @@ from tkcalendar import DateEntry
 import openpyxl
 from openpyxl import Workbook
 
-# #region agent log
-DEBUG_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".cursor", "debug.log")
-def _dbg(msg, data=None, hypothesis_id=None, location=""):
-    try:
-        payload = {"id": f"log_{int(time.time()*1000)}", "timestamp": int(time.time()*1000), "location": location, "message": msg, "runId": "startup"}
-        if data is not None: payload["data"] = data
-        if hypothesis_id: payload["hypothesisId"] = hypothesis_id
-        path = os.path.normpath(DEBUG_LOG_PATH)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, default=str) + "\n")
-    except Exception:
-        pass
-# #endregion
-
 # =================================================
 # CRITICAL FIX FOR "NoneType has no attribute write"
 # =================================================
-_dbg("before_stdout_redirect", {"sys_stdout": str(sys.stdout), "sys_stderr": str(sys.stderr)}, "E", "MAIN:18")
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
-_dbg("after_stdout_redirect", {}, "E", "MAIN:24")
 
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm, Mm
@@ -51,10 +34,6 @@ try:
     PDF_SUPPORT = True
 except ImportError:
     PDF_SUPPORT = False
-
-# #region agent log
-_dbg("imports_done", {"PDF_SUPPORT": PDF_SUPPORT}, "A", "MAIN:55")
-# #endregion
 
 # =================================================
 # CONFIGURATION & CONSTANTS
@@ -367,17 +346,11 @@ class DataManager:
 
     @staticmethod
     def load_data():
-        # #region agent log
-        _dbg("load_data_start", {"DATA_DIR": DATA_DIR}, "D", "DataManager:load_data")
-        # #endregion
         DataManager.products = []
         DataManager.products_map = {}
         
         # 1. Load Products
         p_path = os.path.join(DATA_DIR, "products.xlsx")
-        # #region agent log
-        _dbg("load_data_products_path", {"p_path": p_path, "exists": os.path.exists(p_path)}, "D", "DataManager:load_data")
-        # #endregion
         if os.path.exists(p_path):
             try:
                 wb = openpyxl.load_workbook(p_path, data_only=True)
@@ -426,33 +399,18 @@ class DataManager:
                         DataManager.products_map[prod_obj["quality"]].append(prod_obj)
 
                 logging.info(f"Loaded products: {len(DataManager.products)}")
-                # #region agent log
-                _dbg("load_data_products_done", {"n_products": len(DataManager.products)}, "D", "DataManager:load_data")
-                # #endregion
             except Exception as e:
-                # #region agent log
-                _dbg("load_data_products_exception", {"err": str(e)}, "D", "DataManager:load_data")
-                # #endregion
                 logging.error(f"Products Load Error: {e}")
         else:
             logging.warning(f"products.xlsx not found")
 
         # 2. AUTO-SPLIT LOGIC (FORCED)
         master_path = os.path.join(DATA_DIR, "customers.xlsx")
-        # #region agent log
-        _dbg("load_data_before_autosplit", {"master_path": master_path, "exists": os.path.exists(master_path)}, "D", "DataManager:load_data")
-        # #endregion
         if os.path.exists(master_path):
             DataManager._auto_split_master_file(master_path)
-        # #region agent log
-        _dbg("load_data_before_customers", {}, "D", "DataManager:load_data")
-        # #endregion
         # 3. Load Files
         DataManager.customers_domestic = DataManager._load_customer_file("customers_domestic.xlsx", is_export=False)
         DataManager.customers_export = DataManager._load_customer_file("customers_export.xlsx", is_export=True)
-        # #region agent log
-        _dbg("load_data_end", {"n_domestic": len(DataManager.customers_domestic), "n_export": len(DataManager.customers_export)}, "D", "DataManager:load_data")
-        # #endregion
 
 
 # =================================================
@@ -812,25 +770,13 @@ class ProductPopup(ctk.CTkToplevel):
 # =================================================
 class App(ctk.CTk):
     def __init__(self):
-        # #region agent log
-        _dbg("App_init_start", {}, "B", "App:__init__")
-        # #endregion
         super().__init__()
-        # #region agent log
-        _dbg("App_after_super_init", {}, "B", "App:__init__")
-        # #endregion
         self.title("Gujarat Flotex Sales Indent v16.1")
         self.geometry("1500x950")
         self.cart = []
         self._data_loaded = False
         self._init_sidebar()
-        # #region agent log
-        _dbg("App_after_init_sidebar", {}, "B", "App:__init__")
-        # #endregion
         self._init_main_area()
-        # #region agent log
-        _dbg("App_after_init_main_area", {}, "B", "App:__init__")
-        # #endregion
         self._bind_keys()
         self._toggle_export_ui("Domestic")
         self._reset_form_only(show_message=False)
@@ -839,9 +785,6 @@ class App(ctk.CTk):
         self._loading_label.pack(pady=(8, 0))
         self.after(50, self._start_data_load)
         self.update_idletasks()
-        # #region agent log
-        _dbg("App_init_complete", {}, "B", "App:__init__")
-        # #endregion
 
     def _bind_keys(self):
         def _on_enter(event):
@@ -853,22 +796,10 @@ class App(ctk.CTk):
 
     def _start_data_load(self):
         """Run data loading in a background thread so UI stays responsive."""
-        # #region agent log
-        _dbg("_start_data_load_entered", {}, "C", "App:_start_data_load")
-        # #endregion
         def load():
-            # #region agent log
-            _dbg("thread_load_start", {}, "C", "load_thread")
-            # #endregion
             try:
                 DataManager.load_data()
-                # #region agent log
-                _dbg("thread_load_done", {}, "C", "load_thread")
-                # #endregion
             except Exception as e:
-                # #region agent log
-                _dbg("thread_load_exception", {"err": str(e), "type": type(e).__name__}, "C", "load_thread")
-                # #endregion
                 logging.error(f"Data load error: {e}")
             # Defer UI update by one event-loop tick so the window can paint and stay responsive (avoids "Not responding")
             self.after(0, lambda: self.after(1, self._on_data_loaded))
@@ -876,17 +807,11 @@ class App(ctk.CTk):
 
     def _on_data_loaded(self):
         """Called on main thread after background load finishes; refresh dropdowns."""
-        # #region agent log
-        _dbg("_on_data_loaded_entered", {"has_loading_label": hasattr(self, "_loading_label"), "runId": "post-fix"}, "C", "App:_on_data_loaded")
-        # #endregion
         self._data_loaded = True
         if hasattr(self, "_loading_label") and self._loading_label.winfo_exists():
             self._loading_label.configure(text="Ready")
         self._on_txn_type_change(self.txn_var.get())
         self.prod_search.configure(values=[PH_PRODUCT] + list(DataManager.products_map.keys()))
-        # #region agent log
-        _dbg("_on_data_loaded_done", {}, "C", "App:_on_data_loaded")
-        # #endregion
 
     def _init_sidebar(self):
         self.sidebar = ctk.CTkFrame(self, width=280, corner_radius=0, fg_color="#F5F5F5")

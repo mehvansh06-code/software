@@ -1,4 +1,7 @@
 require('dotenv').config();
+const { validateEnv } = require('./server/envValidation');
+validateEnv();
+
 const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
@@ -101,35 +104,18 @@ const FALLBACK_USERS = [
 const FALLBACK_PASSWORD_HASH = bcrypt.hashSync('admin123', 10);
 const DEFAULT_ALLOWED_DOMAINS = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
 
-const DEBUG_LOG_PATH = path.join(__dirname, '.cursor', 'debug.log');
-function debugLog(payload) {
-  try {
-    const line = JSON.stringify({ ...payload, timestamp: Date.now() }) + '\n';
-    fs.appendFileSync(DEBUG_LOG_PATH, line);
-  } catch (_) {}
-}
-
 function handleLogin(req, res) {
   const { username, password } = req.body || {};
   if (!username || !password) {
-    // #region agent log
-    debugLog({ location: 'server.js:handleLogin', message: 'Login validation failed', data: { reason: 'missing_credentials' }, hypothesisId: 'A' });
-    // #endregion
     return res.status(400).json({ success: false, error: 'Username and password required' });
   }
   // 1) Env admin takes precedence when set
   if (ADMIN_USERNAME && ADMIN_PASSWORD_HASH) {
     if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
-      // #region agent log
-      debugLog({ location: 'server.js:handleLogin', message: 'Login failed', data: { path: 'env_admin', success: false }, hypothesisId: 'A' });
-      // #endregion
       return res.status(401).json({ success: false, error: 'Invalid username or password' });
     }
     const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [], allowedDomains: ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'] };
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    // #region agent log
-    debugLog({ location: 'server.js:handleLogin', message: 'Login success', data: { path: 'env_admin', success: true, userId: user.id }, hypothesisId: 'A' });
-    // #endregion
     return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions: user.permissions, allowedDomains: user.allowedDomains } });
   }
   // 2) DB users (from permission migration)
@@ -149,26 +135,17 @@ function handleLogin(req, res) {
       }
       const user = { id: row.id, username: row.username, name: row.name, role: row.role, permissions, allowedDomains };
       const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-      // #region agent log
-      debugLog({ location: 'server.js:handleLogin', message: 'Login success', data: { path: 'db', success: true, userId: user.id, allowedDomainsCount: allowedDomains.length }, hypothesisId: 'A' });
-      // #endregion
       return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
     }
   } catch (_) {}
   // 3) Legacy in-memory fallback (no users table or no matching DB user)
   const user = FALLBACK_USERS.find((u) => u.username === username);
   if (!user || !bcrypt.compareSync(password, FALLBACK_PASSWORD_HASH)) {
-    // #region agent log
-    debugLog({ location: 'server.js:handleLogin', message: 'Login failed', data: { path: 'fallback', success: false }, hypothesisId: 'A' });
-    // #endregion
     return res.status(401).json({ success: false, error: 'Invalid username or password' });
   }
   const permissions = PRESETS[user.role] || PRESETS.VIEWER || [];
   const allowedDomains = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
   const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-  // #region agent log
-  debugLog({ location: 'server.js:handleLogin', message: 'Login success', data: { path: 'fallback', success: true, userId: user.id }, hypothesisId: 'A' });
-  // #endregion
   res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
 }
 
@@ -198,9 +175,6 @@ app.get('/api/permission-groups', (req, res) => {
 app.get('/api/auth/me', (req, res) => {
   const id = req.user && req.user.id;
   if (!id) {
-    // #region agent log
-    debugLog({ location: 'server.js:auth/me', message: 'auth/me unauthenticated', data: { hasUser: false }, hypothesisId: 'A' });
-    // #endregion
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
   try {
@@ -217,9 +191,6 @@ app.get('/api/auth/me', (req, res) => {
       if (!Array.isArray(allowedDomains) || allowedDomains.length === 0) {
         allowedDomains = DEFAULT_ALLOWED_DOMAINS;
       }
-      // #region agent log
-      debugLog({ location: 'server.js:auth/me', message: 'auth/me from DB', data: { userId: id, allowedDomainsCount: allowedDomains.length }, hypothesisId: 'D' });
-      // #endregion
       return res.json({
         id: row.id,
         username: row.username,
@@ -233,9 +204,6 @@ app.get('/api/auth/me', (req, res) => {
   // Not in DB (env admin or legacy): return from token + preset permissions
   const name = req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id;
   const allowedDomains = req.user.allowedDomains || ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
-  // #region agent log
-  debugLog({ location: 'server.js:auth/me', message: 'auth/me from token', data: { userId: id, allowedDomainsCount: allowedDomains.length }, hypothesisId: 'D' });
-  // #endregion
   res.json({
     id: req.user.id,
     username: req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id,
@@ -262,44 +230,59 @@ app.use('/api/audit-logs', auditRoutes());
 // Audit log export: every 10 days, export logs older than AUDIT_ARCHIVE_DAYS to CSV and remove from DB
 const AUDIT_EXPORT_INTERVAL_MS = 10 * 24 * 60 * 60 * 1000;
 setInterval(() => {
-  try {
-    const result = exportAndArchive(db, {});
-    if (result.count > 0) {
-      console.log(`Audit export: ${result.count} log(s) archived to ${result.filePath}`);
-    }
-  } catch (e) {
-    console.error('Audit export-and-archive failed:', e.message);
-  }
+  exportAndArchive(db, {})
+    .then((result) => {
+      if (result.count > 0) {
+        console.log(`Audit export: ${result.count} log(s) archived to ${result.filePath}`);
+      }
+    })
+    .catch((e) => {
+      console.error('Audit export-and-archive failed:', e.message);
+    });
 }, AUDIT_EXPORT_INTERVAL_MS);
 
-app.get('/api/lc-transactions', (req, res) => {
+app.get('/api/lc-transactions', (req, res, next) => {
   try {
-    res.json(db.prepare('SELECT * FROM lc_transactions ORDER BY createdAt DESC').all());
+    const rows = db.prepare('SELECT * FROM lc_transactions ORDER BY createdAt DESC').all();
+    res.json(Array.isArray(rows) ? rows : []);
   } catch (e) {
-    res.json([]);
+    next(e);
   }
 });
 
-app.get('/api/stats', (req, res) => {
-  res.json({
-    suppliers: db.prepare('SELECT COUNT(*) as c FROM suppliers').get().c,
-    buyers: db.prepare('SELECT COUNT(*) as c FROM buyers').get().c,
-    shipments: db.prepare('SELECT COUNT(*) as c FROM shipments').get().c,
-    licences: db.prepare('SELECT COUNT(*) as c FROM licences').get().c,
-    lcs: db.prepare('SELECT COUNT(*) as c FROM lcs').get().c,
-    lastSync: new Date().toISOString()
-  });
+app.get('/api/stats', (req, res, next) => {
+  try {
+    const suppliers = db.prepare('SELECT COUNT(*) as c FROM suppliers').get();
+    const buyers = db.prepare('SELECT COUNT(*) as c FROM buyers').get();
+    const shipments = db.prepare('SELECT COUNT(*) as c FROM shipments').get();
+    const licences = db.prepare('SELECT COUNT(*) as c FROM licences').get();
+    const lcs = db.prepare('SELECT COUNT(*) as c FROM lcs').get();
+    res.json({
+      suppliers: (suppliers && typeof suppliers.c === 'number') ? suppliers.c : 0,
+      buyers: (buyers && typeof buyers.c === 'number') ? buyers.c : 0,
+      shipments: (shipments && typeof shipments.c === 'number') ? shipments.c : 0,
+      licences: (licences && typeof licences.c === 'number') ? licences.c : 0,
+      lcs: (lcs && typeof lcs.c === 'number') ? lcs.c : 0,
+      lastSync: new Date().toISOString(),
+    });
+  } catch (e) {
+    next(e);
+  }
 });
 
+// 404 handler (must be after all routes)
 app.use((req, res) => {
   const pathStr = req.method + ' ' + (req.originalUrl || req.url);
   res.status(404).json({ success: false, message: 'Not found', path: pathStr });
 });
 
+// Global error handler: catch sync throws and async rejections from route handlers
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
+  const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+  const message = err.message && typeof err.message === 'string' ? err.message : 'Internal server error';
   console.error('Unhandled error:', err);
-  res.status(500).json({ success: false, message: 'Internal server error' });
+  res.status(status).json({ success: false, message, error: process.env.NODE_ENV === 'development' ? (err.stack || undefined) : undefined });
 });
 
 server.on('error', (err) => {

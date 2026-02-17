@@ -76,77 +76,121 @@ function detailsToSummary(detailsStr) {
   }
 }
 
+const BATCH_SIZE = 500;
+
+function escapeCsv(val) {
+  const s = val == null ? '' : String(val);
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+function rowToCsvLine(r) {
+  const userName = r.userName || r.userId || 'System';
+  const actionLabel = getActionLabel(r.action);
+  const detailsSummary = detailsToSummary(r.details);
+  const summary = `${userName} ${actionLabel}${r.targetId ? ' #' + r.targetId : ''}${detailsSummary ? ': ' + detailsSummary : ''}`;
+  return [
+    r.id,
+    r.timestamp,
+    escapeCsv(r.userId),
+    escapeCsv(userName),
+    escapeCsv(r.action),
+    escapeCsv(actionLabel),
+    escapeCsv(r.targetId),
+    escapeCsv(r.details),
+    escapeCsv(summary),
+  ].join(',');
+}
+
 /**
  * Export audit logs older than olderThanDays to a CSV file and delete them from the DB.
+ * Processes rows in batches of 500 to avoid loading tens of thousands of rows into memory.
  * @param {object} db - Database instance
  * @param {{ olderThanDays?: number }} options - optional; olderThanDays defaults to AUDIT_ARCHIVE_DAYS
- * @returns {{ count: number, filePath: string }} count of rows exported, absolute path of file
+ * @returns {Promise<{ count: number, filePath: string | null }>} count of rows exported, absolute path of file
  */
 function exportAndArchive(db, options = {}) {
-  const olderThanDays = options.olderThanDays ?? AUDIT_ARCHIVE_DAYS;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - olderThanDays);
-  const cutoffStr = cutoff.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  return new Promise((resolve, reject) => {
+    const olderThanDays = options.olderThanDays ?? AUDIT_ARCHIVE_DAYS;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - olderThanDays);
+    const cutoffStr = cutoff.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
 
-  const rows = db.prepare(`
-    SELECT a.id, a.userId, a.action, a.targetId, a.details, a.timestamp,
-           u.name AS userName
-    FROM audit_logs a
-    LEFT JOIN users u ON u.id = a.userId
-    WHERE a.timestamp < ?
-    ORDER BY a.timestamp ASC
-  `).all(cutoffStr);
-
-  if (rows.length === 0) {
-    return { count: 0, filePath: null };
-  }
-
-  const firstTs = rows[0].timestamp || '';
-  const lastTs = rows[rows.length - 1].timestamp || '';
-  const dateFrom = firstTs.slice(0, 10);
-  const dateTo = lastTs.slice(0, 10);
-  const filename = `audit_logs_${dateFrom}_to_${dateTo}.csv`;
-  if (!fs.existsSync(AUDIT_EXPORT_DIR)) {
-    fs.mkdirSync(AUDIT_EXPORT_DIR, { recursive: true });
-  }
-  const filePath = path.join(AUDIT_EXPORT_DIR, filename);
-
-  function escapeCsv(val) {
-    const s = val == null ? '' : String(val);
-    if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
-      return '"' + s.replace(/"/g, '""') + '"';
+    let rangeRow;
+    try {
+      rangeRow = db.prepare(`
+        SELECT MIN(timestamp) AS firstTs, MAX(timestamp) AS lastTs
+        FROM audit_logs WHERE timestamp < ?
+      `).get(cutoffStr);
+    } catch (e) {
+      return reject(e);
     }
-    return s;
-  }
 
-  const header = 'id,timestamp,userId,userName,action,actionLabel,targetId,details,summary';
-  const lines = [header];
-  for (const r of rows) {
-    const userName = r.userName || r.userId || 'System';
-    const actionLabel = getActionLabel(r.action);
-    const detailsSummary = detailsToSummary(r.details);
-    const summary = `${userName} ${actionLabel}${r.targetId ? ' #' + r.targetId : ''}${detailsSummary ? ': ' + detailsSummary : ''}`;
-    lines.push([
-      r.id,
-      r.timestamp,
-      escapeCsv(r.userId),
-      escapeCsv(userName),
-      escapeCsv(r.action),
-      escapeCsv(actionLabel),
-      escapeCsv(r.targetId),
-      escapeCsv(r.details),
-      escapeCsv(summary),
-    ].join(','));
-  }
+    if (!rangeRow || rangeRow.firstTs == null || rangeRow.lastTs == null) {
+      return resolve({ count: 0, filePath: null });
+    }
 
-  const ids = rows.map((r) => r.id);
-  db.transaction(() => {
-    fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
-    const placeholders = ids.map(() => '?').join(',');
-    db.prepare(`DELETE FROM audit_logs WHERE id IN (${placeholders})`).run(...ids);
-  })();
+    const dateFrom = String(rangeRow.firstTs).slice(0, 10);
+    const dateTo = String(rangeRow.lastTs).slice(0, 10);
+    const filename = `audit_logs_${dateFrom}_to_${dateTo}.csv`;
+    if (!fs.existsSync(AUDIT_EXPORT_DIR)) {
+      fs.mkdirSync(AUDIT_EXPORT_DIR, { recursive: true });
+    }
+    const filePath = path.join(AUDIT_EXPORT_DIR, filename);
 
-  return { count: rows.length, filePath };
+    const selectStmt = db.prepare(`
+      SELECT a.id, a.userId, a.action, a.targetId, a.details, a.timestamp,
+             u.name AS userName
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.userId
+      WHERE a.timestamp < ?
+      ORDER BY a.timestamp ASC, a.id ASC
+      LIMIT ?
+    `);
+
+    const stream = fs.createWriteStream(filePath, { encoding: 'utf8' });
+    stream.on('error', reject);
+
+    const header = 'id,timestamp,userId,userName,action,actionLabel,targetId,details,summary';
+    stream.write(header + '\n');
+
+    let totalCount = 0;
+
+    function processNextBatch() {
+      try {
+        const rows = selectStmt.all(cutoffStr, BATCH_SIZE);
+        if (rows.length === 0) {
+          stream.end();
+          return;
+        }
+
+        for (const r of rows) {
+          stream.write(rowToCsvLine(r) + '\n');
+        }
+
+        const ids = rows.map((r) => r.id);
+        const placeholders = ids.map(() => '?').join(',');
+        db.prepare(`DELETE FROM audit_logs WHERE id IN (${placeholders})`).run(...ids);
+        totalCount += rows.length;
+
+        if (rows.length < BATCH_SIZE) {
+          stream.end();
+          return;
+        }
+
+        setImmediate(processNextBatch);
+      } catch (e) {
+        stream.destroy(e);
+        reject(e);
+      }
+    }
+
+    stream.on('finish', () => resolve({ count: totalCount, filePath }));
+
+    processNextBatch();
+  });
 }
 
 module.exports = { log, getUserName, exportAndArchive };

@@ -6,14 +6,20 @@ const { log: auditLog } = require('../services/auditService');
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', hasPermission('buyers.view'), (req, res) => {
-    res.json(db.prepare('SELECT * FROM buyers').all().map(b => {
-      let consignees = [];
-      if (b.consignees_json) {
-        try { consignees = JSON.parse(b.consignees_json); } catch (_) {}
-      }
-      return { ...b, hasConsignee: !!b.hasConsignee, consignees: Array.isArray(consignees) ? consignees : [] };
-    }));
+  router.get('/', hasPermission('buyers.view'), (req, res, next) => {
+    try {
+      const rows = db.prepare('SELECT * FROM buyers').all();
+      const result = (Array.isArray(rows) ? rows : []).map(b => {
+        let consignees = [];
+        if (b && b.consignees_json) {
+          try { consignees = JSON.parse(b.consignees_json); } catch (_) {}
+        }
+        return { ...b, hasConsignee: !!b.hasConsignee, consignees: Array.isArray(consignees) ? consignees : [] };
+      });
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
   });
 
   router.post('/', hasPermission('buyers.create'), (req, res) => {
@@ -86,6 +92,32 @@ function createRouter(broadcast) {
     auditLog(db, userId, 'BUYER_UPDATED', idCheck.value, { name: b.name });
     res.json({ success: true });
     broadcast();
+  });
+
+  router.delete('/:id', hasPermission('buyers.delete'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'Buyer ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const id = idCheck.value;
+    try {
+      const row = db.prepare('SELECT id, name FROM buyers WHERE id = ?').get(id);
+      if (!row) return res.status(404).json({ success: false, error: 'Buyer not found' });
+      const linked = db.prepare('SELECT COUNT(*) AS n FROM shipments WHERE buyerId = ?').get(id);
+      const count = linked && linked.n != null ? Number(linked.n) : 0;
+      if (count > 0) {
+        return res.status(409).json({
+          success: false,
+          error: `Cannot delete buyer: ${count} shipment(s) are linked. Unlink them first.`
+        });
+      }
+      db.prepare('DELETE FROM buyers WHERE id = ?').run(id);
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'BUYER_DELETED', id, { name: row.name });
+      res.json({ success: true });
+      broadcast();
+    } catch (e) {
+      console.error('DELETE /buyers/:id', e);
+      res.status(500).json({ success: false, error: e.message || 'Failed to delete buyer' });
+    }
   });
 
   return router;
