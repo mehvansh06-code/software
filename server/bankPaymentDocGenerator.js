@@ -57,7 +57,8 @@ async function generateBankPaymentDocBuffer(data) {
     throw new Error('Invalid or missing company. Use GFPL or GTEX.');
   }
 
-  const templateName = BANK_PAYMENT_TEMPLATES[companyKey];
+  // Use GFPL template for both companies (GTEX template has structural issues; document still shows correct company via company_choice)
+  const templateName = BANK_PAYMENT_TEMPLATES.GFPL;
   const templatePath = path.join(BANK_PAYMENT_TEMPLATES_DIR, templateName);
   if (!fs.existsSync(templatePath)) {
     throw new Error(`Template not found: ${templateName}. Place it in server/templates/bank-payment/`);
@@ -82,7 +83,12 @@ async function generateBankPaymentDocBuffer(data) {
   const yyyy = now.getFullYear();
   const dateStr = `${dd}-${mm}-${yyyy}`;
 
-  const empty = (v) => (v != null && String(v).trim() !== '' ? String(v).trim() : '');
+  const empty = (v) => {
+    if (v == null) return '';
+    const s = String(v).trim();
+    if (s === '' || s === 'undefined' || s === 'null') return '';
+    return s;
+  };
   const companyLabel = data.company_choice || (companyKey === 'GFPL' ? 'Gujarat Flotex Pvt Ltd' : 'GTEX Fabrics');
   const dateVal = data.date || dateStr;
   const invNo = empty(data.invoice_no);
@@ -223,8 +229,38 @@ async function generateBankPaymentDocBuffer(data) {
     items: tableItems,
   };
 
-  // Template uses {{ and }}; single "}" after a tag name is normalized to "}}"
-  const DELIMITERS = { start: '{{', end: '}}' };
+  // Template placeholders (from ZHEJIANG FUSHENGDA.docx): ensure every tag has a key so nothing renders "undefined"
+  const TEMPLATE_TAGS = [
+    'amount', 'amount_in_words', 'bank_name', 'bank_swift', 'beneficiary_account', 'beneficiary_address',
+    'beneficiary_country', 'beneficiary_name', 'currency', 'date', 'document_list', 'goods_desc', 'hsn_code',
+    'invoice_amount', 'invoice_date', 'invoice_no', 'mode_shipment', 'port_discharge', 'port_loading',
+    'purpose', 'quantity', 'shipment_date', 'term',
+  ];
+  for (const tag of TEMPLATE_TAGS) {
+    if (context[tag] === undefined || context[tag] === null) context[tag] = '';
+  }
+
+  // Ensure no placeholder renders as "undefined" (docxtemplater shows undefined literally)
+  for (const k of Object.keys(context)) {
+    if (context[k] === undefined || context[k] === null) context[k] = '';
+    else if (typeof context[k] === 'string' && (context[k] === 'undefined' || context[k] === 'null')) context[k] = '';
+  }
+  if (Array.isArray(context.items)) {
+    context.items = context.items.map((row) => {
+      const r = {};
+      for (const key of Object.keys(row)) {
+        const val = row[key];
+        r[key] = (val === undefined || val === null || val === 'undefined' || val === 'null') ? '' : (typeof val === 'string' ? val : String(val));
+      }
+      return r;
+    });
+  }
+
+  // Use single delimiters; normalize double braces (and split runs) so template parses
+  const DELIMITERS = { start: '{', end: '}' };
+
+  /** Return empty string for any missing/undefined tag so doc never shows "undefined". */
+  const nullGetter = () => '';
 
   function loadAndNormalizeZip() {
     const content = fs.readFileSync(templatePath, 'binary');
@@ -232,14 +268,18 @@ async function generateBankPaymentDocBuffer(data) {
     const documentEntry = z.files['word/document.xml'];
     if (documentEntry) {
       let xml = documentEntry.asText();
-      // Fix "{{ tag }" (missing second }) -> "{{ tag }}"
-      xml = xml.replace(/\{\{\s*([^}]+)\}(?!\})/g, '{{ $1 }}');
-      // Convert single-brace placeholders to double-brace: only " { tag_name } " (valid identifier)
-      xml = xml.replace(/\{\s*([#\/]?[a-zA-Z0-9_.]+)\s*\}/g, '{{ $1 }}');
-      // Remove stray " }" or " } " that can appear after "}}" (e.g. "{{ date }} }" -> "{{ date }}")
-      xml = xml.replace(/\}\}\s*\}\s*/g, '}} ');
-      // Escape any remaining lone "{" that are not part of "{{" (avoids unclosed tag from literal "{" in body text)
-      xml = xml.replace(/(?<!\{\{)\{(?!\{)/g, '\u200B{\u200B');
+      // 0) Escape literal "{" in body text that is not a placeholder (e.g. "{vide certificate")
+      xml = xml.replace(/\{vide\s+certificate/gi, '\u200Bvide certificate');
+      // 1) Literal "{{" and "}}" in one run -> single brace
+      xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
+      // 2) Merge split runs: run with "{", then any runs, then run with "{" -> keep first "{", empty second (same for "}")
+      for (let i = 0; i < 50; i++) {
+        const prev = xml;
+        xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
+        // Match run ending with "}" or "} " (some templates have trailing space)
+        xml = xml.replace(/<w:t[^>]*>\}\s*<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}\s*<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
+        if (xml === prev) break;
+      }
       z.file('word/document.xml', xml);
     }
     return z;
@@ -251,6 +291,7 @@ async function generateBankPaymentDocBuffer(data) {
     paragraphLoop: true,
     linebreaks: true,
     errorLogging: false,
+    nullGetter,
   });
 
   function renderToBuffer(zipInstance, ctx) {
@@ -259,6 +300,7 @@ async function generateBankPaymentDocBuffer(data) {
       paragraphLoop: true,
       linebreaks: true,
       errorLogging: false,
+      nullGetter,
     });
     d.render(ctx);
     return d.getZip().generate({

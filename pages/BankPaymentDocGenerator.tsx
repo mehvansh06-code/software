@@ -350,7 +350,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `BankPayment_${invoiceNo.replace(/\s/g, '_')}_${currency}.docx`;
+      a.download = `BankPayment_${(invoiceNo || 'document').replace(/\s/g, '_')}_${currency || 'USD'}.docx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {
