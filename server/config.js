@@ -45,34 +45,34 @@ const AUDIT_EXPORT_DIR = process.env.AUDIT_EXPORT_DIR
   : path.join(PROJECT_ROOT, 'audit-exports');
 const AUDIT_ARCHIVE_DAYS = Math.max(1, parseInt(process.env.AUDIT_ARCHIVE_DAYS, 10) || 10);
 
-/** Sales Indent: company master (name, address, GSTIN, IEC, bank details) */
+/** Sales Indent: company master (name, address, GSTIN, IEC, bank details). Sensitive values from .env */
 const INDENT_COMPANY_DB = {
   'Gujarat Flotex Pvt. Ltd.': {
     address: '3rd Floor, Elanza Vertex, Behind Armieda, Sindhu Bhavan Road,\nPakwan Cross Road, Ahmedabad-380059, Gujarat (India)',
-    gstin: '24AABCG4542P1ZF',
-    iec: '2406000000',
+    gstin: process.env.GFPL_GSTIN,
+    iec: process.env.GFPL_IEC,
     phone: '6358858231',
     bankDetails: {
       accountHolder: 'GUJARAT FLOTEX PVT LTD',
       bank: 'STATE BANK OF INDIA',
       branch: 'LAGHU UDHYOG, AHMEDABAD',
-      acct: '30852691460',
-      ifsc: 'SBIN0003993',
-      swift: 'SBININBBA23',
+      acct: process.env.GFPL_BANK_ACCT,
+      ifsc: process.env.GFPL_IFSC,
+      swift: process.env.GFPL_SWIFT,
     },
   },
   'GTEX Fabrics': {
     address: '3rd Floor, Elanza Vertex, Sindhu Bhavan Road,\nAhmedabad - 380054, Gujarat (India)',
-    gstin: '24AAGCG4275J1ZG',
-    iec: '2406000000',
+    gstin: process.env.GTEX_GSTIN,
+    iec: process.env.GTEX_IEC,
     phone: '6358858231',
     bankDetails: {
       accountHolder: 'GTEX FABRICS PVT LTD',
       bank: 'STATE BANK OF INDIA',
       branch: 'LAGHU UDHYOG, AHMEDABAD',
-      acct: '39092267695',
-      ifsc: 'SBIN0003993',
-      swift: 'SBININBBA23',
+      acct: process.env.GTEX_BANK_ACCT,
+      ifsc: process.env.GTEX_IFSC,
+      swift: process.env.GTEX_SWIFT,
     },
   },
 };

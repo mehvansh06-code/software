@@ -10,6 +10,16 @@ const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { success: false, error: 'Too many login attempts. Please wait 15 minutes before trying again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 require('./server/db');
 const db = require('./server/db');
@@ -42,6 +52,10 @@ const auditRoutes = require('./server/routes/audit');
 
 const port = 3001;
 const app = express();
+app.use(helmet({
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: false
+}));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -149,8 +163,8 @@ function handleLogin(req, res) {
   res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
 }
 
-app.post('/api/auth/login', handleLogin);
-app.post('/api/login', handleLogin);
+app.post('/api/auth/login', loginLimiter, handleLogin);
+app.post('/api/login', loginLimiter, handleLogin);
 
 app.get('/api/status', (req, res) => {
   res.json({ ok: true, message: 'Server is running' });

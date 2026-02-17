@@ -39,8 +39,15 @@ const PERMISSIONS = {
   BUYERS_CREATE: 'buyers.create',
   BUYERS_EDIT: 'buyers.edit',
   BUYERS_DELETE: 'buyers.delete',
+  // Materials
+  MATERIALS_VIEW: 'materials.view',
+  MATERIALS_CREATE: 'materials.create',
+  MATERIALS_EDIT: 'materials.edit',
   // Sales Indent (hub)
   INDENT_VIEW: 'indent.view',
+  INDENT_CREATE: 'indent.create',
+  INDENT_EDIT: 'indent.edit',
+  INDENT_DELETE: 'indent.delete',
   INDENT_GENERATE: 'indent.generate',
   INDENT_DOMESTIC_BUYERS: 'indent.domestic_buyers',
   INDENT_PRODUCTS: 'indent.products',
@@ -84,10 +91,16 @@ const CHECKER = [
   PERMISSIONS.BUYERS_CREATE,
   PERMISSIONS.BUYERS_EDIT,
   PERMISSIONS.INDENT_VIEW,
+  PERMISSIONS.INDENT_CREATE,
+  PERMISSIONS.INDENT_EDIT,
+  PERMISSIONS.INDENT_DELETE,
   PERMISSIONS.INDENT_GENERATE,
   PERMISSIONS.INDENT_DOMESTIC_BUYERS,
   PERMISSIONS.INDENT_PRODUCTS,
   PERMISSIONS.INDENT_EXPORT_BUYERS,
+  PERMISSIONS.MATERIALS_VIEW,
+  PERMISSIONS.MATERIALS_CREATE,
+  PERMISSIONS.MATERIALS_EDIT,
 ];
 
 /** MANAGEMENT: All permissions. */
@@ -174,10 +187,22 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    id: 'materials',
+    label: 'Materials',
+    permissions: [
+      PERMISSIONS.MATERIALS_VIEW,
+      PERMISSIONS.MATERIALS_CREATE,
+      PERMISSIONS.MATERIALS_EDIT,
+    ],
+  },
+  {
     id: 'indent',
     label: 'Sales Indent',
     permissions: [
       PERMISSIONS.INDENT_VIEW,
+      PERMISSIONS.INDENT_CREATE,
+      PERMISSIONS.INDENT_EDIT,
+      PERMISSIONS.INDENT_DELETE,
       PERMISSIONS.INDENT_GENERATE,
       PERMISSIONS.INDENT_DOMESTIC_BUYERS,
       PERMISSIONS.INDENT_PRODUCTS,

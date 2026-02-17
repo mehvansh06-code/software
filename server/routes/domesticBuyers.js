@@ -1,11 +1,11 @@
 const express = require('express');
 const db = require('../db');
-const { validateId } = require('../middleware');
+const { validateId, hasPermission } = require('../middleware');
 
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', hasPermission('buyers.view'), (req, res) => {
     const buyers = db.prepare('SELECT * FROM domestic_buyers ORDER BY name').all();
     const sites = db.prepare('SELECT * FROM domestic_buyer_sites').all();
     const byId = {};
@@ -22,7 +22,7 @@ function createRouter(broadcast) {
     res.json(Object.values(byId));
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', hasPermission('buyers.create'), (req, res) => {
     const b = req.body;
     if (!b || typeof b !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(b.id, 'Domestic buyer ID');
@@ -57,7 +57,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.put('/:id', (req, res) => {
+  router.put('/:id', hasPermission('buyers.edit'), (req, res) => {
     const idCheck = validateId(req.params?.id, 'Domestic buyer ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const b = req.body;
@@ -92,7 +92,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.post('/import', (req, res) => {
+  router.post('/import', hasPermission('buyers.create'), (req, res) => {
     const body = req.body;
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...] } with row objects' });
@@ -133,7 +133,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', hasPermission('buyers.delete'), (req, res) => {
     const idCheck = validateId(req.params?.id, 'Domestic buyer ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     db.prepare('DELETE FROM domestic_buyer_sites WHERE domesticBuyerId = ?').run(idCheck.value);

@@ -94,7 +94,7 @@ COMPANY_DB = {
         "address": "3rd Floor, Elanza Vertex, Behind Armieda, Sindhu Bhavan Road,\n"
                    "Pakwan Cross Road, Ahmedabad-380059, Gujarat (India)",
         "gstin": "24AABCG4542P1ZF",
-        "iec": "2406000000",  # <--- UPDATE THIS WITH REAL IEC
+        "iec": "0801010128",  # <--- UPDATE THIS WITH REAL IEC
         "phone": "6358858231",
         "bank_details": {
             "Account Holder": "GUJARAT FLOTEX PVT LTD",
@@ -109,7 +109,7 @@ COMPANY_DB = {
         "address": "3rd Floor, Elanza Vertex, Sindhu Bhavan Road,\n"
                    "Ahmedabad - 380054, Gujarat (India)",
         "gstin": "24AAGCG4275J1ZG",
-        "iec": "2406000000", # <--- UPDATE THIS WITH REAL IEC
+        "iec": "AAGCG4275J", # <--- UPDATE THIS WITH REAL IEC
         "phone": "6358858231",
         "bank_details": {
            "Account Holder": "GTEX FABRICS PVT LTD",

@@ -56,13 +56,14 @@ router.post('/extract', verifyToken, (req, res, next) => {
     next();
   });
 }, async (req, res) => {
-  if (currentOcrJobs >= maxConcurrentOcrJobs) {
+  currentOcrJobs++;
+  if (currentOcrJobs > maxConcurrentOcrJobs) {
+    currentOcrJobs--;
     return res.status(429).json({
       success: false,
       error: 'Server is busy processing other documents. Please try again in a moment.',
     });
   }
-  currentOcrJobs++;
   try {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ success: false, error: 'No file uploaded. Use field name "file".' });
@@ -179,13 +180,14 @@ router.post('/upload-and-scan', verifyToken, hasPermission('documents.upload'), 
     next();
   });
 }, async (req, res) => {
-  if (currentOcrJobs >= maxConcurrentOcrJobs) {
+  currentOcrJobs++;
+  if (currentOcrJobs > maxConcurrentOcrJobs) {
+    currentOcrJobs--;
     return res.status(429).json({
       success: false,
       error: 'Server is busy processing other documents. Please try again in a moment.',
     });
   }
-  currentOcrJobs++;
   try {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ success: false, error: 'No file uploaded. Use field name "file".' });

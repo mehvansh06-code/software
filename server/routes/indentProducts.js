@@ -1,11 +1,11 @@
 const express = require('express');
 const db = require('../db');
-const { validateId } = require('../middleware');
+const { validateId, hasPermission } = require('../middleware');
 
 function createRouter(broadcast) {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', hasPermission('indent.view'), (req, res) => {
     const rows = db.prepare('SELECT * FROM indent_products ORDER BY quality, designNo, shadeNo').all();
     res.json(rows.map((r) => ({
       id: r.id,
@@ -21,7 +21,7 @@ function createRouter(broadcast) {
     })));
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', hasPermission('indent.create'), (req, res) => {
     const p = req.body;
     if (!p || typeof p !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(p.id, 'Product ID');
@@ -45,7 +45,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.put('/:id', (req, res) => {
+  router.put('/:id', hasPermission('indent.edit'), (req, res) => {
     const idCheck = validateId(req.params?.id, 'Product ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const p = req.body;
@@ -70,7 +70,7 @@ function createRouter(broadcast) {
     broadcast();
   });
 
-  router.post('/import', (req, res) => {
+  router.post('/import', hasPermission('indent.create'), (req, res) => {
     const body = req.body;
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...] } with row objects' });
@@ -103,7 +103,7 @@ function createRouter(broadcast) {
     }
   });
 
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', hasPermission('indent.delete'), (req, res) => {
     const idCheck = validateId(req.params?.id, 'Product ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     db.prepare('DELETE FROM indent_products WHERE id = ?').run(idCheck.value);

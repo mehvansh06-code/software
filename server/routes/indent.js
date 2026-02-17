@@ -1,15 +1,16 @@
 const express = require('express');
+const { hasPermission } = require('../middleware');
 const { generateDocxBuffer } = require('../indentDocGenerator');
 const { INDENT_COMPANY_DB } = require('../config');
 
 function createRouter() {
   const router = express.Router();
 
-  router.get('/companies', (req, res) => {
+  router.get('/companies', hasPermission('indent.view'), (req, res) => {
     res.json({ companies: Object.keys(INDENT_COMPANY_DB) });
   });
 
-  router.post('/generate', async (req, res) => {
+  router.post('/generate', hasPermission('indent.create'), async (req, res) => {
     try {
       const data = req.body;
       if (!data || typeof data !== 'object') {

@@ -141,7 +141,7 @@ function createRouter() {
       });
     }
     try {
-      db.transaction(() => {
+      const runTx = db.transaction(() => {
         if (username !== undefined && username !== '') {
           const conflict = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, idCheck.value);
           if (conflict) throw new Error('USERNAME_IN_USE');
@@ -150,6 +150,7 @@ function createRouter() {
         values.push(idCheck.value);
         db.prepare(sql).run(...values);
       });
+      runTx();
       const row = db.prepare('SELECT id, username, name, role, permissions, allowedDomains FROM users WHERE id = ?').get(idCheck.value);
       let perms = [];
       let domains = [];

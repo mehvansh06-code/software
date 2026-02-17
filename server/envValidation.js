@@ -18,6 +18,18 @@ function validateEnv() {
     warnings.push('JWT_SECRET not set; using default. Set JWT_SECRET in .env for production.');
   }
 
+  // Company-sensitive env (Sales Indent): all required so server refuses to start if any are missing
+  const companyEnvKeys = [
+    'GFPL_GSTIN', 'GFPL_IEC', 'GFPL_BANK_ACCT', 'GFPL_IFSC', 'GFPL_SWIFT',
+    'GTEX_GSTIN', 'GTEX_IEC', 'GTEX_BANK_ACCT', 'GTEX_IFSC', 'GTEX_SWIFT',
+  ];
+  for (const key of companyEnvKeys) {
+    const val = process.env[key];
+    if (val == null || typeof val !== 'string' || val.trim() === '') {
+      errors.push(`${key} is required. Set it in .env (company-sensitive value for Sales Indent).`);
+    }
+  }
+
   // Optional but recommended
   if (!process.env.ADMIN_USERNAME && process.env.NODE_ENV === 'production') {
     warnings.push('ADMIN_USERNAME not set; using DB/fallback users only.');
