@@ -498,35 +498,32 @@ function parseCustomsDocument(text) {
         if (num != null) result.gst = num;
       }
     }
-    // 15.INT, 16.PNLTY, 17.FINE — value is in the row BELOW; never accept serials 1–19
-    const intValueMatch = t.match(/15\.?\s*INT\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Interest|Duty\s+INT)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    // 15.INT, 16.PNLTY, 17.FINE — inline value first, then firstNumberAfterKeyword (400 chars) for small values e.g. 100
+    const intValueMatch = t.match(/15\.?\s*INT\s*:?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Interest|Duty\s+INT)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
     if (intValueMatch && intValueMatch[1]) {
       const v = intValueMatch[1].replace(/[,\s]/g, '').trim();
-      const n = parseFloat(v);
-      if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.dutyINT = v;
+      if (v) result.dutyINT = v;
     }
     if (result.dutyINT == null) {
-      const num = dutyValueAfterLabel(t, /15\.?\s*INT/i, 280);
+      const num = firstNumberAfterKeyword(t, /15\.?\s*INT/i, 400);
       if (num != null) result.dutyINT = num;
     }
-    const penaltyValueMatch = t.match(/16\.?\s*PNLTY\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Penalty|Penalties)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    const penaltyValueMatch = t.match(/16\.?\s*PNLTY\s*:?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Penalty|Penalties)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
     if (penaltyValueMatch && penaltyValueMatch[1]) {
       const v = penaltyValueMatch[1].replace(/[,\s]/g, '').trim();
-      const n = parseFloat(v);
-      if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.penalty = v;
+      if (v) result.penalty = v;
     }
     if (result.penalty == null) {
-      const num = dutyValueAfterLabel(t, /16\.?\s*PNLTY/i, 280);
+      const num = firstNumberAfterKeyword(t, /16\.?\s*PNLTY/i, 400);
       if (num != null) result.penalty = num;
     }
-    const fineValueMatch = t.match(/17\.?\s*FINE\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Fine|Fines)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    const fineValueMatch = t.match(/17\.?\s*FINE\s*:?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Fine|Fines)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
     if (fineValueMatch && fineValueMatch[1]) {
       const v = fineValueMatch[1].replace(/[,\s]/g, '').trim();
-      const n = parseFloat(v);
-      if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.fine = v;
+      if (v) result.fine = v;
     }
     if (result.fine == null) {
-      const num = dutyValueAfterLabel(t, /17\.?\s*FINE/i, 280);
+      const num = firstNumberAfterKeyword(t, /17\.?\s*FINE/i, 400);
       if (num != null) result.fine = num;
     }
 
