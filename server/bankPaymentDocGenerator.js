@@ -1,14 +1,7 @@
 /**
  * Generate Bank Import Payment .docx from Word templates.
  * Uses docxtemplater with { variable } single-brace delimiters.
- * 
- * FIXES APPLIED:
- * 1. Removed debug telemetry that was sending document data to localhost server
- * 2. Fixed runWithOpen regex - was consuming correct placeholders and making fields blank
- * 3. Removed escapeContextForXml - was double-encoding data (& became &amp; in output)
- * 4. Removed dangerous paragraph-tag-balancing that was corrupting/breaking files
- * 5. Fixed GTEX company now uses its own template instead of GFPL template
- * 6. Removed 'bank_ address' typo key from context
+ * Merges split placeholders (Word runs) so tags are filled; only {vide certificate fix applied, no brace-collapse.
  */
 
 const fs = require('fs');
@@ -282,15 +275,17 @@ async function generateBankPaymentDocBuffer(data) {
   /** Return empty string for any missing tag so doc never shows "undefined". */
   const nullGetter = () => '';
 
-  /**
-   * Minimal XML escape — only used for tag NAMES being written back into the XML
-   * during placeholder merging. NOT used on context values (docxtemplater handles that).
-   */
+  /** Escape tag name for use inside XML (only for merged run output). */
   function escapeXml(s) {
     return String(s)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
+  }
+
+  /** Remove XML 1.0 invalid control chars from tag name to avoid Word "file error". */
+  function sanitizeTagName(s) {
+    return String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
   }
 
   /** Extract plain text from a run's XML (strips all tags, keeps w:t content). */
@@ -306,15 +301,8 @@ async function generateBankPaymentDocBuffer(data) {
 
   /**
    * Within one paragraph XML, merge each SPLIT placeholder into a single run.
-   *
-   * Word internally splits placeholder text like { beneficiary_name } across
-   * multiple XML runs with <w:proofErr> grammar-check tags in between.
-   * This function detects and re-merges them so docxtemplater can find them.
-   *
-   * FIX: runWithOpen uses [^}<]* after { so it ONLY matches runs where {
-   * appears WITHOUT a matching } — i.e. truly the "open" half of a split tag.
-   * The old code used [^<]* which also matched complete { tag } placeholders,
-   * causing them to be misidentified as split and then accidentally deleted.
+   * Word often splits { tag } across multiple runs; docxtemplater only fills tags in a single run.
+   * Uses [^}<]* after { so a run containing full { tag } is NOT treated as "open" (avoids corrupting valid tags).
    */
   function mergePlaceholdersInParagraph(paraContent) {
     const runWithOpen = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\{[^}<]*<\/w:t>\s*<\/w:r>/;
@@ -347,49 +335,33 @@ async function generateBankPaymentDocBuffer(data) {
       if (!tagName || tagName.startsWith('#') || tagName.startsWith('/')) {
         out += openMatch[0] + middle + closeMatch[0];
       } else {
-        // Emit a single clean merged run with the original styling
         const rPr = getRunRPr(openMatch[0]);
-        out += '<w:r>' + rPr + '<w:t>{' + escapeXml(tagName) + '}</w:t></w:r>';
+        const safe = sanitizeTagName(tagName);
+        out += '<w:r>' + rPr + '<w:t>{' + escapeXml(safe) + '}</w:t></w:r>';
       }
       i += openMatch.index + openMatch[0].length + closeMatch.index + closeMatch[0].length;
     }
     return out;
   }
 
-  function loadAndNormalizeZip() {
+  /** Load template; fix {vide certificate and merge split placeholders so docxtemplater can fill them. */
+  function loadTemplateZip() {
     const content = fs.readFileSync(templatePath, 'binary');
     const z = new PizZip(content);
     const documentEntry = z.files['word/document.xml'];
     if (documentEntry) {
       let xml = documentEntry.asText();
-
-      // Protect literal "{vide certificate" text in the document from being
-      // treated as a placeholder opener
       xml = xml.replace(/\{vide\s+certificate/gi, '\u200Bvide certificate');
-
-      // Normalize double-brace placeholders {{ }} to single { }
-      xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
-
-      // Collapse adjacent duplicate { or } tags that Word sometimes creates
-      for (let i = 0; i < 50; i++) {
-        const prev = xml;
-        xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
-        xml = xml.replace(/<w:t[^>]*>\}\s*<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}\s*<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
-        if (xml === prev) break;
-      }
-
-      // Merge split placeholders paragraph by paragraph
-      const paraRegex = /<w:p\s*([^>]*)>([\s\S]*?)<\/w:p>/g;
+      const paraRegex = /<w:p(?=[\s>])([^>]*)>([\s\S]*?)<\/w:p>/g;
       xml = xml.replace(paraRegex, (_, attrs, paraContent) => {
         return '<w:p' + attrs + '>' + mergePlaceholdersInParagraph(paraContent) + '</w:p>';
       });
-
       z.file('word/document.xml', xml);
     }
     return z;
   }
 
-  const zip = loadAndNormalizeZip();
+  const zip = loadTemplateZip();
   const doc = new Docxtemplater(zip, {
     delimiters: DELIMITERS,
     paragraphLoop: true,
@@ -417,7 +389,7 @@ async function generateBankPaymentDocBuffer(data) {
   let zipOut;
   try {
     // FIX: Pass context directly — docxtemplater handles XML encoding internally.
-    // Do NOT pre-escape values with escapeXml() as that causes double-encoding
+    // Do NOT pre-escape values; docxtemplater handles XML encoding
     // (e.g. "Smith & Sons" would become "Smith &amp;amp; Sons" in the output).
     doc.render(context);
     zipOut = doc.getZip();
@@ -458,7 +430,7 @@ async function generateBankPaymentDocBuffer(data) {
         ...context,
         items: [{ ...merged, amount: singleItemAmount }],
       };
-      const freshZip = loadAndNormalizeZip();
+      const freshZip = loadTemplateZip();
       return renderToBuffer(freshZip, fallbackContext);
     }
     throw renderErr;
