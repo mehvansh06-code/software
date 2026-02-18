@@ -99,14 +99,20 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
   const [invoiceValueDiff, setInvoiceValueDiff] = useState('');
   const [invoiceNo, setInvoiceNo] = useState('');
   const [invoiceDate, setInvoiceDate] = useState('');
+  const [paymentDate, setPaymentDate] = useState(() => formatDateForDoc(new Date().toISOString().slice(0, 10)));
   const [shipmentDate, setShipmentDate] = useState('');
   const [beneficiaryName, setBeneficiaryName] = useState('');
   const [beneficiaryAddress, setBeneficiaryAddress] = useState('');
   const [beneficiaryCountry, setBeneficiaryCountry] = useState('');
   const [beneficiaryAccount, setBeneficiaryAccount] = useState('');
+  const [iban, setIban] = useState('');
   const [bankName, setBankName] = useState('');
   const [bankSwift, setBankSwift] = useState('');
   const [bankAddress, setBankAddress] = useState('');
+  const [intermediaryBankName, setIntermediaryBankName] = useState('');
+  const [intermediaryBankSwift, setIntermediaryBankSwift] = useState('');
+  const [intermediaryBankAddress, setIntermediaryBankAddress] = useState('');
+  const [intermediaryBankCountry, setIntermediaryBankCountry] = useState('');
   const [portLoading, setPortLoading] = useState('');
   const [portDischarge, setPortDischarge] = useState('');
   const [term, setTerm] = useState('');
@@ -250,8 +256,9 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       (sum, row) => sum + (parseFloat(row.amount) || 0),
       0
     );
+    // Treat 0 as "no value" so we fall through to shipment amount when optional amount fields are empty
     const totalInvoiceValue =
-      parseInvoiceValue(invoiceValueDiff) ?? totalFromItems ?? (selectedShipment?.amount ?? null);
+      parseInvoiceValue(invoiceValueDiff) ?? (totalFromItems > 0 ? totalFromItems : null) ?? (selectedShipment?.amount ?? null);
     if (totalInvoiceValue != null && totalInvoiceValue >= 0 && amtNum > totalInvoiceValue) {
       return 'Remittance amount cannot be more than total invoice value.';
     }
@@ -318,7 +325,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
 
     const payload: Record<string, unknown> = {
       company_choice: companyLabel,
-      date: formatDateForDoc(new Date().toISOString().slice(0, 10)),
+      date: paymentDate.trim() || formatDateForDoc(new Date().toISOString().slice(0, 10)),
       invoice_no: invoiceNo.trim(),
       invoice_date: invoiceDate.trim(),
       shipment_date: shipmentDate.trim(),
@@ -330,9 +337,14 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       beneficiary_address: beneficiaryAddress.trim(),
       beneficiary_country: beneficiaryCountry.trim(),
       beneficiary_account: beneficiaryAccount.trim(),
+      iban: iban.trim(),
       bank_name: bankName.trim(),
       bank_swift: bankSwift.trim(),
       bank_address: bankAddress.trim(),
+      intermediary_bank_name: intermediaryBankName.trim(),
+      intermediary_bank_swift: intermediaryBankSwift.trim(),
+      intermediary_bank_address: intermediaryBankAddress.trim(),
+      intermediary_bank_country: intermediaryBankCountry.trim(),
       port_loading: portLoading.trim(),
       port_discharge: portDischarge.trim(),
       purpose,
@@ -555,6 +567,15 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
               placeholder="dd-mm-yyyy"
             />
           </div>
+          <div>
+            <label className={labelClass}>Payment Date (dd-mm-yyyy)</label>
+            <input
+              className={inputClass}
+              value={paymentDate}
+              onChange={(e) => setPaymentDate(e.target.value)}
+              placeholder="dd-mm-yyyy"
+            />
+          </div>
         </div>
       </div>
 
@@ -581,6 +602,10 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
             <input className={inputClass} value={beneficiaryAccount} onChange={(e) => setBeneficiaryAccount(e.target.value)} />
           </div>
           <div>
+            <label className={labelClass}>IBAN (optional)</label>
+            <input className={inputClass} value={iban} onChange={(e) => setIban(e.target.value)} placeholder="If applicable" />
+          </div>
+          <div>
             <label className={labelClass}>Bank Name *</label>
             <input className={inputClass} value={bankName} onChange={(e) => setBankName(e.target.value)} />
           </div>
@@ -591,6 +616,27 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
           <div className="md:col-span-2">
             <label className={labelClass}>Bank Branch Address *</label>
             <input className={inputClass} value={bankAddress} onChange={(e) => setBankAddress(e.target.value)} />
+          </div>
+          <div className="md:col-span-2 border-t border-slate-200 pt-4 mt-2">
+            <p className="text-sm font-medium text-slate-600 mb-3">Intermediary bank (optional)</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className={labelClass}>Intermediary bank name</label>
+                <input className={inputClass} value={intermediaryBankName} onChange={(e) => setIntermediaryBankName(e.target.value)} placeholder="If applicable" />
+              </div>
+              <div>
+                <label className={labelClass}>Intermediary bank SWIFT</label>
+                <input className={inputClass} value={intermediaryBankSwift} onChange={(e) => setIntermediaryBankSwift(e.target.value)} placeholder="If applicable" />
+              </div>
+              <div className="md:col-span-2">
+                <label className={labelClass}>Intermediary bank address</label>
+                <input className={inputClass} value={intermediaryBankAddress} onChange={(e) => setIntermediaryBankAddress(e.target.value)} placeholder="If applicable" />
+              </div>
+              <div>
+                <label className={labelClass}>Intermediary bank country</label>
+                <input className={inputClass} value={intermediaryBankCountry} onChange={(e) => setIntermediaryBankCountry(e.target.value)} placeholder="If applicable" />
+              </div>
+            </div>
           </div>
         </div>
       </div>

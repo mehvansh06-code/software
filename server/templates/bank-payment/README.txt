@@ -1,6 +1,19 @@
 BANK PAYMENT DOCUMENT TEMPLATES
 ================================
 
+IMPORTANT: Generated files must open in Word
+--------------------------------------------
+- The generator does NOT modify the template XML (so Word can always open the output).
+- If your generated document OPENS but many fields are BLANK: Word has split each
+  placeholder into several "runs". Fix the template once in Word:
+  1. Open the template .docx (e.g. ZHEJIANG FUSHENGDA.docx) in Microsoft Word.
+  2. For EACH placeholder (e.g. "Date: - { date }"):
+     - Select the whole placeholder text including the braces: { date }
+     - Cut (Ctrl+X), then Paste (Ctrl+V). This makes it one run so the generator can fill it.
+  3. Repeat for every placeholder (beneficiary_name, amount, bank_swift, etc.).
+  4. Save the template. Generate again - the new .docx will open AND show filled fields.
+- The two fields that always show ("ADVANCE BY SWIFT", "0801010128") are static text in the template.
+
 Place the company Word templates here:
 - ZHEJIANG FUSHENGDA.docx  (for GFPL / Gujarat Flotex Pvt Ltd)
 - Templategtex.docx        (for GTEX Fabrics)
@@ -27,6 +40,7 @@ PLACEHOLDER RULES (required for correct generation)
    Beneficiary address                   | { beneficiary_address }
    Beneficiary country                   | { beneficiary_country }
    Beneficiary account number            | { beneficiary_account }
+   IBAN (optional)                       | { iban }  or  { IBAN }
    Bank name                             | { bank_name }
    Bank SWIFT code                       | { bank_swift }
    Bank branch address                   | { bank_address }
@@ -49,6 +63,13 @@ PLACEHOLDER RULES (required for correct generation)
    Document checklist list               | { document_list }
    Currency and amount together          | { currency_and_amount }
      (e.g. "USD 1,234.56")
+
+   Intermediary bank (optional)
+   --------------------------------------|--------------------------------
+   Intermediary bank name                 | { intermediary_bank_name }
+   Intermediary bank SWIFT                | { intermediary_bank_swift }
+   Intermediary bank address              | { intermediary_bank_address }
+   Intermediary bank country              | { intermediary_bank_country }
 
 
 FORM A1 SECTION B TABLE (one row per product)
@@ -95,6 +116,11 @@ with product-wise amount. Use a docxtemplater loop so the row repeats for each i
 4. One tag per placeholder
 
    Use { invoice_no } and { invoice_date } in separate places, not { invoice_no invoice_date }.
+
+   If generated documents show blank fields, Word may have split a placeholder across
+   multiple "runs". Fix in Word: select the placeholder (e.g. { date }), cut (Ctrl+X),
+   then paste (Ctrl+V) so it becomes one run; or retype the placeholder in one go.
+   Do not use automated run-merge scripts on the .docx—they can corrupt the file.
 
 
 5. Run the fix script (optional)

@@ -200,6 +200,25 @@ function ensureShipmentDocumentsFolder(shipment) {
   return fullPath;
 }
 
+/** Get partner name and invoice number for a shipment (same logic as folder naming). Used for auto-renaming uploaded files. */
+function getShipmentPartnerAndInvoice(row) {
+  if (!row) return { partnerName: 'Unknown', invoiceNo: 'Unknown' };
+  let partnerName = 'Unknown';
+  try {
+    if (row.supplierId) {
+      const r = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(row.supplierId);
+      partnerName = r && r.name ? sanitizeFolderName(r.name) : 'Unknown';
+    } else if (row.buyerId) {
+      const r = db.prepare('SELECT name FROM buyers WHERE id = ?').get(row.buyerId);
+      partnerName = r && r.name ? sanitizeFolderName(r.name) : 'Unknown';
+    }
+  } catch (e) {
+    console.warn('getShipmentPartnerAndInvoice partner lookup:', e.message);
+  }
+  const invoiceNo = sanitizeFolderName(String(row.invoiceNumber || row.id || 'Unknown'));
+  return { partnerName, invoiceNo };
+}
+
 function getValidDocumentsFolderPath(row) {
   if (!row || !row.id) return null;
   try {
@@ -579,17 +598,29 @@ function createRouter(broadcast) {
         return res.status(400).json({ error: 'File type not allowed. Allowed types: PDF, JPG, PNG, XLSX, DOCX.' });
       }
       const docTypeRaw = (req.query && typeof req.query.documentType === 'string') ? req.query.documentType.trim() : '';
-      let baseName;
-      if (docTypeRaw.startsWith('PAY_ADV_')) {
-        const safe = docTypeRaw.replace(/[/\\:*?"<>|]/g, '_').slice(0, 80);
-        baseName = safe + ext;
+      let filename;
+      if (docTypeRaw && docTypeRaw !== 'Other') {
+        const docType = docTypeRaw.replace(/[/\\:*?"<>|]/g, '_').trim().slice(0, 80) || 'Doc';
+        const { partnerName, invoiceNo } = getShipmentPartnerAndInvoice(row);
+        const baseName = `${docType}_${partnerName}_${invoiceNo}${ext}`;
+        filename = sanitizeFileDownloadFilename(baseName) || baseName;
+        let n = 2;
+        while (fs.existsSync(path.join(folderPath, filename))) {
+          const baseNoExt = path.basename(filename, ext) || filename.replace(ext, '');
+          filename = sanitizeFileDownloadFilename(baseNoExt + '_' + n + ext) || baseNoExt + '_' + n + ext;
+          n++;
+        }
       } else {
-        baseName = sanitizeFileDownloadFilename(rawName) || rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
-        const docType = docTypeRaw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
-        if (docType.length > 0) baseName = docType + '_' + baseName;
+        const baseName = sanitizeFileDownloadFilename(rawName) || rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
+        filename = sanitizeFileDownloadFilename(baseName) || baseName;
+        let n = 2;
+        while (fs.existsSync(path.join(folderPath, filename))) {
+          const baseNoExt = path.basename(filename, ext) || filename.replace(ext, '');
+          filename = sanitizeFileDownloadFilename(baseNoExt + '_' + n + ext) || baseNoExt + '_' + n + ext;
+          n++;
+        }
       }
-      const filename = sanitizeFileDownloadFilename(baseName) || baseName;
-      const fullPath = path.join(folderPath, filename);
+      let fullPath = path.join(folderPath, filename);
       const resolvedFull = path.resolve(fullPath);
       const resolvedBase = path.resolve(folderPath);
       if (resolvedFull !== resolvedBase && !resolvedFull.startsWith(resolvedBase + path.sep)) {

@@ -9,6 +9,26 @@ const Docxtemplater = require('docxtemplater');
 const n2w = require('number-to-words');
 const { BANK_PAYMENT_TEMPLATES, BANK_PAYMENT_TEMPLATES_DIR } = require('./config');
 
+// #region agent log
+const _debugLogPath = path.join(__dirname, '..', '.cursor', 'debug.log');
+function _dbg(payload) {
+  const line = JSON.stringify({ ...payload, timestamp: Date.now() }) + '\n';
+  try {
+    fs.appendFileSync(_debugLogPath, line);
+  } catch (_) {}
+  fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, timestamp: Date.now() }) }).catch(() => {});
+}
+function _countTags(xml) {
+  const openT = (xml.match(/<w:t[\s>]/g) || []).length;
+  const closeT = (xml.match(/<\/w:t>/g) || []).length;
+  const openR = (xml.match(/<w:r[\s>]/g) || []).length;
+  const closeR = (xml.match(/<\/w:r>/g) || []).length;
+  const openP = (xml.match(/<w:p[\s>]/g) || []).length;
+  const closeP = (xml.match(/<\/w:p>/g) || []).length;
+  return { openT, closeT, openR, closeR, openP, closeP };
+}
+// #endregion
+
 const CURRENCY_NAMES = {
   USD: 'Dollars',
   EUR: 'Euro',
@@ -98,9 +118,14 @@ async function generateBankPaymentDocBuffer(data) {
   const beneficiaryAddress = empty(data.beneficiary_address);
   const beneficiaryCountry = empty(data.beneficiary_country);
   const beneficiaryAccount = empty(data.beneficiary_account);
+  const ibanVal = empty(data.iban || data.beneficiary_iban);
   const bankNameVal = empty(data.bank_name);
   const bankSwiftVal = empty(data.bank_swift);
   const bankAddressVal = empty(data.bank_address);
+  const intermediaryBankNameVal = empty(data.intermediary_bank_name);
+  const intermediaryBankSwiftVal = empty(data.intermediary_bank_swift);
+  const intermediaryBankAddressVal = empty(data.intermediary_bank_address);
+  const intermediaryBankCountryVal = empty(data.intermediary_bank_country);
   const portLoadingVal = empty(data.port_loading);
   const portDischargeVal = empty(data.port_discharge);
   const termVal = empty(data.term);
@@ -182,9 +207,16 @@ async function generateBankPaymentDocBuffer(data) {
     beneficiary_address: beneficiaryAddress,
     beneficiary_country: beneficiaryCountry,
     beneficiary_account: beneficiaryAccount,
+    iban: ibanVal,
+    IBAN: ibanVal,
+    beneficiary_iban: ibanVal,
     bank_name: bankNameVal,
     bank_swift: bankSwiftVal,
     bank_address: bankAddressVal,
+    intermediary_bank_name: intermediaryBankNameVal,
+    intermediary_bank_swift: intermediaryBankSwiftVal,
+    intermediary_bank_address: intermediaryBankAddressVal,
+    intermediary_bank_country: intermediaryBankCountryVal,
     port_loading: portLoadingVal,
     port_discharge: portDischargeVal,
     purpose: purposeVal,
@@ -232,8 +264,9 @@ async function generateBankPaymentDocBuffer(data) {
   // Template placeholders (from ZHEJIANG FUSHENGDA.docx): ensure every tag has a key so nothing renders "undefined"
   const TEMPLATE_TAGS = [
     'amount', 'amount_in_words', 'bank_name', 'bank_swift', 'beneficiary_account', 'beneficiary_address',
-    'beneficiary_country', 'beneficiary_name', 'currency', 'date', 'document_list', 'goods_desc', 'hsn_code',
-    'invoice_amount', 'invoice_date', 'invoice_no', 'mode_shipment', 'port_discharge', 'port_loading',
+    'beneficiary_country', 'beneficiary_name', 'iban', 'intermediary_bank_name', 'intermediary_bank_swift',
+    'intermediary_bank_address', 'intermediary_bank_country', 'currency', 'date', 'document_list', 'goods_desc',
+    'hsn_code', 'invoice_amount', 'invoice_date', 'invoice_no', 'mode_shipment', 'port_discharge', 'port_loading',
     'purpose', 'quantity', 'shipment_date', 'term',
   ];
   for (const tag of TEMPLATE_TAGS) {
@@ -262,24 +295,111 @@ async function generateBankPaymentDocBuffer(data) {
   /** Return empty string for any missing/undefined tag so doc never shows "undefined". */
   const nullGetter = () => '';
 
+  /** Escape for use inside XML text content (so merged placeholder and replacement values never break document). */
+  function escapeXml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  /** Escape all string values in context so docxtemplater output is valid XML (Word can open file). */
+  function escapeContextForXml(obj) {
+    if (obj == null) return obj;
+    if (typeof obj === 'string') return escapeXml(obj);
+    if (Array.isArray(obj)) return obj.map(escapeContextForXml);
+    if (typeof obj === 'object') {
+      const out = {};
+      for (const k of Object.keys(obj)) {
+        const v = obj[k];
+        out[k] = typeof v === 'string' ? escapeXml(v) : escapeContextForXml(v);
+      }
+      return out;
+    }
+    return obj;
+  }
+  const safeContext = escapeContextForXml(context);
+
+  /** Extract plain text from runs XML (strip tags, keep w:t content). */
+  function getRunText(runsXml) {
+    return runsXml.replace(/<w:t[^>]*>([^<]*)<\/w:t>/gi, '$1').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  /** Extract <w:rPr>...</w:rPr> from a run XML if present (so merged run keeps styling and Word accepts file). */
+  function getRunRPr(runXml) {
+    const m = runXml.match(/<w:rPr[^>]*>[\s\S]*?<\/w:rPr>/);
+    return m ? m[0] : '';
+  }
+
+  /** Within one paragraph XML, merge each split placeholder (run with { ... run with }) into a single run. */
+  function mergePlaceholdersInParagraph(paraContent) {
+    const runWithOpen = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\{[^<]*<\/w:t>\s*<\/w:r>/;
+    const runWithClose = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\}[^<]*<\/w:t>\s*<\/w:r>/;
+    let out = '';
+    let i = 0;
+    while (i < paraContent.length) {
+      const rest = paraContent.slice(i);
+      const openMatch = rest.match(runWithOpen);
+      if (!openMatch) {
+        out += paraContent[i];
+        i++;
+        continue;
+      }
+      out += rest.slice(0, openMatch.index);
+      const afterOpen = rest.slice(openMatch.index + openMatch[0].length);
+      const closeMatch = afterOpen.match(runWithClose);
+      if (!closeMatch) {
+        out += openMatch[0];
+        i += openMatch.index + openMatch[0].length;
+        continue;
+      }
+      const middle = afterOpen.slice(0, closeMatch.index);
+      const textOpen = getRunText(openMatch[0]);
+      const textMiddle = getRunText(middle);
+      const textClose = getRunText(closeMatch[0]);
+      const fullTag = (textOpen + ' ' + textMiddle + ' ' + textClose).replace(/\s+/g, ' ').trim();
+      const tagMatch = fullTag.match(/\{\s*([^}]+)\}/);
+      const tagName = tagMatch ? tagMatch[1].trim() : '';
+      if (!tagName || tagName.startsWith('#') || tagName.startsWith('/')) {
+        out += openMatch[0] + middle + closeMatch[0];
+      } else {
+        // Emit single merged run only (do not append middle - was corrupting doc for Word)
+        const rPr = getRunRPr(openMatch[0]);
+        out += '<w:r>' + rPr + '<w:t>{' + escapeXml(tagName) + '}</w:t></w:r>';
+      }
+      i += openMatch.index + openMatch[0].length + closeMatch.index + closeMatch[0].length;
+    }
+    return out;
+  }
+
   function loadAndNormalizeZip() {
     const content = fs.readFileSync(templatePath, 'binary');
     const z = new PizZip(content);
     const documentEntry = z.files['word/document.xml'];
     if (documentEntry) {
       let xml = documentEntry.asText();
-      // 0) Escape literal "{" in body text that is not a placeholder (e.g. "{vide certificate")
       xml = xml.replace(/\{vide\s+certificate/gi, '\u200Bvide certificate');
-      // 1) Literal "{{" and "}}" in one run -> single brace
       xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
-      // 2) Merge split runs: run with "{", then any runs, then run with "{" -> keep first "{", empty second (same for "}")
       for (let i = 0; i < 50; i++) {
         const prev = xml;
         xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
-        // Match run ending with "}" or "} " (some templates have trailing space)
         xml = xml.replace(/<w:t[^>]*>\}\s*<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}\s*<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
         if (xml === prev) break;
       }
+      // #region agent log
+      _dbg({ location: 'bankPaymentDocGenerator.js:afterStep2', message: 'After step2 split-brace', hypothesisId: 'H3', data: { xmlLen: xml.length, tags: _countTags(xml) } });
+      // #endregion
+      let paraReplaceCount = 0;
+      const paraRegex = /<w:p\s*([^>]*)>([\s\S]*?)<\/w:p>/g;
+      xml = xml.replace(paraRegex, (_, attrs, paraContent) => {
+        paraReplaceCount++;
+        return '<w:p' + attrs + '>' + mergePlaceholdersInParagraph(paraContent) + '</w:p>';
+      });
+      // #region agent log
+      _dbg({ location: 'bankPaymentDocGenerator.js:afterStep3', message: 'After step3 paragraph merge', hypothesisId: 'H1', data: { paraReplaceCount, xmlLen: xml.length, tags: _countTags(xml) } });
+      const mergedRunSample = xml.match(/<w:r><w:rPr[\s\S]*?<\/w:rPr><w:t>\{[^}]+\}<\/w:t><\/w:r>/);
+      _dbg({ location: 'bankPaymentDocGenerator.js:mergedRunSample', message: 'First merged run sample', hypothesisId: 'H2', data: { hasMergedRun: !!mergedRunSample, sample: mergedRunSample ? mergedRunSample[0].slice(0, 120) : null } });
+      // #endregion
       z.file('word/document.xml', xml);
     }
     return z;
@@ -303,15 +423,38 @@ async function generateBankPaymentDocBuffer(data) {
       nullGetter,
     });
     d.render(ctx);
-    return d.getZip().generate({
+    const buf = d.getZip().generate({
       type: 'nodebuffer',
       compression: 'DEFLATE',
-      compressionOptions: { level: 9 },
+      compressionOptions: { level: 6 },
     });
+    // #region agent log
+    _dbg({ location: 'bankPaymentDocGenerator.js:renderToBuffer', message: 'Fallback path generate', hypothesisId: 'H4', data: { bufferLen: buf.length } });
+    // #endregion
+    return buf;
   }
 
+  let zipOut;
   try {
-    doc.render(context);
+    doc.render(safeContext);
+    // #region agent log
+    zipOut = doc.getZip();
+    let docXml = zipOut.files['word/document.xml'] ? zipOut.files['word/document.xml'].asText() : '';
+    const tagsAfter = _countTags(docXml);
+    _dbg({ location: 'bankPaymentDocGenerator.js:afterRender', message: 'After docxtemplater render', hypothesisId: 'H5', data: { docXmlLen: docXml.length, tags: tagsAfter } });
+    // #endregion
+    const { openP, closeP } = tagsAfter;
+    if (closeP > openP) {
+      let excess = closeP - openP;
+      while (excess > 0) {
+        const lastIdx = docXml.lastIndexOf('</w:p>');
+        if (lastIdx === -1) break;
+        docXml = docXml.slice(0, lastIdx) + docXml.slice(lastIdx + 6);
+        excess--;
+      }
+      zipOut.file('word/document.xml', docXml);
+      _dbg({ location: 'bankPaymentDocGenerator.js:afterBalance', message: 'After balancing paragraph tags', hypothesisId: 'H5', data: { tags: _countTags(docXml), runId: 'post-fix' } });
+    }
   } catch (renderErr) {
     const isMultiOrTemplate = renderErr && (
       renderErr.name === 'MultiError' ||
@@ -344,16 +487,27 @@ async function generateBankPaymentDocBuffer(data) {
         items: [{ ...merged, amount: singleItemAmount }],
       };
       const freshZip = loadAndNormalizeZip();
-      return renderToBuffer(freshZip, fallbackContext);
+      return renderToBuffer(freshZip, escapeContextForXml(fallbackContext));
     }
     throw renderErr;
   }
 
-  return doc.getZip().generate({
+  const buffer = (zipOut || doc.getZip()).generate({
     type: 'nodebuffer',
     compression: 'DEFLATE',
-    compressionOptions: { level: 9 },
+    compressionOptions: { level: 6 },
   });
+  // #region agent log
+  let zipEntryList = [];
+  try {
+    const z2 = new PizZip(buffer);
+    zipEntryList = Object.keys(z2.files).slice(0, 20);
+  } catch (e) {
+    zipEntryList = ['reopen-failed'];
+  }
+  _dbg({ location: 'bankPaymentDocGenerator.js:afterGenerate', message: 'After zip generate', hypothesisId: 'H4', data: { bufferLen: buffer.length, zipEntryList } });
+  // #endregion
+  return buffer;
 }
 
 module.exports = {

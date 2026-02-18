@@ -277,6 +277,83 @@ function numberAfterKeyword(text, keywordRegex, maxChars) {
 }
 
 /**
+ * First number after keyword that looks like an amount (not a column index 1–19).
+ * Skips numbers that are part of "N.LABEL" (digit(s) followed by dot). Accepts 0, decimals, or integers >= 20.
+ */
+function amountAfterKeyword(text, keywordRegex, maxChars) {
+  if (!text || typeof text !== 'string') return null;
+  const m = text.match(keywordRegex);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const chunk = text.slice(start, start + (maxChars || 500));
+  const re = /[\d,]+(?:\.\d+)?/g;
+  let numMatch;
+  while ((numMatch = re.exec(chunk)) !== null) {
+    const numStr = numMatch[0].replace(/,/g, '').trim();
+    if (!numStr) continue;
+    const nextChar = chunk[numMatch.index + numMatch[0].length];
+    if (nextChar === '.') continue;
+    if (/^INR/i.test(chunk.slice(numMatch.index + numMatch[0].length))) continue;
+    const n = parseFloat(numStr);
+    if (numStr === '0') return '0';
+    if (Number.isInteger(n) && n >= 1 && n <= 19) continue;
+    return numStr;
+  }
+  return null;
+}
+
+/** First number after keyword; only skips "N.LABEL" (short number + dot). No value restrictions — any number accepted. */
+function firstNumberAfterKeyword(text, keywordRegex, maxChars) {
+  if (!text || typeof text !== 'string') return null;
+  const m = text.match(keywordRegex);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const chunk = text.slice(start, start + (maxChars || 500));
+  const re = /[\d,]+(?:\.\d+)?/g;
+  let numMatch;
+  while ((numMatch = re.exec(chunk)) !== null) {
+    const numStr = numMatch[0].replace(/,/g, '').trim();
+    if (!numStr) continue;
+    const nextStart = numMatch.index + numMatch[0].length;
+    const nextChar = chunk[nextStart];
+    if (nextChar === '.' && numStr.length <= 3) continue; // skip "1.BCD", "12.LABEL"
+    if (/^INR/i.test(chunk.slice(nextStart))) continue;
+    return numStr;
+  }
+  return null;
+}
+
+/**
+ * Find first number after a label that is NOT a column header and not part of "N.LABEL" or "X.XXINR".
+ * Searches a large chunk (2200 chars) so we reach data rows that appear below other section headers.
+ */
+function valueAfterLabelSkipColumnNumbers(text, labelRegex, skipNumbers, maxChars) {
+  if (!text || typeof text !== 'string') return null;
+  const m = text.match(labelRegex);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const chunk = text.slice(start, start + (maxChars ?? 2200));
+  const skipSet = new Set((skipNumbers || []).map(Number));
+  const re = /[\d,]+(?:\.\d+)?/g;
+  let numMatch;
+  while ((numMatch = re.exec(chunk)) !== null) {
+    const numStr = numMatch[0].replace(/,/g, '').trim();
+    if (!numStr) continue;
+    if (numStr === '0') return '0';
+    const n = parseFloat(numStr);
+    if (skipSet.has(n)) continue;
+    const nextStart = numMatch.index + numMatch[0].length;
+    const nextChar = chunk[nextStart];
+    if (nextChar === '.') continue;
+    if (/^INR/i.test(chunk.slice(nextStart))) continue;
+    if (n >= 1000000 && Number.isInteger(n)) continue;
+    return numStr;
+  }
+  if (/\b0\b/.test(chunk)) return '0';
+  return null;
+}
+
+/**
  * Find first match of (FOB|CIF|...) after keyword within maxChars. For INVTERM.
  */
 function incoTermAfterKeyword(text, keywordRegex, maxChars) {
@@ -343,59 +420,98 @@ function parseCustomsDocument(text) {
       }
     }
 
-    // ICEGATE duty block: "74138.907413.91926130988520" -> BCD 74138.9, SWS 7413.9, IGST 192613 (do NOT set invoiceValue/assessable from BOE)
+    // ICEGATE duty block: "74138.907413.91926130988520" -> BCD 74138.9, SWS 7413.9, IGST 192613
     const dutyBlock = t.match(/(\d{5})\.(\d)(\d{4,5})\.(\d)(\d{6})(\d{6,7})/);
     if (dutyBlock) {
       const bcd = dutyBlock[1] + '.' + dutyBlock[2];
       let sws = dutyBlock[3] + '.' + dutyBlock[4];
-      if (sws.startsWith('0')) sws = String(parseFloat(sws)); // 07413.9 -> 7413.9
+      if (sws.startsWith('0')) sws = String(parseFloat(sws));
       result.dutyBCD = bcd;
       result.dutySWS = sws;
-      result.gst = dutyBlock[5];   // 192613
+      result.gst = dutyBlock[5];
     }
+    // BCD: any value (including decimals); no value restrictions
     if (!result.dutyBCD) {
-      const bcdMatch = t.match(/(?:BCD|Basic\s+Customs\s+Duty)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d)?/i);
-      if (bcdMatch && bcdMatch[0]) {
-        const num = extractNumberFromLine(bcdMatch[0]);
-        if (num && num.length >= 2) result.dutyBCD = num;
+      const bcdVal = t.match(/(?:1\.\s*)?(?:BCD|Basic\s+Customs\s+Duty)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+      if (bcdVal && bcdVal[1]) {
+        const v = bcdVal[1].replace(/[,\s]/g, '').trim();
+        if (v) result.dutyBCD = v;
+      }
+      if (!result.dutyBCD) {
+        const num = firstNumberAfterKeyword(t, /(?:1\.\s*)?(?:BCD|Basic\s+Customs\s+Duty)/i, 350);
+        if (num != null) result.dutyBCD = num;
       }
     }
+    // SWS: any value (including decimals)
     if (!result.dutySWS) {
-      const swsMatch = t.match(/(?:SWS|Social\s+Welfare\s+Surcharge)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d)?/i);
-      if (swsMatch && swsMatch[0]) {
-        const num = extractNumberFromLine(swsMatch[0]);
-        if (num && num.length >= 2) result.dutySWS = num;
+      const swsVal = t.match(/(?:2\.\s*)?(?:SWS|Social\s+Welfare\s+Surcharge)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+      if (swsVal && swsVal[1]) {
+        const v = swsVal[1].replace(/[,\s]/g, '').trim();
+        if (v) result.dutySWS = v;
+      }
+      if (!result.dutySWS) {
+        const num = firstNumberAfterKeyword(t, /(?:2\.\s*)?(?:SWS|Social\s+Welfare\s+Surcharge)/i, 350);
+        if (num != null) result.dutySWS = num;
       }
     }
+    // IGST/gst: any value (including decimals)
     if (!result.gst) {
-      const igstMatch = t.match(/(?:IGST|Integrated\s+Tax)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+/i);
-      if (igstMatch && igstMatch[0]) {
-        const num = extractNumberFromLine(igstMatch[0]);
-        if (num && num.length >= 2) result.gst = num;
+      const igstVal = t.match(/(?:IGST|Integrated\s+Tax|GST)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+      if (igstVal && igstVal[1]) {
+        const v = igstVal[1].replace(/[,\s]/g, '').trim();
+        if (v) result.gst = v;
+      }
+      if (!result.gst) {
+        const num = firstNumberAfterKeyword(t, /(?:IGST|Integrated\s+Tax|GST)\s*:?/i, 350);
+        if (num != null) result.gst = num;
       }
     }
-    // 15.INT, 16.PNLTY, 17.FINE — extract as separate columns (document layout)
-    const intMatch = t.match(/(?:15\.\s*)?INT\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i) || t.match(/(?:Interest|Duty\s+INT)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i);
-    if (intMatch && intMatch[0]) {
-      const num = extractNumberFromLine(intMatch[0]);
-      if (num !== undefined) result.dutyINT = num;
+    // 15.INT, 16.PNLTY, 17.FINE — any value (including 0 and decimals); no value restrictions
+    const intValueMatch = t.match(/15\.\s*INT\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Interest|Duty\s+INT)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    if (intValueMatch && intValueMatch[1]) {
+      const v = intValueMatch[1].replace(/[,\s]/g, '').trim();
+      if (v) result.dutyINT = v;
     }
-    const penaltyMatch = t.match(/(?:16\.\s*)?PNLTY\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i) || t.match(/(?:Penalty|Penalties)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i);
-    if (penaltyMatch && penaltyMatch[0]) {
-      const num = extractNumberFromLine(penaltyMatch[0]);
-      if (num !== undefined) result.penalty = num;
+    if (result.dutyINT == null) {
+      const num = firstNumberAfterKeyword(t, /15\.\s*INT/i, 400);
+      if (num != null) result.dutyINT = num;
     }
-    const fineMatch = t.match(/(?:17\.\s*)?FINE\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i) || t.match(/(?:Fine|Fines)\s*:?\s*(?:Rs\.?|INR)?\s*[\d,]+(?:\.\d{2})?/i);
-    if (fineMatch && fineMatch[0]) {
-      const num = extractNumberFromLine(fineMatch[0]);
-      if (num !== undefined) result.fine = num;
+    const penaltyValueMatch = t.match(/16\.\s*PNLTY\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Penalty|Penalties)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    if (penaltyValueMatch && penaltyValueMatch[1]) {
+      const v = penaltyValueMatch[1].replace(/[,\s]/g, '').trim();
+      if (v) result.penalty = v;
+    }
+    if (result.penalty == null) {
+      const num = firstNumberAfterKeyword(t, /16\.\s*PNLTY/i, 400);
+      if (num != null) result.penalty = num;
+    }
+    const fineValueMatch = t.match(/17\.\s*FINE\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Fine|Fines)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    if (fineValueMatch && fineValueMatch[1]) {
+      const v = fineValueMatch[1].replace(/[,\s]/g, '').trim();
+      if (v) result.fine = v;
+    }
+    if (result.fine == null) {
+      const num = firstNumberAfterKeyword(t, /17\.\s*FINE/i, 400);
+      if (num != null) result.fine = num;
     }
 
-    // Exchange rate (e.g. 1 USD=83.75INR or Exchange Rate : 83.75)
+    // Exchange rate: USD, GBP, EUR -> INR (e.g. "1 USD=91.35INR", "1 GBP=99.5 INR", "1 EUR=98.2INR")
     const exchPatterns = [
+      /1\s*USD\s*=\s*([\d.]+)\s*INR/i,
+      /1\s*USD\s*=\s*([\d.]+)INR/i,
       /1\s*USD\s*=\s*([\d.]+)(?:\s*INR)?/i,
+      /1\s*GBP\s*=\s*([\d.]+)\s*INR/i,
+      /1\s*GBP\s*=\s*([\d.]+)INR/i,
+      /1\s*GBP\s*=\s*([\d.]+)(?:\s*INR)?/i,
+      /GBP\s*[=:]\s*([\d.]+)\s*INR/i,
+      /1\s*EUR\s*=\s*([\d.]+)\s*INR/i,
+      /1\s*EUR\s*=\s*([\d.]+)INR/i,
+      /EUR\s*[=:]\s*([\d.]+)\s*INR/i,
+      /USD\s*[=:]\s*([\d.]+)\s*INR/i,
       /Exchange\s*Rate\s*:?\s*([\d.]+)/i,
+      /(?:Exchange\s*)?Rate\s*:?\s*[\s\n]*([\d.]+)/i,
       /(?:Rate|INR)\s*[=:]\s*([\d.]+)/i,
+      /=\s*([\d.]+)\s*INR/i,
     ];
     for (const re of exchPatterns) {
       const m = t.match(re);
@@ -407,11 +523,68 @@ function parseCustomsDocument(text) {
         }
       }
     }
+    if (!result.exchangeRate) {
+      const rateNum = firstNumberAfterKeyword(t, /Exchange\s*Rate|(?:1\s*)?(?:USD|GBP|EUR)\s*=/i, 80);
+      if (rateNum && parseFloat(rateNum) > 0) result.exchangeRate = rateNum;
+    }
 
-    // Inco term (FOB, CIF, etc.) — also INVTERM / 7.INVTERM as on Shipping Bills
-    const incoMatch = t.match(/(?:Inco\s*Term|Incoterm|Term|(?:7\.\s*)?INVTERM)\s*:?\s*(FOB|CIF|EXW|DDP|CFR|C\s*&\s*F|DAP|DPU)/i)
+    // Inco term (FOB, CIF, etc.) — try label:value first, then keyword-then-term within 250 chars
+    const incoMatch = t.match(/(?:Inco\s*Term|Incoterm|(?:7\.\s*)?INVTERM)\s*:?\s*(FOB|CIF|EXW|DDP|CFR|C\s*&\s*F|DAP|DPU)/i)
       || t.match(/\b(FOB|CIF|EXW|DDP|CFR|DAP|DPU)\b/i);
     if (incoMatch && incoMatch[1]) result.incoTerm = incoMatch[1].replace(/\s+/g, '').toUpperCase();
+    if (!result.incoTerm) {
+      const incoAfter = incoTermAfterKeyword(t, /(?:Inco\s*Term|INVTERM|Term)\s*:?/i, 250);
+      if (incoAfter) result.incoTerm = incoAfter;
+    }
+    if (!result.incoTerm) {
+      const incoAfter = incoTermAfterKeyword(t, /1\.\s*BCD/i, 150);
+      if (incoAfter) result.incoTerm = incoAfter;
+    }
+
+    // Assessable value / Total value / CIF value (BOE) — flexible labels and amount-after-keyword
+    const assessablePatterns = [
+      /(?:18\.\s*)?TOT\.?\s*ASS\.?\s*VAL(?:UE)?\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
+      /Assessable\s+Value\s*:?\s*(?:Rs\.?|INR|USD|GBP|EUR)?\s*([\d,]+(?:\.\d{2})?)/i,
+      /Total\s+Assessable\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
+      /Assessable\s+Value\s+([\d,]+(?:\.\d{2})?)/i,
+      /Total\s+Value\s*:?\s*(?:Rs\.?|INR|USD|GBP)?\s*([\d,]+(?:\.\d{2})?)/i,
+      /CIF\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
+      /Invoice\s+Value\s*:?\s*(?:Rs\.?|INR|USD|GBP)?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:Duty\s+)?Payable\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
+      /Assessment\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
+    ];
+    for (const re of assessablePatterns) {
+      const m = t.match(re);
+      if (m && m[1]) {
+        const v = m[1].replace(/[,\s]/g, '').trim();
+        if (v) {
+          result.invoiceValue = v;
+          break;
+        }
+      }
+    }
+    if (!result.invoiceValue) {
+      for (const label of [/TOT\.?\s*ASS\.?\s*VAL/i, /Assessable\s+Value/i, /Total\s+Assessable/i, /Total\s+Value/i, /CIF\s+Value/i, /Invoice\s+Value/i, /Duty\s+Payable/i]) {
+        const num = amountAfterKeyword(t, label, 300);
+        if (num != null) {
+          result.invoiceValue = num;
+          break;
+        }
+      }
+    }
+    // Total Assessable Value: 18.TOT.ASS VAL first; any value including decimals (no min/max).
+    if (!result.invoiceValue) {
+      const num = amountAfterKeyword(t, /18\.\s*TOT\.?\s*ASS\.?\s*VAL/i, 1200);
+      if (num != null) result.invoiceValue = num;
+    }
+    if (!result.invoiceValue) {
+      const num = amountAfterKeyword(t, /TOT\.?\s*ASS\.?\s*VAL/i, 1200);
+      if (num != null) result.invoiceValue = num;
+    }
+    if (!result.invoiceValue) {
+      const num = amountAfterKeyword(t, /19\.\s*TOT\.?\s*AMOUNT/i, 1200);
+      if (num != null) result.invoiceValue = num;
+    }
 
     // Port Code (BOE)
     const portPattern = /IN[A-Z]{3}\d{1,2}\b/g;
@@ -713,29 +886,38 @@ function parseCustomsDocument(text) {
       }
     }
 
-    // ---- 9.EXCHANGE RATE — look for "1 USD INR 86.9" anywhere after EXCHANGE RATE or in text ----
+    // ---- 9.EXCHANGE RATE — USD, GBP, EUR -> INR ----
     if (!result.exchangeRate) {
-      let rateVal = valueAfterLabel(t, /(?:9\.\s*)?EXCHANGE\s+RATE/i, /1\s*USD\s+INR\s+([\d.]+)/i);
-      if (rateVal) {
-        const n = parseFloat(rateVal);
-        if (!Number.isNaN(n) && n > 0) result.exchangeRate = String(n);
-      }
-      if (!result.exchangeRate) {
+      const ratePatterns = [
+        /1\s*USD\s*=\s*([\d.]+)\s*INR/i,
+        /1\s*USD\s*=\s*([\d.]+)INR/i,
+        /1\s*USD\s*=\s*([\d.]+)(?:\s*INR)?/i,
+        /1\s*USD\s+INR\s+([\d.]+)/i,
+        /1\s*GBP\s*=\s*([\d.]+)\s*INR/i,
+        /1\s*GBP\s*=\s*([\d.]+)INR/i,
+        /1\s*GBP\s*=\s*([\d.]+)(?:\s*INR)?/i,
+        /1\s*EUR\s*=\s*([\d.]+)\s*INR/i,
+        /1\s*EUR\s*=\s*([\d.]+)INR/i,
+      ];
+      for (const re of ratePatterns) {
         const chunk = (function () {
           const mx = t.match(/(?:9\.\s*)?EXCHANGE\s+RATE/i);
-          return mx ? t.slice(mx.index, mx.index + 80) : t;
+          return mx ? t.slice(mx.index, mx.index + 120) : t;
         })();
-        const rateMatch = chunk.match(/1\s*USD\s+INR\s+([\d.]+)/i) || t.match(/1\s*USD\s+INR\s+([\d.]+)/i);
-        if (rateMatch && rateMatch[1]) {
-          const n = parseFloat(rateMatch[1]);
-          if (!Number.isNaN(n) && n > 0) result.exchangeRate = String(rateMatch[1]);
+        const m = chunk.match(re) || t.match(re);
+        if (m && m[1]) {
+          const n = parseFloat(m[1]);
+          if (!Number.isNaN(n) && n > 0) {
+            result.exchangeRate = String(m[1]);
+            break;
+          }
         }
       }
       if (!result.exchangeRate) {
-        const m = t.match(/1\s*USD\s*=\s*([\d.]+)(?:\s*INR)?/i);
-        if (m && m[1]) {
-          const n = parseFloat(m[1]);
-          if (!Number.isNaN(n) && n > 0) result.exchangeRate = String(m[1]);
+        const rateVal = valueAfterLabel(t, /(?:9\.\s*)?EXCHANGE\s+RATE/i, /1\s*(?:USD|GBP|EUR)\s*=\s*([\d.]+)/i);
+        if (rateVal) {
+          const n = parseFloat(rateVal);
+          if (!Number.isNaN(n) && n > 0) result.exchangeRate = String(rateVal);
         }
       }
     }
