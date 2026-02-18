@@ -336,7 +336,6 @@ function dutyValueAfterLabel(text, labelRegex, maxChars) {
     if (/^INR/i.test(chunk.slice(nextStart))) continue;
     const n = parseFloat(numStr);
     if (Number.isInteger(n) && n >= 1 && n <= 19) continue;
-    if (Number.isInteger(n) && n >= 20 && n < 1000) continue; // skip row/col numbers (e.g. 121, 6)
     return numStr;
   }
   return null;
@@ -440,7 +439,7 @@ function parseCustomsDocument(text) {
     }
 
     // ICEGATE duty block (format 1): "74138.907413.91926130988520" -> BCD 74138.9, SWS 7413.9, IGST 192613
-    const dutyBlock = t.match(/(\d{5})\.(\d)(\d{4,5})\.(\d)(\d{6})(\d{6,7})/);
+    const dutyBlock = t.match(/(\d+)\.(\d)(\d+)\.(\d)(\d+)(\d+)/);
     if (dutyBlock) {
       const bcd = dutyBlock[1] + '.' + dutyBlock[2];
       let sws = dutyBlock[3] + '.' + dutyBlock[4];
@@ -586,7 +585,7 @@ function parseCustomsDocument(text) {
         const n = parseFloat(v);
         if (!Number.isNaN(n) && n >= 1000) return v;
       }
-      // 2) Same line: TOT.ASS VAL / Assessable / CIF (no "19.TOT.AMOUNT")
+      // 2) Same line: TOT.ASS VAL / Assessable / CIF (no "19.TOT.AMOUNT"); min 1000
       const labelPatterns = [
         /TOT\.?\s*ASS\.?\s*VAL[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
         /Assessable\s+Value[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
@@ -601,7 +600,7 @@ function parseCustomsDocument(text) {
           if (!Number.isNaN(n) && n >= 1000) return v;
         }
       }
-      // 3) Value below label: find 18.TOT.ASS VAL (preceded by non-digit so "CESS18" matches), then first number >= 100000
+      // 3) Value below label: find 18.TOT.ASS VAL (preceded by non-digit so "CESS18" matches), then first number >= 1000
       const m18 = text.match(/(?:^|[^\d])18\.?\s*TOT\.?\s*ASS\.?\s*VAL/i);
       if (m18) {
         const start = m18.index + m18[0].length;
@@ -611,10 +610,10 @@ function parseCustomsDocument(text) {
         while ((numMatch = numRe.exec(chunk)) !== null) {
           const v = numMatch[0].replace(/,/g, '').trim();
           const n = parseFloat(v);
-          if (!Number.isNaN(n) && n >= 100000) return v;
+          if (!Number.isNaN(n) && n >= 1000) return v;
         }
       }
-      // 4) Fallback: Assessable/CIF label then first number >= 100000
+      // 4) Fallback: Assessable/CIF label then first number >= 1000
       for (const re of [/Assessable\s+Value/i, /Total\s+Assessable\s+Value/i, /CIF\s+Value/i]) {
         const m = text.match(re);
         if (!m) continue;
@@ -625,7 +624,7 @@ function parseCustomsDocument(text) {
         while ((numMatch = numRe.exec(chunk)) !== null) {
           const v = numMatch[0].replace(/,/g, '').trim();
           const n = parseFloat(v);
-          if (!Number.isNaN(n) && n >= 100000) return v;
+          if (!Number.isNaN(n) && n >= 1000) return v;
         }
       }
       return null;
