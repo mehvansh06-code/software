@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Supplier, Shipment, Licence, LetterOfCredit, AppDomain, Buyer } from '../types';
 import { api } from '../api';
+import { SAMPLE_LICENCES, SAMPLE_LCS, SAMPLE_EXPORT_LCS, SAMPLE_BUYERS, SAMPLE_SHIPMENTS } from '../sampleData';
 
 export interface UseAppDataReturn {
   data: {
@@ -64,24 +65,26 @@ export function useAppData(): UseAppDataReturn {
         api.lcs.list().catch(() => []),
       ]);
       setSuppliers(Array.isArray(s) ? s : []);
-      setBuyers(Array.isArray(b) ? b : []);
+      const buyersFromApi = Array.isArray(b) ? b : [];
+      setBuyers(buyersFromApi.length > 0 ? buyersFromApi : SAMPLE_BUYERS);
       const fromApi = Array.isArray(sh) ? sh : [];
-      // When server is available, use only server data so all browsers show the same list.
-      // Don't merge localStorage (per-browser) — that caused different data in different browsers.
+      const baseShipments = fromApi.length > 0 ? fromApi : SAMPLE_SHIPMENTS;
       const fromLocal = api.system.getMode() === 'OFFLINE' ? api.system.getLocalShipments() : [];
       setShipments(prev => {
-        const inApi = (id: string) => fromApi.some((x: Shipment) => x.id === id);
-        const fromPrev = prev.filter(p => !inApi(p.id));
-        const fromStorage = Array.isArray(fromLocal) ? fromLocal.filter((p: Shipment) => !inApi(p.id)) : [];
-        const merged = [...fromApi];
-        const seen = new Set(fromApi.map((x: Shipment) => x.id));
+        const inBase = (id: string) => baseShipments.some((x: Shipment) => x.id === id);
+        const fromPrev = prev.filter(p => !inBase(p.id));
+        const fromStorage = Array.isArray(fromLocal) ? fromLocal.filter((p: Shipment) => !inBase(p.id)) : [];
+        const merged = [...baseShipments];
+        const seen = new Set(baseShipments.map((x: Shipment) => x.id));
         [...fromStorage, ...fromPrev].forEach((p: Shipment) => {
           if (!seen.has(p.id)) { seen.add(p.id); merged.push(p); }
         });
         return merged;
       });
-      setLicences(Array.isArray(l) ? l : []);
-      setLcs(Array.isArray(lc) ? lc : []);
+      const licencesFromApi = Array.isArray(l) ? l : [];
+      const lcsFromApi = Array.isArray(lc) ? lc : [];
+      setLicences(licencesFromApi.length > 0 ? licencesFromApi : SAMPLE_LICENCES);
+      setLcs(lcsFromApi.length > 0 ? lcsFromApi : [...SAMPLE_LCS, ...SAMPLE_EXPORT_LCS]);
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
     } catch (err) {
       console.error('Data refresh failed:', err);

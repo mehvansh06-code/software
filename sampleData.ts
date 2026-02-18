@@ -97,6 +97,13 @@ export const SAMPLE_LCS: LetterOfCredit[] = Array.from({ length: 5 }).map((_, i)
   remarks: `Q4 Batch ${i + 1}`
 }));
 
+/** Export LCs (buyer-opened; we receive payment against these). Shown in Export LC Tracker when no real data. */
+export const SAMPLE_EXPORT_LCS: LetterOfCredit[] = [
+  { id: 'lex1', lcNumber: 'LC/EXP/24/2001', issuingBank: 'Barclays Bank', buyerId: 'b1', amount: 45000, currency: 'GBP', issueDate: getDaysAgo(20), expiryDate: getDaysFuture(30), maturityDate: getDaysFuture(60), company: 'GFPL', status: LCStatus.OPEN, remarks: 'London Fashion Hub - Spring order' },
+  { id: 'lex2', lcNumber: 'LC/EXP/24/2002', issuingBank: 'Chase Bank', buyerId: 'b2', amount: 32000, currency: 'USD', issueDate: getDaysAgo(10), expiryDate: getDaysFuture(45), maturityDate: getDaysFuture(75), company: 'GTEX', status: LCStatus.OPEN, remarks: 'NY Trends - Cotton yarn' },
+  { id: 'lex3', lcNumber: 'LC/EXP/24/2003', issuingBank: 'Barclays Bank', buyerId: 'b1', amount: 28000, currency: 'GBP', issueDate: getDaysAgo(5), expiryDate: getDaysFuture(15), maturityDate: getDaysFuture(40), company: 'GFPL', status: LCStatus.OPEN, remarks: 'Follow-up order' },
+];
+
 export const SAMPLE_SHIPMENTS: Shipment[] = Array.from({ length: 10 }).map((_, i) => {
   const isExport = i > 5;
   const rate = 5;

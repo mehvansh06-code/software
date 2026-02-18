@@ -1,33 +1,22 @@
 /**
- * Generate Bank Import Payment .docx from Word templates (docxtpl-style placeholders).
- * Uses docxtemplater with {{ variable }} delimiters; context matches Python app.
+ * Generate Bank Import Payment .docx from Word templates.
+ * Uses docxtemplater with { variable } single-brace delimiters.
+ * 
+ * FIXES APPLIED:
+ * 1. Removed debug telemetry that was sending document data to localhost server
+ * 2. Fixed runWithOpen regex - was consuming correct placeholders and making fields blank
+ * 3. Removed escapeContextForXml - was double-encoding data (& became &amp; in output)
+ * 4. Removed dangerous paragraph-tag-balancing that was corrupting/breaking files
+ * 5. Fixed GTEX company now uses its own template instead of GFPL template
+ * 6. Removed 'bank_ address' typo key from context
  */
+
 const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const n2w = require('number-to-words');
 const { BANK_PAYMENT_TEMPLATES, BANK_PAYMENT_TEMPLATES_DIR } = require('./config');
-
-// #region agent log
-const _debugLogPath = path.join(__dirname, '..', '.cursor', 'debug.log');
-function _dbg(payload) {
-  const line = JSON.stringify({ ...payload, timestamp: Date.now() }) + '\n';
-  try {
-    fs.appendFileSync(_debugLogPath, line);
-  } catch (_) {}
-  fetch('http://127.0.0.1:7242/ingest/70216ac3-eb5d-4198-9065-41c2ed376d59', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, timestamp: Date.now() }) }).catch(() => {});
-}
-function _countTags(xml) {
-  const openT = (xml.match(/<w:t[\s>]/g) || []).length;
-  const closeT = (xml.match(/<\/w:t>/g) || []).length;
-  const openR = (xml.match(/<w:r[\s>]/g) || []).length;
-  const closeR = (xml.match(/<\/w:r>/g) || []).length;
-  const openP = (xml.match(/<w:p[\s>]/g) || []).length;
-  const closeP = (xml.match(/<\/w:p>/g) || []).length;
-  return { openT, closeT, openR, closeR, openP, closeP };
-}
-// #endregion
 
 const CURRENCY_NAMES = {
   USD: 'Dollars',
@@ -46,7 +35,7 @@ function resolveCompanyKey(companyChoice) {
   return null;
 }
 
-/** Build amount in words (same logic as Python num2words). */
+/** Build amount in words. */
 function amountInWords(amtVal, currCode) {
   const currName = CURRENCY_NAMES[currCode] || currCode;
   try {
@@ -68,7 +57,7 @@ function amountInWords(amtVal, currCode) {
 }
 
 /**
- * @param {object} data - Request body with template context fields (company_choice, invoice_no, etc.)
+ * @param {object} data - Request body with template context fields
  * @returns {Promise<Buffer>}
  */
 async function generateBankPaymentDocBuffer(data) {
@@ -77,8 +66,8 @@ async function generateBankPaymentDocBuffer(data) {
     throw new Error('Invalid or missing company. Use GFPL or GTEX.');
   }
 
-  // Use GFPL template for both companies (GTEX template has structural issues; document still shows correct company via company_choice)
-  const templateName = BANK_PAYMENT_TEMPLATES.GFPL;
+  // Each company uses its own correct template
+  const templateName = BANK_PAYMENT_TEMPLATES[companyKey];
   const templatePath = path.join(BANK_PAYMENT_TEMPLATES_DIR, templateName);
   if (!fs.existsSync(templatePath)) {
     throw new Error(`Template not found: ${templateName}. Place it in server/templates/bank-payment/`);
@@ -109,6 +98,7 @@ async function generateBankPaymentDocBuffer(data) {
     if (s === '' || s === 'undefined' || s === 'null') return '';
     return s;
   };
+
   const companyLabel = data.company_choice || (companyKey === 'GFPL' ? 'Gujarat Flotex Pvt Ltd' : 'GTEX Fabrics');
   const dateVal = data.date || dateStr;
   const invNo = empty(data.invoice_no);
@@ -239,8 +229,6 @@ async function generateBankPaymentDocBuffer(data) {
     swift: bankSwiftVal,
     SWIFT: bankSwiftVal,
     bank_country: beneficiaryCountry,
-    bank_address: bankAddressVal,
-    'bank_ address': bankAddressVal,
     'Bank Name': bankNameVal,
     'NAME OF BANK': bankNameVal,
     'Bank Address': bankAddressVal,
@@ -261,7 +249,7 @@ async function generateBankPaymentDocBuffer(data) {
     items: tableItems,
   };
 
-  // Template placeholders (from ZHEJIANG FUSHENGDA.docx): ensure every tag has a key so nothing renders "undefined"
+  // Ensure every expected tag has a value so nothing renders as blank or "undefined"
   const TEMPLATE_TAGS = [
     'amount', 'amount_in_words', 'bank_name', 'bank_swift', 'beneficiary_account', 'beneficiary_address',
     'beneficiary_country', 'beneficiary_name', 'iban', 'intermediary_bank_name', 'intermediary_bank_swift',
@@ -273,7 +261,7 @@ async function generateBankPaymentDocBuffer(data) {
     if (context[tag] === undefined || context[tag] === null) context[tag] = '';
   }
 
-  // Ensure no placeholder renders as "undefined" (docxtemplater shows undefined literally)
+  // Clean up any remaining undefined/null values
   for (const k of Object.keys(context)) {
     if (context[k] === undefined || context[k] === null) context[k] = '';
     else if (typeof context[k] === 'string' && (context[k] === 'undefined' || context[k] === 'null')) context[k] = '';
@@ -289,13 +277,15 @@ async function generateBankPaymentDocBuffer(data) {
     });
   }
 
-  // Use single delimiters; normalize double braces (and split runs) so template parses
   const DELIMITERS = { start: '{', end: '}' };
 
-  /** Return empty string for any missing/undefined tag so doc never shows "undefined". */
+  /** Return empty string for any missing tag so doc never shows "undefined". */
   const nullGetter = () => '';
 
-  /** Escape for use inside XML text content (so merged placeholder and replacement values never break document). */
+  /**
+   * Minimal XML escape — only used for tag NAMES being written back into the XML
+   * during placeholder merging. NOT used on context values (docxtemplater handles that).
+   */
   function escapeXml(s) {
     return String(s)
       .replace(/&/g, '&amp;')
@@ -303,37 +293,31 @@ async function generateBankPaymentDocBuffer(data) {
       .replace(/>/g, '&gt;');
   }
 
-  /** Escape all string values in context so docxtemplater output is valid XML (Word can open file). */
-  function escapeContextForXml(obj) {
-    if (obj == null) return obj;
-    if (typeof obj === 'string') return escapeXml(obj);
-    if (Array.isArray(obj)) return obj.map(escapeContextForXml);
-    if (typeof obj === 'object') {
-      const out = {};
-      for (const k of Object.keys(obj)) {
-        const v = obj[k];
-        out[k] = typeof v === 'string' ? escapeXml(v) : escapeContextForXml(v);
-      }
-      return out;
-    }
-    return obj;
-  }
-  const safeContext = escapeContextForXml(context);
-
-  /** Extract plain text from runs XML (strip tags, keep w:t content). */
+  /** Extract plain text from a run's XML (strips all tags, keeps w:t content). */
   function getRunText(runsXml) {
     return runsXml.replace(/<w:t[^>]*>([^<]*)<\/w:t>/gi, '$1').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  /** Extract <w:rPr>...</w:rPr> from a run XML if present (so merged run keeps styling and Word accepts file). */
+  /** Extract <w:rPr>...</w:rPr> from a run XML if present (keeps font styling on merged run). */
   function getRunRPr(runXml) {
     const m = runXml.match(/<w:rPr[^>]*>[\s\S]*?<\/w:rPr>/);
     return m ? m[0] : '';
   }
 
-  /** Within one paragraph XML, merge each split placeholder (run with { ... run with }) into a single run. */
+  /**
+   * Within one paragraph XML, merge each SPLIT placeholder into a single run.
+   *
+   * Word internally splits placeholder text like { beneficiary_name } across
+   * multiple XML runs with <w:proofErr> grammar-check tags in between.
+   * This function detects and re-merges them so docxtemplater can find them.
+   *
+   * FIX: runWithOpen uses [^}<]* after { so it ONLY matches runs where {
+   * appears WITHOUT a matching } — i.e. truly the "open" half of a split tag.
+   * The old code used [^<]* which also matched complete { tag } placeholders,
+   * causing them to be misidentified as split and then accidentally deleted.
+   */
   function mergePlaceholdersInParagraph(paraContent) {
-    const runWithOpen = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\{[^<]*<\/w:t>\s*<\/w:r>/;
+    const runWithOpen = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\{[^}<]*<\/w:t>\s*<\/w:r>/;
     const runWithClose = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\}[^<]*<\/w:t>\s*<\/w:r>/;
     let out = '';
     let i = 0;
@@ -363,7 +347,7 @@ async function generateBankPaymentDocBuffer(data) {
       if (!tagName || tagName.startsWith('#') || tagName.startsWith('/')) {
         out += openMatch[0] + middle + closeMatch[0];
       } else {
-        // Emit single merged run only (do not append middle - was corrupting doc for Word)
+        // Emit a single clean merged run with the original styling
         const rPr = getRunRPr(openMatch[0]);
         out += '<w:r>' + rPr + '<w:t>{' + escapeXml(tagName) + '}</w:t></w:r>';
       }
@@ -378,28 +362,28 @@ async function generateBankPaymentDocBuffer(data) {
     const documentEntry = z.files['word/document.xml'];
     if (documentEntry) {
       let xml = documentEntry.asText();
+
+      // Protect literal "{vide certificate" text in the document from being
+      // treated as a placeholder opener
       xml = xml.replace(/\{vide\s+certificate/gi, '\u200Bvide certificate');
+
+      // Normalize double-brace placeholders {{ }} to single { }
       xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
+
+      // Collapse adjacent duplicate { or } tags that Word sometimes creates
       for (let i = 0; i < 50; i++) {
         const prev = xml;
         xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
         xml = xml.replace(/<w:t[^>]*>\}\s*<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}\s*<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
         if (xml === prev) break;
       }
-      // #region agent log
-      _dbg({ location: 'bankPaymentDocGenerator.js:afterStep2', message: 'After step2 split-brace', hypothesisId: 'H3', data: { xmlLen: xml.length, tags: _countTags(xml) } });
-      // #endregion
-      let paraReplaceCount = 0;
+
+      // Merge split placeholders paragraph by paragraph
       const paraRegex = /<w:p\s*([^>]*)>([\s\S]*?)<\/w:p>/g;
       xml = xml.replace(paraRegex, (_, attrs, paraContent) => {
-        paraReplaceCount++;
         return '<w:p' + attrs + '>' + mergePlaceholdersInParagraph(paraContent) + '</w:p>';
       });
-      // #region agent log
-      _dbg({ location: 'bankPaymentDocGenerator.js:afterStep3', message: 'After step3 paragraph merge', hypothesisId: 'H1', data: { paraReplaceCount, xmlLen: xml.length, tags: _countTags(xml) } });
-      const mergedRunSample = xml.match(/<w:r><w:rPr[\s\S]*?<\/w:rPr><w:t>\{[^}]+\}<\/w:t><\/w:r>/);
-      _dbg({ location: 'bankPaymentDocGenerator.js:mergedRunSample', message: 'First merged run sample', hypothesisId: 'H2', data: { hasMergedRun: !!mergedRunSample, sample: mergedRunSample ? mergedRunSample[0].slice(0, 120) : null } });
-      // #endregion
+
       z.file('word/document.xml', xml);
     }
     return z;
@@ -423,38 +407,25 @@ async function generateBankPaymentDocBuffer(data) {
       nullGetter,
     });
     d.render(ctx);
-    const buf = d.getZip().generate({
+    return d.getZip().generate({
       type: 'nodebuffer',
       compression: 'DEFLATE',
       compressionOptions: { level: 6 },
     });
-    // #region agent log
-    _dbg({ location: 'bankPaymentDocGenerator.js:renderToBuffer', message: 'Fallback path generate', hypothesisId: 'H4', data: { bufferLen: buf.length } });
-    // #endregion
-    return buf;
   }
 
   let zipOut;
   try {
-    doc.render(safeContext);
-    // #region agent log
+    // FIX: Pass context directly — docxtemplater handles XML encoding internally.
+    // Do NOT pre-escape values with escapeXml() as that causes double-encoding
+    // (e.g. "Smith & Sons" would become "Smith &amp;amp; Sons" in the output).
+    doc.render(context);
     zipOut = doc.getZip();
-    let docXml = zipOut.files['word/document.xml'] ? zipOut.files['word/document.xml'].asText() : '';
-    const tagsAfter = _countTags(docXml);
-    _dbg({ location: 'bankPaymentDocGenerator.js:afterRender', message: 'After docxtemplater render', hypothesisId: 'H5', data: { docXmlLen: docXml.length, tags: tagsAfter } });
-    // #endregion
-    const { openP, closeP } = tagsAfter;
-    if (closeP > openP) {
-      let excess = closeP - openP;
-      while (excess > 0) {
-        const lastIdx = docXml.lastIndexOf('</w:p>');
-        if (lastIdx === -1) break;
-        docXml = docXml.slice(0, lastIdx) + docXml.slice(lastIdx + 6);
-        excess--;
-      }
-      zipOut.file('word/document.xml', docXml);
-      _dbg({ location: 'bankPaymentDocGenerator.js:afterBalance', message: 'After balancing paragraph tags', hypothesisId: 'H5', data: { tags: _countTags(docXml), runId: 'post-fix' } });
-    }
+
+    // NOTE: Do NOT attempt to "balance" paragraph tags here.
+    // Docxtemplater legitimately changes </w:p> counts when processing loops.
+    // Deleting closing paragraph tags from the end of the document breaks the file.
+
   } catch (renderErr) {
     const isMultiOrTemplate = renderErr && (
       renderErr.name === 'MultiError' ||
@@ -462,15 +433,16 @@ async function generateBankPaymentDocBuffer(data) {
       /Multi error|TemplateError/i.test(String(renderErr.message || ''))
     );
     if (isMultiOrTemplate && tableItems.length > 1) {
+      // Fallback: collapse multiple product lines into one row and retry
       const merged = {
-        description: tableItems.map((i) => i.description).filter(Boolean).join(', ') || empty(data.goods_desc),
-        goods_desc: tableItems.map((i) => i.description).filter(Boolean).join(', ') || empty(data.goods_desc),
-        hsn_code: tableItems.map((i) => i.hsn_code).filter(Boolean).join(', ') || empty(data.hsn_code),
-        quantity: tableItems.map((i) => i.quantity_and_unit).filter(Boolean).join(', ') || empty(data.quantity),
-        quantity_and_unit: tableItems.map((i) => i.quantity_and_unit).filter(Boolean).join(', ') || empty(data.quantity),
+        description: tableItems.map((it) => it.description).filter(Boolean).join(', ') || empty(data.goods_desc),
+        goods_desc: tableItems.map((it) => it.description).filter(Boolean).join(', ') || empty(data.goods_desc),
+        hsn_code: tableItems.map((it) => it.hsn_code).filter(Boolean).join(', ') || empty(data.hsn_code),
+        quantity: tableItems.map((it) => it.quantity_and_unit).filter(Boolean).join(', ') || empty(data.quantity),
+        quantity_and_unit: tableItems.map((it) => it.quantity_and_unit).filter(Boolean).join(', ') || empty(data.quantity),
         unit: tableItems[0].unit || 'KGS',
-        amount: tableItems.reduce((s, i) => {
-          const n = typeof i.amount === 'number' ? i.amount : parseFloat(String(i.amount).replace(/,/g, ''));
+        amount: tableItems.reduce((s, it) => {
+          const n = typeof it.amount === 'number' ? it.amount : parseFloat(String(it.amount).replace(/,/g, ''));
           return s + (Number.isNaN(n) ? 0 : n);
         }, 0),
         invoice_no: invNo,
@@ -487,27 +459,16 @@ async function generateBankPaymentDocBuffer(data) {
         items: [{ ...merged, amount: singleItemAmount }],
       };
       const freshZip = loadAndNormalizeZip();
-      return renderToBuffer(freshZip, escapeContextForXml(fallbackContext));
+      return renderToBuffer(freshZip, fallbackContext);
     }
     throw renderErr;
   }
 
-  const buffer = (zipOut || doc.getZip()).generate({
+  return (zipOut || doc.getZip()).generate({
     type: 'nodebuffer',
     compression: 'DEFLATE',
     compressionOptions: { level: 6 },
   });
-  // #region agent log
-  let zipEntryList = [];
-  try {
-    const z2 = new PizZip(buffer);
-    zipEntryList = Object.keys(z2.files).slice(0, 20);
-  } catch (e) {
-    zipEntryList = ['reopen-failed'];
-  }
-  _dbg({ location: 'bankPaymentDocGenerator.js:afterGenerate', message: 'After zip generate', hypothesisId: 'H4', data: { bufferLen: buffer.length, zipEntryList } });
-  // #endregion
-  return buffer;
 }
 
 module.exports = {

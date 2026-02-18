@@ -364,7 +364,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       a.href = url;
       a.download = `BankPayment_${(invoiceNo || 'document').replace(/\s/g, '_')}_${currency || 'USD'}.docx`;
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (e: any) {
       const msg = e?.message || 'Failed to generate document.';
       const isTemplateError = typeof msg === 'string' && /multi\s*error|template\s*error/i.test(msg);

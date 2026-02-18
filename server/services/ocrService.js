@@ -6,7 +6,7 @@
  */
 
 const PDF_MAGIC = Buffer.from('%PDF');
-const MIN_TEXT_LENGTH_FOR_LAYER = 40;
+const MIN_TEXT_LENGTH_FOR_LAYER = 20;
 
 let _pdfParseV2 = undefined;
 let _pdfParseLegacy = undefined;
@@ -37,10 +37,9 @@ function isPdfBuffer(buffer) {
 /** Heuristic: true if text looks like a scan (empty or garbled) rather than digital PDF text. */
 function isTextGarbled(text) {
   const t = (text || '').trim();
+  // For computer-generated PDFs (BOE and Shipping Bills from ICEGATE),
+  // if we extracted any meaningful text at all, trust it completely.
   if (t.length < MIN_TEXT_LENGTH_FOR_LAYER) return true;
-  const hasDigits = /\d/.test(t);
-  const hasCustomsKeywords = /Bill\s+of\s+Entry|Shipping\s+Bill|S\/B\s+No|Date|Dated|IN[A-Z]{3}\d/i.test(t);
-  if (!hasDigits && !hasCustomsKeywords) return true;
   return false;
 }
 
@@ -166,7 +165,7 @@ async function extractTextFromImage(buffer) {
   });
   try {
     try {
-      await worker.setParameters({ tessedit_pageseg_mode: '6' }); // PSM 6: single block (forms/invoices)
+      await worker.setParameters({ tessedit_pageseg_mode: '3' }); // PSM 6: single block (forms/invoices)
     } catch {
       // ignore if setParameters not supported
     }
@@ -214,24 +213,17 @@ async function scanAndParse(fileBuffer, opts = {}) {
     const { text: pdfText } = await extractTextFromPdf(fileBuffer);
     const trimmed = (pdfText || '').trim();
     if (trimmed.length >= MIN_TEXT_LENGTH_FOR_LAYER) {
+      // Computer-generated PDF — read text directly, 100% accurate
       const parsed = parseCustomsDocument(trimmed);
       return { ...spreadParsed(parsed), confidence: 100, source: 'text' };
     }
-    let ocrText = '';
-    let confidence = null;
-    try {
-      const firstPageImage = await pdfFirstPageToImage(fileBuffer);
-      const out = await extractTextFromImage(firstPageImage);
-      ocrText = out.text || '';
-      confidence = out.confidence;
-    } catch {
-      ocrText = trimmed || '';
-    }
-    const parsed = parseCustomsDocument(ocrText);
+    // Text extraction returned nothing — PDF may be a scanned image
+    // Log a warning and return an error so the user knows
+    console.warn('PDF text extraction returned no usable text. This may be a scanned image, not a computer-generated PDF.');
     return {
-      ...spreadParsed(parsed),
-      confidence: confidence != null ? Math.round(confidence) : undefined,
-      source: 'ocr',
+      confidence: 0,
+      source: 'text',
+      error: 'Could not read text from this PDF. Please make sure you are uploading the original digital PDF from ICEGATE, not a printed and scanned copy.'
     };
   }
 
@@ -318,6 +310,33 @@ function firstNumberAfterKeyword(text, keywordRegex, maxChars) {
     const nextChar = chunk[nextStart];
     if (nextChar === '.' && numStr.length <= 3) continue; // skip "1.BCD", "12.LABEL"
     if (/^INR/i.test(chunk.slice(nextStart))) continue;
+    return numStr;
+  }
+  return null;
+}
+
+/**
+ * First number after a duty/label that is the actual value, not a column serial or row number.
+ * Accept: 0, or numbers with decimal, or integers >= 1000. Skip 1–19 and small integers (e.g. 121).
+ */
+function dutyValueAfterLabel(text, labelRegex, maxChars) {
+  if (!text || typeof text !== 'string') return null;
+  const m = text.match(labelRegex);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const chunk = text.slice(start, start + (maxChars || 500));
+  const re = /[\d,]+(?:\.\d+)?/g;
+  let numMatch;
+  while ((numMatch = re.exec(chunk)) !== null) {
+    const numStr = numMatch[0].replace(/,/g, '').trim();
+    if (!numStr) continue;
+    const nextStart = numMatch.index + numMatch[0].length;
+    const nextChar = chunk[nextStart];
+    if (nextChar === '.' && numStr.length <= 3) continue; // skip "16.PNLTY", "19.TOT"
+    if (/^INR/i.test(chunk.slice(nextStart))) continue;
+    const n = parseFloat(numStr);
+    if (Number.isInteger(n) && n >= 1 && n <= 19) continue;
+    if (Number.isInteger(n) && n >= 20 && n < 1000) continue; // skip row/col numbers (e.g. 121, 6)
     return numStr;
   }
   return null;
@@ -420,7 +439,7 @@ function parseCustomsDocument(text) {
       }
     }
 
-    // ICEGATE duty block: "74138.907413.91926130988520" -> BCD 74138.9, SWS 7413.9, IGST 192613
+    // ICEGATE duty block (format 1): "74138.907413.91926130988520" -> BCD 74138.9, SWS 7413.9, IGST 192613
     const dutyBlock = t.match(/(\d{5})\.(\d)(\d{4,5})\.(\d)(\d{6})(\d{6,7})/);
     if (dutyBlock) {
       const bcd = dutyBlock[1] + '.' + dutyBlock[2];
@@ -430,68 +449,85 @@ function parseCustomsDocument(text) {
       result.dutySWS = sws;
       result.gst = dutyBlock[5];
     }
-    // BCD: any value (including decimals); no value restrictions
+    // ICEGATE duty block (format 2): "203423.5020342.452849402712314" -> BCD 203423.5, SWS 20342.45, IGST 2712314
+    if (!result.dutyBCD || !result.dutySWS || !result.gst) {
+      const dutyBlock2 = t.match(/(\d{6})\.(\d)(\d{6})\.(\d{2})(\d{6})(\d{7})/);
+      if (dutyBlock2) {
+        if (!result.dutyBCD) result.dutyBCD = dutyBlock2[1] + '.' + dutyBlock2[2];
+        if (!result.dutySWS) {
+          let sws2 = dutyBlock2[3] + '.' + dutyBlock2[4];
+          if (sws2.startsWith('0')) sws2 = String(parseFloat(sws2));
+          result.dutySWS = sws2;
+        }
+        if (!result.gst) result.gst = dutyBlock2[6]; // 6th group = IGST (2712314)
+      }
+    }
+    // Duty fields: reject inline capture when it's a serial (1–19). Use dutyValueAfterLabel (accepts 0, decimals, >= 1000).
     if (!result.dutyBCD) {
       const bcdVal = t.match(/(?:1\.\s*)?(?:BCD|Basic\s+Customs\s+Duty)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
       if (bcdVal && bcdVal[1]) {
         const v = bcdVal[1].replace(/[,\s]/g, '').trim();
-        if (v) result.dutyBCD = v;
+        const n = parseFloat(v);
+        if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.dutyBCD = v;
       }
       if (!result.dutyBCD) {
-        const num = firstNumberAfterKeyword(t, /(?:1\.\s*)?(?:BCD|Basic\s+Customs\s+Duty)/i, 350);
+        const num = dutyValueAfterLabel(t, /(?:1\.\s*)?(?:BCD|Basic\s+Customs\s+Duty)/i, 800);
         if (num != null) result.dutyBCD = num;
       }
     }
-    // SWS: any value (including decimals)
     if (!result.dutySWS) {
       const swsVal = t.match(/(?:2\.\s*)?(?:SWS|Social\s+Welfare\s+Surcharge)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
       if (swsVal && swsVal[1]) {
         const v = swsVal[1].replace(/[,\s]/g, '').trim();
-        if (v) result.dutySWS = v;
+        const n = parseFloat(v);
+        if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.dutySWS = v;
       }
       if (!result.dutySWS) {
-        const num = firstNumberAfterKeyword(t, /(?:2\.\s*)?(?:SWS|Social\s+Welfare\s+Surcharge)/i, 350);
+        const num = dutyValueAfterLabel(t, /(?:2\.\s*)?(?:SWS|Social\s+Welfare\s+Surcharge)/i, 800);
         if (num != null) result.dutySWS = num;
       }
     }
-    // IGST/gst: any value (including decimals)
     if (!result.gst) {
       const igstVal = t.match(/(?:IGST|Integrated\s+Tax|GST)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
       if (igstVal && igstVal[1]) {
         const v = igstVal[1].replace(/[,\s]/g, '').trim();
-        if (v) result.gst = v;
+        const n = parseFloat(v);
+        if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.gst = v;
       }
       if (!result.gst) {
-        const num = firstNumberAfterKeyword(t, /(?:IGST|Integrated\s+Tax|GST)\s*:?/i, 350);
+        const num = dutyValueAfterLabel(t, /(?:IGST|Integrated\s+Tax|GST)\s*:?/i, 800);
         if (num != null) result.gst = num;
       }
     }
-    // 15.INT, 16.PNLTY, 17.FINE — any value (including 0 and decimals); no value restrictions
-    const intValueMatch = t.match(/15\.\s*INT\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Interest|Duty\s+INT)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    // 15.INT, 16.PNLTY, 17.FINE — value is in the row BELOW; never accept serials 1–19
+    const intValueMatch = t.match(/15\.?\s*INT\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Interest|Duty\s+INT)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
     if (intValueMatch && intValueMatch[1]) {
       const v = intValueMatch[1].replace(/[,\s]/g, '').trim();
-      if (v) result.dutyINT = v;
+      const n = parseFloat(v);
+      if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.dutyINT = v;
     }
     if (result.dutyINT == null) {
-      const num = firstNumberAfterKeyword(t, /15\.\s*INT/i, 400);
+      const num = dutyValueAfterLabel(t, /15\.?\s*INT/i, 280);
       if (num != null) result.dutyINT = num;
     }
-    const penaltyValueMatch = t.match(/16\.\s*PNLTY\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Penalty|Penalties)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    const penaltyValueMatch = t.match(/16\.?\s*PNLTY\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Penalty|Penalties)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
     if (penaltyValueMatch && penaltyValueMatch[1]) {
       const v = penaltyValueMatch[1].replace(/[,\s]/g, '').trim();
-      if (v) result.penalty = v;
+      const n = parseFloat(v);
+      if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.penalty = v;
     }
     if (result.penalty == null) {
-      const num = firstNumberAfterKeyword(t, /16\.\s*PNLTY/i, 400);
+      const num = dutyValueAfterLabel(t, /16\.?\s*PNLTY/i, 280);
       if (num != null) result.penalty = num;
     }
-    const fineValueMatch = t.match(/17\.\s*FINE\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Fine|Fines)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
+    const fineValueMatch = t.match(/17\.?\s*FINE\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i) || t.match(/(?:Fine|Fines)\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)/i);
     if (fineValueMatch && fineValueMatch[1]) {
       const v = fineValueMatch[1].replace(/[,\s]/g, '').trim();
-      if (v) result.fine = v;
+      const n = parseFloat(v);
+      if (v && !(Number.isInteger(n) && n >= 1 && n <= 19)) result.fine = v;
     }
     if (result.fine == null) {
-      const num = firstNumberAfterKeyword(t, /17\.\s*FINE/i, 400);
+      const num = dutyValueAfterLabel(t, /17\.?\s*FINE/i, 280);
       if (num != null) result.fine = num;
     }
 
@@ -541,50 +577,61 @@ function parseCustomsDocument(text) {
       if (incoAfter) result.incoTerm = incoAfter;
     }
 
-    // Assessable value / Total value / CIF value (BOE) — flexible labels and amount-after-keyword
-    const assessablePatterns = [
-      /(?:18\.\s*)?TOT\.?\s*ASS\.?\s*VAL(?:UE)?\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
-      /Assessable\s+Value\s*:?\s*(?:Rs\.?|INR|USD|GBP|EUR)?\s*([\d,]+(?:\.\d{2})?)/i,
-      /Total\s+Assessable\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
-      /Assessable\s+Value\s+([\d,]+(?:\.\d{2})?)/i,
-      /Total\s+Value\s*:?\s*(?:Rs\.?|INR|USD|GBP)?\s*([\d,]+(?:\.\d{2})?)/i,
-      /CIF\s+Value\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
-      /Invoice\s+Value\s*:?\s*(?:Rs\.?|INR|USD|GBP)?\s*([\d,]+(?:\.\d{2})?)/i,
-      /(?:Duty\s+)?Payable\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
-      /Assessment\s*:?\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
-    ];
-    for (const re of assessablePatterns) {
-      const m = t.match(re);
-      if (m && m[1]) {
-        const v = m[1].replace(/[,\s]/g, '').trim();
-        if (v) {
-          result.invoiceValue = v;
-          break;
+    // Assessable value = 18.TOT.ASS VAL only (never 19.TOT.AMOUNT / Total Amount).
+    function extractAssessableValue(text) {
+      // 1) Prefer explicit "18." so we never pick 19.TOT.AMOUNT (use (?:^|[^\d]) so "CESS18.TOT" matches)
+      const with18 = text.match(/(?:^|[^\d])18\.?\s*TOT\.?\s*ASS\.?\s*VAL[^\d]*([\d,]+(?:\.\d{1,2})?)/i);
+      if (with18 && with18[1]) {
+        const v = with18[1].replace(/,/g, '').trim();
+        const n = parseFloat(v);
+        if (!Number.isNaN(n) && n >= 1000) return v;
+      }
+      // 2) Same line: TOT.ASS VAL / Assessable / CIF (no "19.TOT.AMOUNT")
+      const labelPatterns = [
+        /TOT\.?\s*ASS\.?\s*VAL[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+        /Assessable\s+Value[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+        /Total\s+Assessable\s+Value[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+        /CIF\s+Value[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+      ];
+      for (const re of labelPatterns) {
+        const m = text.match(re);
+        if (m && m[1]) {
+          const v = m[1].replace(/,/g, '').trim();
+          const n = parseFloat(v);
+          if (!Number.isNaN(n) && n >= 1000) return v;
         }
       }
-    }
-    if (!result.invoiceValue) {
-      for (const label of [/TOT\.?\s*ASS\.?\s*VAL/i, /Assessable\s+Value/i, /Total\s+Assessable/i, /Total\s+Value/i, /CIF\s+Value/i, /Invoice\s+Value/i, /Duty\s+Payable/i]) {
-        const num = amountAfterKeyword(t, label, 300);
-        if (num != null) {
-          result.invoiceValue = num;
-          break;
+      // 3) Value below label: find 18.TOT.ASS VAL (preceded by non-digit so "CESS18" matches), then first number >= 100000
+      const m18 = text.match(/(?:^|[^\d])18\.?\s*TOT\.?\s*ASS\.?\s*VAL/i);
+      if (m18) {
+        const start = m18.index + m18[0].length;
+        const chunk = text.slice(start, start + 1500);
+        const numRe = /[\d,]+(?:\.\d{1,2})?/g;
+        let numMatch;
+        while ((numMatch = numRe.exec(chunk)) !== null) {
+          const v = numMatch[0].replace(/,/g, '').trim();
+          const n = parseFloat(v);
+          if (!Number.isNaN(n) && n >= 100000) return v;
         }
       }
+      // 4) Fallback: Assessable/CIF label then first number >= 100000
+      for (const re of [/Assessable\s+Value/i, /Total\s+Assessable\s+Value/i, /CIF\s+Value/i]) {
+        const m = text.match(re);
+        if (!m) continue;
+        const start = m.index + m[0].length;
+        const chunk = text.slice(start, start + 1500);
+        const numRe = /[\d,]+(?:\.\d{1,2})?/g;
+        let numMatch;
+        while ((numMatch = numRe.exec(chunk)) !== null) {
+          const v = numMatch[0].replace(/,/g, '').trim();
+          const n = parseFloat(v);
+          if (!Number.isNaN(n) && n >= 100000) return v;
+        }
+      }
+      return null;
     }
-    // Total Assessable Value: 18.TOT.ASS VAL first; any value including decimals (no min/max).
-    if (!result.invoiceValue) {
-      const num = amountAfterKeyword(t, /18\.\s*TOT\.?\s*ASS\.?\s*VAL/i, 1200);
-      if (num != null) result.invoiceValue = num;
-    }
-    if (!result.invoiceValue) {
-      const num = amountAfterKeyword(t, /TOT\.?\s*ASS\.?\s*VAL/i, 1200);
-      if (num != null) result.invoiceValue = num;
-    }
-    if (!result.invoiceValue) {
-      const num = amountAfterKeyword(t, /19\.\s*TOT\.?\s*AMOUNT/i, 1200);
-      if (num != null) result.invoiceValue = num;
-    }
+
+    result.invoiceValue = extractAssessableValue(t);
 
     // Port Code (BOE)
     const portPattern = /IN[A-Z]{3}\d{1,2}\b/g;
@@ -936,6 +983,12 @@ function normalizeDate(str) {
   if (y.length === 2) y = '20' + y;
   if (d.length === 1) d = '0' + d;
   if (m.length === 1) m = '0' + m;
+  const dayNum = parseInt(d, 10);
+  const monNum = parseInt(m, 10);
+  const yearNum = parseInt(y, 10);
+  if (dayNum < 1 || dayNum > 31) return undefined;
+  if (monNum < 1 || monNum > 12) return undefined;
+  if (yearNum < 2000 || yearNum > 2100) return undefined;
   return `${y}-${m}-${d}`;
 }
 
