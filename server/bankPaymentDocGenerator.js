@@ -352,7 +352,20 @@ async function generateBankPaymentDocBuffer(data) {
     if (documentEntry) {
       let xml = documentEntry.asText();
       xml = xml.replace(/\{vide\s+certificate/gi, '\u200Bvide certificate');
-      const paraRegex = /<w:p(?=[\s>])([^>]*)>([\s\S]*?)<\/w:p>/g;
+
+      // Normalize double-brace placeholders {{ }} to single { }
+      xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
+
+      // Collapse adjacent duplicate { or } tags that Word sometimes creates
+      for (let i = 0; i < 50; i++) {
+        const prev = xml;
+        xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
+        xml = xml.replace(/<w:t[^>]*>\}\s*<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}\s*<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
+        if (xml === prev) break;
+      }
+
+      // Merge split placeholders paragraph by paragraph
+      const paraRegex = /<w:p\s*([^>]*)>([\s\S]*?)<\/w:p>/g;
       xml = xml.replace(paraRegex, (_, attrs, paraContent) => {
         return '<w:p' + attrs + '>' + mergePlaceholdersInParagraph(paraContent) + '</w:p>';
       });
