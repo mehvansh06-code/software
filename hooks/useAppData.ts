@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Supplier, Shipment, Licence, LetterOfCredit, AppDomain, Buyer } from '../types';
-import { api } from '../api';
+import { api, getWebSocketUrl } from '../api';
 import { SAMPLE_LICENCES, SAMPLE_LCS, SAMPLE_EXPORT_LCS, SAMPLE_BUYERS, SAMPLE_SHIPMENTS } from '../sampleData';
 
 export interface UseAppDataReturn {
