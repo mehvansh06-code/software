@@ -28,6 +28,36 @@ function createRouter(broadcast) {
     }
   }
 
+  function fromCents(x) {
+    if (x == null || x === undefined || x === '') return 0;
+    const n = Number(x);
+    if (Number.isNaN(n)) return 0;
+    return n / 100;
+  }
+
+  function getImportUtilizedForLicence(licenceId) {
+    const rows = db.prepare('SELECT supplierId, linkedLicenceId, epcgLicenceId, advLicenceId, licence_allocations_json, licenceImportLines_json, licenceObligationAmount, invoiceValueINR FROM shipments WHERE supplierId IS NOT NULL').all();
+    let totalInr = 0;
+    for (const r of rows) {
+      const isLinked = String(r.linkedLicenceId || '') === String(licenceId) || String(r.epcgLicenceId || '') === String(licenceId) || String(r.advLicenceId || '') === String(licenceId);
+      const allocs = safeParseJson(r.licence_allocations_json, []);
+      if (Array.isArray(allocs) && allocs.length > 0) {
+        totalInr += allocs.filter((a) => String(a?.licenceId || '') === String(licenceId)).reduce((s, a) => s + (Number(a?.allocatedAmountINR) || 0), 0);
+        continue;
+      }
+      if (!isLinked) continue;
+      const lines = safeParseJson(r.licenceImportLines_json, []);
+      if (Array.isArray(lines) && lines.length > 0) {
+        totalInr += lines.reduce((s, l) => s + (Number(l?.valueINR) || 0), 0);
+      } else {
+        const obligation = r.licenceObligationAmount != null ? fromCents(r.licenceObligationAmount) : 0;
+        const invoiceInr = r.invoiceValueINR != null ? fromCents(r.invoiceValueINR) : 0;
+        totalInr += obligation || invoiceInr;
+      }
+    }
+    return totalInr;
+  }
+
   router.get('/', hasPermission('licences.view'), (req, res, next) => {
     try {
       const rows = db.prepare('SELECT * FROM licences').all();
@@ -72,6 +102,14 @@ function createRouter(broadcast) {
     }
     const importProductsJson = Array.isArray(l.importProducts) ? JSON.stringify(l.importProducts) : null;
     const exportProductsJson = Array.isArray(l.exportProducts) ? JSON.stringify(l.exportProducts) : null;
+    const importUtilized = getImportUtilizedForLicence(idCheck.value);
+    const incomingDutySaved = Number(l.dutySaved ?? existing.dutySaved ?? 0);
+    if (incomingDutySaved > 0 && importUtilized > incomingDutySaved) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot reduce import limit below utilized value. Utilized: ${Math.round(importUtilized)} INR, new limit: ${Math.round(incomingDutySaved)} INR.`,
+      });
+    }
     const result = db.prepare(`
       UPDATE licences SET
         number=?, type=?, issueDate=?, importValidityDate=?, expiryDate=?,

@@ -146,7 +146,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
         </>
       ) : domain === AppDomain.IMPORT ? (
         <>
-          <Route path="/" element={<Layout {...layoutProps}><Dashboard shipments={shipments} suppliers={suppliers} licences={licences} lcs={lcs} /></Layout>} />
+          <Route path="/" element={<Layout {...layoutProps}><Dashboard shipments={shipments} suppliers={suppliers} lcs={lcs} /></Layout>} />
           <Route path="/suppliers" element={<Layout {...layoutProps}><SupplierMaster suppliers={suppliers} user={user} onUpdateItem={handleUpdateSupplier} onAddItem={handleAddSupplier} onRefreshData={onRefreshData} /></Layout>} />
           <Route path="/materials" element={<Layout {...layoutProps}><MaterialsMaster /></Layout>} />
           <Route path="/shipments" element={<Layout {...layoutProps}><ShipmentMaster shipments={shipments} suppliers={suppliers} buyers={[]} licences={licences} lcs={lcs} user={user} onAddShipment={handleAddShipment} onUpdateShipment={handleUpdateShipment} onDeleteShipment={handleDeleteShipment} /></Layout>} />

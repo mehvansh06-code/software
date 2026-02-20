@@ -29,6 +29,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [invoiceUploaded, setInvoiceUploaded] = useState(false);
+  const [proformaInvoiceUploaded, setProformaInvoiceUploaded] = useState(false);
 
   const [formData, setFormData] = useState<any>({
     currency: isExport ? 'USD' : 'USD',
@@ -70,6 +71,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
       setActiveItem((prev) => ({ ...prev, ...draft.activeItem }));
     }
     if (typeof draft.invoiceUploaded === 'boolean') setInvoiceUploaded(draft.invoiceUploaded);
+    if (typeof draft.proformaInvoiceUploaded === 'boolean') setProformaInvoiceUploaded(draft.proformaInvoiceUploaded);
   }, []);
 
   const { clearDraft } = useAutoSavedDraft({
@@ -80,6 +82,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
       currentItems,
       activeItem,
       invoiceUploaded,
+      proformaInvoiceUploaded,
     },
     onRestore: restoreDraft,
     enabled: !isSubmitting,
@@ -642,6 +645,19 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                     <p className="text-[9px] text-slate-400">Can be uploaded later in vault</p>
                   </>
                 )}
+              </div>
+
+              <div className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50">
+                <div>
+                  <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight">Proforma Invoice (if any)</p>
+                  <p className="text-[9px] text-slate-500 mt-0.5">This is only a reminder. PI is marked in documents only after actual file upload.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded accent-indigo-600"
+                  checked={proformaInvoiceUploaded}
+                  onChange={e => setProformaInvoiceUploaded(e.target.checked)}
+                />
               </div>
 
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-2xl border border-slate-100 bg-slate-50">

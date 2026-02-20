@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const fse = require('fs-extra');
 const multer = require('multer');
+const { PDFDocument } = require('pdf-lib');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
 const SHIPMENT_INSERT_OR_REPLACE_SQL = db.SHIPMENT_INSERT_OR_REPLACE_SQL;
@@ -316,6 +317,117 @@ function checkLicenceExpiry(shipment) {
       throw err;
     }
   }
+}
+
+function getLinkedLicenceIds(shipment) {
+  const ids = new Set();
+  if (shipment.linkedLicenceId) ids.add(String(shipment.linkedLicenceId));
+  if (shipment.epcgLicenceId) ids.add(String(shipment.epcgLicenceId));
+  if (shipment.advLicenceId) ids.add(String(shipment.advLicenceId));
+  if (Array.isArray(shipment.licenceAllocations)) {
+    shipment.licenceAllocations.forEach((a) => { if (a && a.licenceId) ids.add(String(a.licenceId)); });
+  }
+  return Array.from(ids);
+}
+
+function getShipmentDateForCompliance(shipment) {
+  return shipment.expectedShipmentDate || shipment.invoiceDate || new Date().toISOString().slice(0, 10);
+}
+
+function calculateExistingImportUseForProduct(licenceId, productId, excludeShipmentId) {
+  const rows = db.prepare('SELECT id, supplierId, licence_allocations_json, licenceImportLines_json FROM shipments WHERE supplierId IS NOT NULL').all();
+  let qty = 0;
+  let usd = 0;
+  let inr = 0;
+  for (const r of rows) {
+    if (excludeShipmentId && String(r.id) === String(excludeShipmentId)) continue;
+    const allocs = safeParseJson(r.licence_allocations_json, []);
+    if (Array.isArray(allocs) && allocs.length > 0) {
+      const filtered = allocs.filter((a) => String(a?.licenceId || '') === String(licenceId) && String(a?.productId || '') === String(productId));
+      qty += filtered.reduce((s, a) => s + (Number(a?.allocatedQuantity) || 0), 0);
+      usd += filtered.reduce((s, a) => s + (Number(a?.allocatedAmountUSD) || 0), 0);
+      inr += filtered.reduce((s, a) => s + (Number(a?.allocatedAmountINR) || 0), 0);
+      continue;
+    }
+    const lines = safeParseJson(r.licenceImportLines_json, []);
+    if (Array.isArray(lines) && lines.length > 0) {
+      const lf = lines.filter((l) => {
+        const lineProductId = String(l?.productId || '');
+        const lineLicenceId = String(l?.licenceId || l?.linkedLicenceId || l?.licence_id || '');
+        return lineProductId === String(productId) && lineLicenceId === String(licenceId);
+      });
+      qty += lf.reduce((s, l) => s + (Number(l?.quantity) || 0), 0);
+      usd += lf.reduce((s, l) => s + (Number(l?.amountUSD) || 0), 0);
+      inr += lf.reduce((s, l) => s + (Number(l?.valueINR) || 0), 0);
+    }
+  }
+  return { qty, usd, inr };
+}
+
+function enforceLicenceCompliance(req, shipment, existingShipmentId) {
+  const linkedIds = getLinkedLicenceIds(shipment);
+  if (linkedIds.length === 0 || !shipment.isUnderLicence) return false;
+  const override = req && req.body && req.body.licenceOverride === true;
+  const isManagement = req && req.user && String(req.user.role || '').toUpperCase() === 'MANAGEMENT';
+  const shipmentDate = getShipmentDateForCompliance(shipment);
+  let overrideUsed = false;
+
+  for (const lid of linkedIds) {
+    const licence = db.prepare('SELECT id, number, type, status, importValidityDate, expiryDate, importProducts_json FROM licences WHERE id = ?').get(lid);
+    if (!licence) continue;
+
+    const status = String(licence.status || 'ACTIVE').toUpperCase();
+    if (status !== 'ACTIVE' && !(override && isManagement)) {
+      const err = new Error(`Compliance Error: Licence ${licence.number || lid} is not ACTIVE.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (status !== 'ACTIVE' && override && isManagement) overrideUsed = true;
+
+    if (shipment.supplierId && licence.importValidityDate && shipmentDate > licence.importValidityDate && !(override && isManagement)) {
+      const err = new Error(`Compliance Error: Import validity expired for licence ${licence.number || lid}.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (shipment.supplierId && licence.importValidityDate && shipmentDate > licence.importValidityDate && override && isManagement) overrideUsed = true;
+
+    if (licence.expiryDate && shipmentDate > licence.expiryDate && !(override && isManagement)) {
+      const err = new Error(`Compliance Error: Export obligation due date exceeded for licence ${licence.number || lid}.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (licence.expiryDate && shipmentDate > licence.expiryDate && override && isManagement) overrideUsed = true;
+
+    if (shipment.supplierId) {
+      const importProducts = safeParseJson(licence.importProducts_json, []);
+      if (!Array.isArray(importProducts) || importProducts.length === 0) continue;
+
+      const allocs = Array.isArray(shipment.licenceAllocations)
+        ? shipment.licenceAllocations.filter((a) => String(a?.licenceId || '') === String(lid))
+        : [];
+      for (const alloc of allocs) {
+        const productId = String(alloc?.productId || '');
+        if (!productId) continue;
+        const prod = importProducts.find((p) => String(p?.materialId || '') === productId);
+        if (!prod) continue;
+        const existing = calculateExistingImportUseForProduct(lid, productId, existingShipmentId);
+        const qtyLimit = Number(prod.quantityLimit) || 0;
+        const usdLimit = Number(prod.amountUSDLimit) || 0;
+        const inrLimit = Number(prod.amountINR) || 0;
+        const nextQty = existing.qty + (Number(alloc?.allocatedQuantity) || 0);
+        const nextUsd = existing.usd + (Number(alloc?.allocatedAmountUSD) || 0);
+        const nextInr = existing.inr + (Number(alloc?.allocatedAmountINR) || 0);
+        const over = (qtyLimit > 0 && nextQty > qtyLimit) || (usdLimit > 0 && nextUsd > usdLimit) || (inrLimit > 0 && nextInr > inrLimit);
+        if (over && !(override && isManagement)) {
+          const err = new Error(`Compliance Error: Allocation exceeds licence limit for product ${prod.materialName || productId} on licence ${licence.number || lid}.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        if (over && override && isManagement) overrideUsed = true;
+      }
+    }
+  }
+  return overrideUsed;
 }
 
 /**
@@ -654,6 +766,132 @@ function createRouter(broadcast) {
     }
   });
 
+  router.post('/:id/files/merge-pdf', hasPermission('documents.view'), async (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
+      const id = idCheck.value;
+
+      const rawFiles = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+      if (rawFiles.length === 0) return res.status(400).json({ error: 'No files selected for merge' });
+      if (rawFiles.length > 80) return res.status(400).json({ error: 'Too many files selected' });
+
+      let row;
+      try {
+        row = db.prepare('SELECT * FROM shipments WHERE id = ?').get(id);
+      } catch (e) {
+        return res.status(500).json({ error: 'Failed to resolve shipment' });
+      }
+      if (!row) return res.status(404).json({ error: 'Shipment not found' });
+
+      const folderPath = getValidDocumentsFolderPath(row);
+      if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
+      if (!fs.existsSync(folderPath)) return res.status(404).json({ error: 'Documents folder not available' });
+
+      const resolvedBase = path.resolve(folderPath);
+      const uniqueNames = [];
+      const seen = new Set();
+      for (const f of rawFiles) {
+        const safe = sanitizeFileDownloadFilename(String(f || ''));
+        if (!safe || seen.has(safe)) continue;
+        seen.add(safe);
+        uniqueNames.push(safe);
+      }
+      if (uniqueNames.length === 0) return res.status(400).json({ error: 'No valid files selected for merge' });
+
+      const mergedPdf = await PDFDocument.create();
+      const included = [];
+      const skipped = [];
+
+      for (const filename of uniqueNames) {
+        const fullPath = path.join(folderPath, filename);
+        const resolvedFull = path.resolve(fullPath);
+        if (resolvedFull !== resolvedBase && !resolvedFull.startsWith(resolvedBase + path.sep)) {
+          skipped.push({ filename, reason: 'invalid-path' });
+          continue;
+        }
+        if (!fs.existsSync(fullPath)) {
+          skipped.push({ filename, reason: 'not-found' });
+          continue;
+        }
+
+        let stat;
+        try {
+          stat = fs.statSync(fullPath);
+        } catch (_) {
+          skipped.push({ filename, reason: 'not-found' });
+          continue;
+        }
+        if (!stat.isFile()) {
+          skipped.push({ filename, reason: 'not-file' });
+          continue;
+        }
+
+        const ext = (path.extname(filename) || '').toLowerCase();
+        let bytes;
+        try {
+          bytes = fs.readFileSync(fullPath);
+        } catch (_) {
+          skipped.push({ filename, reason: 'read-failed' });
+          continue;
+        }
+
+        try {
+          if (ext === '.pdf') {
+            const srcPdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+            const pageIndices = srcPdf.getPageIndices();
+            if (pageIndices.length === 0) {
+              skipped.push({ filename, reason: 'empty-pdf' });
+              continue;
+            }
+            const copiedPages = await mergedPdf.copyPages(srcPdf, pageIndices);
+            copiedPages.forEach((p) => mergedPdf.addPage(p));
+            included.push(filename);
+            continue;
+          }
+
+          if (ext === '.jpg' || ext === '.jpeg') {
+            const image = await mergedPdf.embedJpg(bytes);
+            const page = mergedPdf.addPage([image.width, image.height]);
+            page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+            included.push(filename);
+            continue;
+          }
+
+          if (ext === '.png') {
+            const image = await mergedPdf.embedPng(bytes);
+            const page = mergedPdf.addPage([image.width, image.height]);
+            page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+            included.push(filename);
+            continue;
+          }
+
+          skipped.push({ filename, reason: 'unsupported-format' });
+        } catch (_) {
+          skipped.push({ filename, reason: 'parse-failed' });
+        }
+      }
+
+      if (included.length === 0) {
+        return res.status(400).json({ error: 'No PDF/Image files could be merged. Supported: PDF, JPG, JPEG, PNG.' });
+      }
+
+      const pdfBytes = await mergedPdf.save();
+      const invoiceRef = sanitizeFolderName(String(row.invoiceNumber || row.id || 'shipment'));
+      const outName = `PrintPacket_${invoiceRef}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${outName}"`);
+      res.setHeader('X-Merge-Included-Count', String(included.length));
+      res.setHeader('X-Merge-Skipped-Count', String(skipped.length));
+      res.setHeader('X-Merge-Skipped', encodeURIComponent(JSON.stringify(skipped.slice(0, 25))));
+      res.status(200).send(Buffer.from(pdfBytes));
+    } catch (err) {
+      console.error('POST /:id/files/merge-pdf error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to merge files into PDF' });
+    }
+  });
+
   router.post('/:id/files', hasPermission('documents.upload'), multerDisk.single('file'), async (req, res) => {
     let tempFileMoved = false;
     try {
@@ -801,8 +1039,10 @@ function createRouter(broadcast) {
     const idCheck = validateId(s.id, 'Shipment ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const sNorm = clientToCents({ ...s, id: idCheck.value });
+    let overrideUsed = false;
     try {
       checkLicenceExpiry(sNorm);
+      overrideUsed = enforceLicenceCompliance(req, sNorm, null);
     } catch (e) {
       return res.status(e.statusCode || 400).json({ success: false, error: e.message });
     }
@@ -826,6 +1066,12 @@ function createRouter(broadcast) {
     }
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'SHIPMENT_CREATED', idCheck.value, { invoiceNumber: sNorm.invoiceNumber });
+    if (overrideUsed) {
+      auditLog(db, userId, 'LICENCE_OVERRIDE_USED', idCheck.value, {
+        invoiceNumber: sNorm.invoiceNumber,
+        userName: getUserName(db, userId) || userId || 'System',
+      });
+    }
     res.json({ success: true });
     broadcast();
   });
@@ -929,8 +1175,10 @@ function createRouter(broadcast) {
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
 
     const sNorm = clientToCents({ ...s, id });
+    let overrideUsed = false;
     try {
       checkLicenceExpiry(sNorm);
+      overrideUsed = enforceLicenceCompliance(req, sNorm, id);
     } catch (e) {
       return res.status(e.statusCode || 400).json({ success: false, error: e.message });
     }
@@ -1077,6 +1325,12 @@ function createRouter(broadcast) {
     }
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'SHIPMENT_UPDATED', id, { invoiceNumber: sNorm.invoiceNumber });
+    if (overrideUsed) {
+      auditLog(db, userId, 'LICENCE_OVERRIDE_USED', id, {
+        invoiceNumber: sNorm.invoiceNumber,
+        userName: getUserName(db, userId) || userId || 'System',
+      });
+    }
     const versionRow = db.prepare('SELECT version FROM shipments WHERE id = ?').get(id);
     res.json({ success: true, version: versionRow ? versionRow.version : undefined });
     broadcast();

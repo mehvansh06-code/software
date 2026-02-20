@@ -372,6 +372,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     return diffDays <= 3 && diffDays >= 0;
   }, [shipment?.paymentDueDate]);
 
+  const hasProformaAvailable = useMemo(() => {
+    if (!shipment) return false;
+    if ((shipment as any)?.documents?.PI) return true;
+    return folderFiles.some((f) => /^PI_/i.test((f || '').replace(/\.[^/.]+$/, '').trim()));
+  }, [shipment, folderFiles]);
+
   const paymentSummary = useMemo(() => {
     if (!shipment) return { totalFC: 0, receivedFC: 0, pendingFC: 0 };
     const totalFC = isExport ? (shipment.fobValueFC ?? shipment.amount) : shipment.amount;
@@ -418,7 +424,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       }) ?? null;
     };
     const rows: { label: string; expectedName: string; found: boolean; matchedFileName: string | null }[] = [];
-    const staticList = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
+    const hasProformaDoc =
+      !!(shipment as any)?.documents?.PI ||
+      folderFiles.some((f) => /^PI_/i.test((f || '').replace(/\.[^/.]+$/, '').trim()));
+    const staticList = isExport
+      ? EXPORT_DOCUMENT_CHECKLIST
+      : IMPORT_DOCUMENT_CHECKLIST.filter((doc) => doc.id !== 'PI' || hasProformaDoc);
     const matchedNames = new Set<string>();
     staticList.forEach((doc) => {
       const prefix = (doc as { prefix?: string }).prefix || doc.id + '_';
@@ -961,6 +972,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white ${isExport ? 'bg-amber-600' : 'bg-indigo-600'}`}>
                  {isExport ? 'Export Node' : 'Import Node'}
                </span>
+               {hasProformaAvailable && !isExport && (
+                 <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-emerald-100 text-emerald-700">
+                   Proforma Available
+                 </span>
+               )}
                <h1 className="text-xl font-black text-slate-900 tracking-tight">{String(shipment.invoiceNumber)}</h1>
             </div>
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{String(partnerName)}</p>

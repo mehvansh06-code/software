@@ -1,20 +1,15 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Shipment, Supplier, ShipmentStatus, Licence, LetterOfCredit, LCStatus } from '../types';
+import { Shipment, Supplier, ShipmentStatus, LetterOfCredit, LCStatus } from '../types';
 import { 
   ArrowRight,
-  Award,
   CreditCard,
   Package,
   ArrowUpCircle,
   ArrowDownCircle,
-  CheckCircle,
-  Database,
   RefreshCw,
   Wifi,
   WifiOff,
-  HardDrive,
-  ShieldAlert,
   BellRing,
   Calendar
 } from 'lucide-react';
@@ -25,7 +20,6 @@ import { api } from '../api';
 interface DashboardProps {
   shipments: Shipment[];
   suppliers: Supplier[];
-  licences: Licence[];
   lcs: LetterOfCredit[];
 }
 
@@ -42,10 +36,11 @@ interface CashFlowItem {
   amountInr: number;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, lcs }) => {
+const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
   const [sysStats, setSysStats] = useState<any>({ lastSync: 'Never', mode: 'INITIALIZING', isDirty: false });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [cashFlowView, setCashFlowView] = useState<'outgoing' | 'incoming'>('outgoing');
+  const [cashFlowCompany, setCashFlowCompany] = useState<'ALL' | 'GFPL' | 'GTEX'>('ALL');
   const [upcomingPayables, setUpcomingPayables] = useState<{ items: CashFlowItem[]; summary: { count: number; totalInr: number } }>({ items: [], summary: { count: 0, totalInr: 0 } });
   const [upcomingReceivables, setUpcomingReceivables] = useState<{ items: CashFlowItem[]; summary: { count: number; totalInr: number } }>({ items: [], summary: { count: 0, totalInr: 0 } });
   const [isCashFlowLoading, setIsCashFlowLoading] = useState(false);
@@ -108,7 +103,22 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
   }, [lcs]);
 
   const activeShipmentsCount = useMemo(() => shipments.filter(s => !!s.supplierId && s.status !== ShipmentStatus.REACHED_PLANT).length, [shipments]);
-  const cashFlowRows = cashFlowView === 'outgoing' ? upcomingPayables.items : upcomingReceivables.items;
+  const shipmentCompanyById = useMemo(() => {
+    const map = new Map<string, 'GFPL' | 'GTEX'>();
+    (shipments || []).forEach((s) => {
+      if (s?.id && (s.company === 'GFPL' || s.company === 'GTEX')) map.set(String(s.id), s.company);
+    });
+    return map;
+  }, [shipments]);
+  const cashFlowRows = useMemo(() => {
+    const rows = cashFlowView === 'outgoing' ? upcomingPayables.items : upcomingReceivables.items;
+    if (cashFlowCompany === 'ALL') return rows;
+    return rows.filter((r) => shipmentCompanyById.get(String(r.shipmentId)) === cashFlowCompany);
+  }, [cashFlowView, upcomingPayables.items, upcomingReceivables.items, cashFlowCompany, shipmentCompanyById]);
+  const cashFlowSummary = useMemo(() => ({
+    count: cashFlowRows.length,
+    totalInr: cashFlowRows.reduce((sum, r) => sum + (Number(r.amountInr) || 0), 0),
+  }), [cashFlowRows]);
 
   return (
     <div className="space-y-8 animate-in fade-in pb-20">
@@ -151,22 +161,10 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
         </section>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
            <div className="bg-blue-50 text-blue-600 p-3 rounded-2xl"><Package size={24} /></div>
            <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Live Cargo</p><p className="text-xl font-black">{activeShipmentsCount}</p></div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
-           <div className="bg-emerald-50 text-emerald-600 p-3 rounded-2xl"><CheckCircle size={24} /></div>
-           <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Vendors</p><p className="text-xl font-black">{suppliers.length}</p></div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
-           <div className="bg-indigo-50 text-indigo-600 p-3 rounded-2xl"><Award size={24} /></div>
-           <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Licences</p><p className="text-xl font-black">{licences.length}</p></div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
-           <div className="bg-amber-50 text-amber-600 p-3 rounded-2xl"><CreditCard size={24} /></div>
-           <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active LCs</p><p className="text-xl font-black">{lcs.filter(l => l.status === LCStatus.OPEN).length}</p></div>
         </div>
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
            <div className="bg-red-50 text-red-600 p-3 rounded-2xl"><ArrowUpCircle size={24} /></div>
@@ -186,8 +184,8 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-6">
+      <div className="space-y-8">
+        <div className="space-y-6">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-black text-slate-900 uppercase flex items-center gap-2">
                 <Calendar size={16} className="text-indigo-500" /> Expected Arrivals
@@ -270,22 +268,37 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
                 <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
                     <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">30-Day Cash Flow</h3>
-                    <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
-                      <button
-                        type="button"
-                        onClick={() => setCashFlowView('outgoing')}
-                        className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'outgoing' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}
+                    <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                      <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setCashFlowView('outgoing')}
+                          className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'outgoing' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}
+                        >
+                          Supplier Payments
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCashFlowView('incoming')}
+                          className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'incoming' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}
+                        >
+                          Customer Receipts
+                        </button>
+                      </div>
+                      <select
+                        value={cashFlowCompany}
+                        onChange={(e) => setCashFlowCompany(e.target.value as 'ALL' | 'GFPL' | 'GTEX')}
+                        className="px-3 py-2 text-[10px] font-black uppercase rounded-xl border border-slate-200 bg-white text-slate-700"
+                        title="Filter cash flow by company"
                       >
-                        Supplier Payments
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCashFlowView('incoming')}
-                        className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'incoming' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}
-                      >
-                        Customer Receipts
-                      </button>
+                        <option value="ALL">All Companies</option>
+                        <option value="GFPL">GFPL</option>
+                        <option value="GTEX">GTEX</option>
+                      </select>
                     </div>
+                  </div>
+                  <div className="mb-4 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    {cashFlowCompany === 'ALL' ? 'Showing: GFPL + GTEX' : `Showing: ${cashFlowCompany}`} • {cashFlowSummary.count} record(s) • {formatCurrency(cashFlowSummary.totalInr, 'INR')}
                   </div>
 
                   <div className="md:hidden space-y-3">
@@ -362,25 +375,6 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, licences, l
           })()}
         </div>
 
-        <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100 flex flex-col justify-between">
-          <h2 className="text-sm font-black text-slate-900 uppercase mb-6">Database Health</h2>
-          <div className="space-y-4">
-             <div className="flex justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-               <div className="flex items-center gap-3"><HardDrive size={18} className="text-amber-400" /><span className="text-[10px] font-black uppercase text-slate-400">Browser Cache</span></div>
-               <span className="text-sm font-black">{suppliers.length + shipments.length}</span>
-             </div>
-             <div className="flex justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-               <div className="flex items-center gap-3"><Database size={18} className="text-indigo-400" /><span className="text-[10px] font-black uppercase text-slate-400">SQL Mainframe</span></div>
-               <span className="text-sm font-black">{sysStats.suppliers + sysStats.shipments || '---'}</span>
-             </div>
-          </div>
-          <div className="mt-8 space-y-3">
-             <p className="text-[10px] text-slate-500">Clear data stored only in this browser so the app uses the same data as the server (e.g. when opening via local IP).</p>
-             <button onClick={() => api.system.reset()} className="w-full py-3 bg-red-50 text-red-600 rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2">
-                <ShieldAlert size={14} /> Clear browser data &amp; use server
-             </button>
-          </div>
-        </section>
       </div>
     </div>
   );

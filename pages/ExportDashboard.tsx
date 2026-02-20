@@ -42,6 +42,7 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
 }) => {
   try {
     const [cashFlowView, setCashFlowView] = useState<'outgoing' | 'incoming'>('incoming');
+    const [cashFlowCompany, setCashFlowCompany] = useState<'ALL' | 'GFPL' | 'GTEX'>('ALL');
     const [upcomingPayables, setUpcomingPayables] = useState<{ items: CashFlowItem[]; summary: { count: number; totalInr: number } }>({ items: [], summary: { count: 0, totalInr: 0 } });
     const [upcomingReceivables, setUpcomingReceivables] = useState<{ items: CashFlowItem[]; summary: { count: number; totalInr: number } }>({ items: [], summary: { count: 0, totalInr: 0 } });
     const [isCashFlowLoading, setIsCashFlowLoading] = useState(false);
@@ -91,7 +92,7 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
     }, [exportShipments]);
 
     const redFlags = useMemo(() => {
-      return safeLicences.filter(l => {
+      const licenceAlerts = safeLicences.filter(l => {
         if (!l.eoRequired || Number(l.eoRequired) === 0) return false;
         const progress = (Number(l.eoFulfilled || 0) / Number(l.eoRequired)) * 100;
         return progress < 25; 
@@ -100,7 +101,39 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
         title: `Low Realization: ${l.number || 'Unnamed'}`,
         desc: `${Math.round((Number(l.eoFulfilled || 0) / (Number(l.eoRequired) || 1)) * 100)}% Realized.`,
       }));
-    }, [safeLicences]);
+
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const lodgementAlerts = safeShipments
+        .filter((s) => !!s.buyerId)
+        .filter((s) => {
+          const due = s.paymentDueDate ? new Date(`${s.paymentDueDate}T00:00:00`) : null;
+          if (!due || Number.isNaN(due.getTime())) return false;
+          const diffDays = Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays < 0 || diffDays > 3) return false;
+
+          const toFC = (p: { amount: number; currency: string }) =>
+            p.currency === s.currency ? p.amount : (p.currency === 'INR' ? p.amount / (s.exchangeRate || 1) : 0);
+          const receivedFC = (s.payments || []).filter((p) => p.received === true).reduce((sum, p) => sum + toFC(p), 0);
+          const dueFC = s.amount || 0;
+          if (receivedFC >= dueFC) return false;
+
+          const lodgementNo = ((s as any).lodgement || '').toString().trim();
+          return lodgementNo.length === 0;
+        })
+        .map((s) => {
+          const due = new Date(`${s.paymentDueDate}T00:00:00`);
+          const diffDays = Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          const dueLabel = diffDays === 0 ? 'today' : `in ${diffDays} day${diffDays === 1 ? '' : 's'}`;
+          return {
+            id: `lodgement-${s.id}`,
+            title: `Lodgement Pending: ${s.invoiceNumber || s.id}`,
+            desc: `Payment is due ${dueLabel}. File bank lodgement for ${safeBuyers.find(b => b.id === s.buyerId)?.name || 'this buyer'}.`,
+          };
+        });
+
+      return [...lodgementAlerts, ...licenceAlerts];
+    }, [safeLicences, safeShipments, safeBuyers]);
 
     const getExportPaymentStatus = (sh: Shipment): { status: 'pending' | 'partial' | 'received'; receivedFC: number; pendingFC: number } => {
       const toFC = (p: { amount: number; currency: string }) =>
@@ -114,7 +147,22 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
       return { status: 'pending', receivedFC, pendingFC };
     };
 
-    const cashFlowRows = cashFlowView === 'outgoing' ? upcomingPayables.items : upcomingReceivables.items;
+    const shipmentCompanyById = useMemo(() => {
+      const map = new Map<string, 'GFPL' | 'GTEX'>();
+      safeShipments.forEach((s) => {
+        if (s?.id && (s.company === 'GFPL' || s.company === 'GTEX')) map.set(String(s.id), s.company);
+      });
+      return map;
+    }, [safeShipments]);
+    const cashFlowRows = useMemo(() => {
+      const rows = cashFlowView === 'outgoing' ? upcomingPayables.items : upcomingReceivables.items;
+      if (cashFlowCompany === 'ALL') return rows;
+      return rows.filter((r) => shipmentCompanyById.get(String(r.shipmentId)) === cashFlowCompany);
+    }, [cashFlowView, upcomingPayables.items, upcomingReceivables.items, cashFlowCompany, shipmentCompanyById]);
+    const cashFlowSummary = useMemo(() => ({
+      count: cashFlowRows.length,
+      totalInr: cashFlowRows.reduce((sum, r) => sum + (Number(r.amountInr) || 0), 0),
+    }), [cashFlowRows]);
 
     return (
       <div className="space-y-8 animate-in fade-in pb-20">
@@ -265,22 +313,37 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
         <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
             <h2 className="text-base font-black text-slate-900 uppercase tracking-wide">30-Day Cash Flow</h2>
-            <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
-              <button
-                type="button"
-                onClick={() => setCashFlowView('outgoing')}
-                className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'outgoing' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500'}`}
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+              <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+                <button
+                  type="button"
+                  onClick={() => setCashFlowView('outgoing')}
+                  className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'outgoing' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500'}`}
+                >
+                  Supplier Payments
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCashFlowView('incoming')}
+                  className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'incoming' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500'}`}
+                >
+                  Customer Receipts
+                </button>
+              </div>
+              <select
+                value={cashFlowCompany}
+                onChange={(e) => setCashFlowCompany(e.target.value as 'ALL' | 'GFPL' | 'GTEX')}
+                className="px-3 py-2 text-[10px] font-black uppercase rounded-xl border border-slate-200 bg-white text-slate-700"
+                title="Filter cash flow by company"
               >
-                Supplier Payments
-              </button>
-              <button
-                type="button"
-                onClick={() => setCashFlowView('incoming')}
-                className={`px-3 py-2 text-[10px] font-black uppercase rounded-lg ${cashFlowView === 'incoming' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500'}`}
-              >
-                Customer Receipts
-              </button>
+                <option value="ALL">All Companies</option>
+                <option value="GFPL">GFPL</option>
+                <option value="GTEX">GTEX</option>
+              </select>
             </div>
+          </div>
+          <div className="mb-4 text-[10px] font-black uppercase tracking-widest text-slate-500">
+            {cashFlowCompany === 'ALL' ? 'Showing: GFPL + GTEX' : `Showing: ${cashFlowCompany}`} • {cashFlowSummary.count} record(s) • {formatCurrency(cashFlowSummary.totalInr, 'INR')}
           </div>
 
           <div className="md:hidden space-y-3">

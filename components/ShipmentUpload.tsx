@@ -67,6 +67,7 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isEx
     if (hasId('SB') && (hasToken('SB') || normalized.includes('SHIPPING_BILL'))) return 'SB';
     if (hasId('BL') && (hasToken('BL') || normalized.includes('BILL_OF_LADING') || hasToken('BOL'))) return 'BL';
     if (hasId('PL') && (hasToken('PL') || normalized.includes('PACKING_LIST'))) return 'PL';
+    if (hasId('PI') && (hasToken('PI') || normalized.includes('PROFORMA_INVOICE') || normalized.includes('PROFORMA'))) return 'PI';
     if (hasId('CI') && (hasToken('CI') || normalized.includes('COMMERCIAL_INVOICE'))) return 'CI';
     if (hasId('SI') && (hasToken('SI') || normalized.includes('SALES_INDENT'))) return 'SI';
     if (hasId('EBRC') && (hasToken('EBRC') || normalized.includes('E_BRC') || normalized.includes('BANK_REALISATION') || normalized.includes('BANK_REALIZATION'))) return 'EBRC';

@@ -540,6 +540,7 @@ export const DOCUMENT_TYPES = [
   { id: 'CI', label: 'Commercial Invoice', prefix: 'CI_' },
   { id: 'PL', label: 'Packing List', prefix: 'PL_' },
   { id: 'BL', label: 'Bill of Lading', prefix: 'BL_' },
+  { id: 'AWB', label: 'Airway Bill', prefix: 'AWB_' },
   { id: 'BE_O', label: 'Bill of Entry (Out of Charge)', prefix: 'BEO_' },
   { id: 'INS', label: 'Insurance', prefix: 'INS_' },
   { id: 'EWAY', label: 'E-Way Bill', prefix: 'EWAY_' },
@@ -549,9 +550,11 @@ export const DOCUMENT_TYPES = [
 
 /** Document checker: expected file name = prefix + invoiceRef (e.g. CI_245). Payment Advise = PAY_ADV_{amount}_{currency} per lodged payment. */
 export const IMPORT_DOCUMENT_CHECKLIST = [
+  { id: 'PI', label: 'Proforma Invoice (if any)', prefix: 'PI_' },
   { id: 'CI', label: 'Commercial Invoice', prefix: 'CI_' },
   { id: 'PL', label: 'Packing List', prefix: 'PL_' },
   { id: 'BL', label: 'Bill of Lading', prefix: 'BL_' },
+  { id: 'AWB', label: 'Airway Bill', prefix: 'AWB_' },
   { id: 'BOE', label: 'Bill of Entry', prefix: 'BOE_' },
   { id: 'COO', label: 'COO (if any)', prefix: 'COO_' },
   { id: 'EWAY', label: 'E-Way Bill', prefix: 'EWAY_' },

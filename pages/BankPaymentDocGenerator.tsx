@@ -52,6 +52,19 @@ const BALANCE_DOCS = [
   'INSURANCE COPY',
 ];
 
+const PRINT_PACKET_DOCS = [
+  { id: 'PI', label: 'Proforma Invoice', required: false },
+  { id: 'CI', label: 'Commercial Invoice', required: true },
+  { id: 'PL', label: 'Packing List', required: true },
+  { id: 'BL', label: 'Bill of Lading', required: false },
+  { id: 'AWB', label: 'Airway Bill', required: false },
+  { id: 'BOE', label: 'Bill of Entry', required: false },
+  { id: 'PAY_ADV', label: 'Payment Advise(s)', required: false },
+  { id: 'COO', label: 'COO', required: false },
+] as const;
+
+type PacketDocId = typeof PRINT_PACKET_DOCS[number]['id'];
+
 function formatDateForDoc(isoOrDdMm: string): string {
   if (!isoOrDdMm) return '';
   if (/^\d{2}-\d{2}-\d{4}$/.test(isoOrDdMm)) return isoOrDdMm;
@@ -127,6 +140,19 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
   const [generating, setGenerating] = useState(false);
   const nextIdRef = React.useRef(2);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [shipmentFiles, setShipmentFiles] = useState<string[]>([]);
+  const [packetSelection, setPacketSelection] = useState<Record<PacketDocId, boolean>>({
+    PI: false,
+    CI: true,
+    PL: true,
+    BL: true,
+    AWB: true,
+    BOE: true,
+    PAY_ADV: true,
+    COO: true,
+  });
+  const [printingPacket, setPrintingPacket] = useState(false);
 
   const restoreDraft = useCallback((draft: any) => {
     if (!draft || typeof draft !== 'object') return;
@@ -333,6 +359,109 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     else clearShipmentFields();
   }, [selectedShipment, fillFromShipment, clearShipmentFields]);
 
+  React.useEffect(() => {
+    let mounted = true;
+    const run = async () => {
+      if (!selectedShipment?.id) {
+        if (mounted) setShipmentFiles([]);
+        return;
+      }
+      try {
+        const result = await api.shipments.getDocumentsFolderFiles(selectedShipment.id);
+        const files = Array.isArray(result?.files)
+          ? result.files.map((f: any) => (typeof f === 'string' ? f : f?.name)).filter(Boolean)
+          : [];
+        if (mounted) setShipmentFiles(files as string[]);
+      } catch (_) {
+        if (mounted) setShipmentFiles([]);
+      }
+    };
+    void run();
+    return () => { mounted = false; };
+  }, [selectedShipment?.id]);
+
+  const findDocMatches = useCallback((docId: PacketDocId): string[] => {
+    const names = shipmentFiles || [];
+    const strip = (v: string) => String(v || '').replace(/\.[^/.]+$/, '').toUpperCase();
+    const has = (file: string, pattern: RegExp) => pattern.test(strip(file));
+    if (docId === 'PI') return names.filter((f) => has(f, /^PI(_|$)/));
+    if (docId === 'CI') return names.filter((f) => has(f, /^CI(_|$)/));
+    if (docId === 'PL') return names.filter((f) => has(f, /^PL(_|$)/));
+    if (docId === 'BL') return names.filter((f) => has(f, /^BL(_|$)|BILL_OF_LADING|BOL/));
+    if (docId === 'AWB') return names.filter((f) => has(f, /AWB|AIRWAY|AIR_WAY|AIRWAY_BILL/));
+    if (docId === 'BOE') return names.filter((f) => has(f, /^BOE(_|$)|^BEO(_|$)|BILL_OF_ENTRY/));
+    if (docId === 'COO') return names.filter((f) => has(f, /^COO(_|$)|CERTIFICATE_OF_ORIGIN|ORIGIN_CERTIFICATE/));
+    if (docId === 'PAY_ADV') return names.filter((f) => has(f, /^PAY_ADV(_|$)/));
+    return [];
+  }, [shipmentFiles]);
+
+  const packetDocAvailability = useMemo(() => {
+    const out: Record<PacketDocId, string[]> = {
+      PI: [],
+      CI: [],
+      PL: [],
+      BL: [],
+      AWB: [],
+      BOE: [],
+      PAY_ADV: [],
+      COO: [],
+    };
+    PRINT_PACKET_DOCS.forEach((doc) => {
+      out[doc.id] = findDocMatches(doc.id);
+    });
+    return out;
+  }, [findDocMatches]);
+
+  const handlePrintPacket = async () => {
+    setError(null);
+    setWarning(null);
+    if (!selectedShipment?.id) {
+      setError('Select a shipment first.');
+      return;
+    }
+    const selectedDocs = PRINT_PACKET_DOCS.filter((d) => packetSelection[d.id]);
+    if (selectedDocs.length === 0) {
+      setError('Select at least one document to print.');
+      return;
+    }
+    const toPrint: string[] = [];
+    selectedDocs.forEach((doc) => {
+      const files = packetDocAvailability[doc.id] || [];
+      toPrint.push(...files);
+    });
+    if (toPrint.length === 0) {
+      setError('No selected documents are available for this shipment.');
+      return;
+    }
+
+    setPrintingPacket(true);
+    try {
+      const merged = await api.shipments.mergeFilesToPdf(selectedShipment.id, toPrint);
+      const url = URL.createObjectURL(merged.blob);
+      const opened = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!opened) {
+        setError('Popup blocked by browser. Please allow popups and retry.');
+        URL.revokeObjectURL(url);
+        return;
+      }
+      setTimeout(() => {
+        try {
+          opened.focus();
+          opened.print();
+        } catch (_) {}
+      }, 700);
+      if (merged.skipped.length > 0) {
+        const preview = merged.skipped.slice(0, 3).map((s) => s.filename).join(', ');
+        setWarning(`Packet generated. ${merged.skipped.length} file(s) skipped (unsupported/corrupt): ${preview}${merged.skipped.length > 3 ? '...' : ''}`);
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 12000);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to print packet.');
+    } finally {
+      setPrintingPacket(false);
+    }
+  };
+
   const addProductLine = useCallback(() => {
     const id = String(nextIdRef.current++);
     setProductLines((prev) => [...prev, newProductLine(id)]);
@@ -352,12 +481,21 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
   }, []);
 
   const buildDocumentList = (): string[] => {
+    const hasProforma = !!(selectedShipment as any)?.documents?.PI;
+    const withOptionalProforma = (base: string[]) => {
+      if (!hasProforma) return [...base];
+      const copy = [...base];
+      const invoiceIdx = copy.indexOf('INVOICE');
+      if (invoiceIdx >= 0) copy.splice(invoiceIdx, 0, 'PROFORMA INVOICE');
+      else copy.unshift('PROFORMA INVOICE');
+      return copy;
+    };
     if (payMode === 'Advance') {
-      const list = [...ADVANCE_DOCS];
+      const list = withOptionalProforma(ADVANCE_DOCS);
       if (includeBankAdvise) list.push('BANK ADVISE');
       return list;
     }
-    return BALANCE_DOCS.filter((d) => balanceChecklist[d]);
+    return withOptionalProforma(BALANCE_DOCS).filter((d) => d === 'PROFORMA INVOICE' || balanceChecklist[d]);
   };
 
   const validate = (): string | null => {
@@ -404,6 +542,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
 
   const handleGenerate = async () => {
     setError(null);
+    setWarning(null);
     const err = validate();
     if (err) {
       setError(err);
@@ -507,6 +646,11 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       {error && (
         <div className="rounded-xl bg-red-50 border border-red-200 text-red-700 px-4 py-3 font-medium">
           {error}
+        </div>
+      )}
+      {warning && (
+        <div className="rounded-xl bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 font-medium">
+          {warning}
         </div>
       )}
 
@@ -903,6 +1047,45 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Print Packet */}
+      <div className={cardClass}>
+        <h2 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2">
+          <FileText className="text-indigo-600" size={20} /> Print Shipment Packet
+        </h2>
+        <p className="text-sm text-slate-500 mb-4">
+          Select documents to print for this shipment. Only uploaded files will be printed.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+          {PRINT_PACKET_DOCS.map((doc) => {
+            const availableCount = packetDocAvailability[doc.id]?.length || 0;
+            const disabled = availableCount === 0;
+            return (
+              <label key={doc.id} className={`flex items-center justify-between gap-3 rounded-xl border p-3 ${disabled ? 'bg-slate-50 border-slate-200 text-slate-400' : 'bg-white border-slate-200 text-slate-700'}`}>
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={!!packetSelection[doc.id]}
+                    disabled={disabled}
+                    onChange={(e) => setPacketSelection((prev) => ({ ...prev, [doc.id]: e.target.checked }))}
+                  />
+                  <span className="text-sm font-medium">{doc.label}</span>
+                </span>
+                <span className="text-xs font-bold">{availableCount > 0 ? `${availableCount} file` : 'Missing'}</span>
+              </label>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={handlePrintPacket}
+          disabled={printingPacket || !selectedShipment?.id}
+          className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-slate-900 text-white font-bold text-sm hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-h-[48px]"
+        >
+          {printingPacket ? <Loader2 size={18} className="animate-spin" /> : <FileText size={18} />}
+          {printingPacket ? 'Preparing print...' : 'Print selected shipment documents'}
+        </button>
       </div>
 
       <div className="flex justify-end">

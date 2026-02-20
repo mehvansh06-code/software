@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserPlus, Users, X, Pencil, Trash2 } from 'lucide-react';
+import { UserPlus, Users, X, Pencil, Trash2, Database, HardDrive, ShieldAlert, RefreshCw } from 'lucide-react';
 import { api } from '../api';
 import { usePermissions } from '../hooks/usePermissions';
 import { AppDomain } from '../types';
@@ -84,6 +84,9 @@ export default function UserManagement() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [unlockingUserId, setUnlockingUserId] = useState<string | null>(null);
+  const [sysStats, setSysStats] = useState<any>({ mode: 'INITIALIZING', suppliers: 0, shipments: 0 });
+  const [isRefreshingStats, setIsRefreshingStats] = useState(false);
+  const [browserCacheCount, setBrowserCacheCount] = useState<number>(0);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -110,11 +113,44 @@ export default function UserManagement() {
     }
   }, []);
 
+  const refreshSystemStats = useCallback(async () => {
+    setIsRefreshingStats(true);
+    try {
+      const stats = await api.system.getStats();
+      setSysStats(stats || { mode: 'INITIALIZING', suppliers: 0, shipments: 0 });
+    } catch (_) {
+      // Keep UI stable if stats endpoint is unavailable.
+    } finally {
+      setIsRefreshingStats(false);
+    }
+  }, []);
+
+  const refreshBrowserCacheCount = useCallback(() => {
+    try {
+      const raw = localStorage.getItem('FLOTEX_PERSISTENT_V1');
+      if (!raw) {
+        setBrowserCacheCount(0);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      const suppliers = Array.isArray(parsed?.suppliers) ? parsed.suppliers.length : 0;
+      const shipments = Array.isArray(parsed?.shipments) ? parsed.shipments.length : 0;
+      setBrowserCacheCount(suppliers + shipments);
+    } catch {
+      setBrowserCacheCount(0);
+    }
+  }, []);
+
   useEffect(() => {
     setLoading(true);
     setError(null);
     Promise.all([loadUsers(), loadPermissionGroups()]).finally(() => setLoading(false));
   }, [loadUsers, loadPermissionGroups]);
+
+  useEffect(() => {
+    void refreshSystemStats();
+    refreshBrowserCacheCount();
+  }, [refreshSystemStats, refreshBrowserCacheCount]);
 
   const openModal = (user: ApiUser) => {
     setModalUser(user);
@@ -376,6 +412,36 @@ export default function UserManagement() {
           {error}
         </div>
       )}
+
+      <section className="bg-white p-8 rounded-[2.5rem] border border-slate-100">
+        <div className="flex items-center justify-between gap-3 mb-6">
+          <h2 className="text-sm font-black text-slate-900 uppercase">Database Health</h2>
+          <button
+            type="button"
+            onClick={() => { void refreshSystemStats(); refreshBrowserCacheCount(); }}
+            className={`p-2 rounded-xl border bg-white hover:bg-slate-50 transition-all ${isRefreshingStats ? 'animate-spin' : ''}`}
+            title="Refresh database health"
+          >
+            <RefreshCw size={16} className="text-slate-500" />
+          </button>
+        </div>
+        <div className="space-y-4">
+          <div className="flex justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+            <div className="flex items-center gap-3"><HardDrive size={18} className="text-amber-500" /><span className="text-[10px] font-black uppercase text-slate-400">Browser Cache</span></div>
+            <span className="text-sm font-black">{browserCacheCount}</span>
+          </div>
+          <div className="flex justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+            <div className="flex items-center gap-3"><Database size={18} className="text-indigo-500" /><span className="text-[10px] font-black uppercase text-slate-400">SQL Mainframe</span></div>
+            <span className="text-sm font-black">{(Number(sysStats.suppliers || 0) + Number(sysStats.shipments || 0)) || '---'}</span>
+          </div>
+        </div>
+        <div className="mt-6 space-y-3">
+          <p className="text-[10px] text-slate-500">Clear browser-only cached data and use server data directly.</p>
+          <button onClick={() => { api.system.reset(); }} className="w-full sm:w-auto px-4 py-2.5 bg-red-50 text-red-600 rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2">
+            <ShieldAlert size={14} /> Clear browser data &amp; use server
+          </button>
+        </div>
+      </section>
 
       <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
         <div className="md:hidden p-3 space-y-3">

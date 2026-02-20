@@ -402,6 +402,36 @@ export const api = {
         return r.blob();
       });
     },
+    mergeFilesToPdf: (id: string, filenames: string[]): Promise<{ blob: Blob; skipped: Array<{ filename: string; reason: string }> }> => {
+      if (!id || !Array.isArray(filenames) || filenames.length === 0) return Promise.reject(new Error('Invalid shipment id or file list'));
+      const safe = sanitizeEndpoint(`shipments/${id}/files/merge-pdf`);
+      if (!safe) return Promise.reject(new Error('Invalid endpoint'));
+      const url = `${API_BASE}/${safe}`;
+      return fetch(url, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ filenames }),
+      }).then(async (r) => {
+        if (!r.ok) {
+          let msg = 'Merge failed';
+          try {
+            const j = await r.json();
+            msg = j?.error || msg;
+          } catch (_) {}
+          throw new Error(msg);
+        }
+        const blob = await r.blob();
+        let skipped: Array<{ filename: string; reason: string }> = [];
+        try {
+          const raw = r.headers.get('X-Merge-Skipped');
+          if (raw) {
+            const parsed = JSON.parse(decodeURIComponent(raw));
+            if (Array.isArray(parsed)) skipped = parsed;
+          }
+        } catch (_) {}
+        return { blob, skipped };
+      });
+    },
     deleteFile: (id: string, filename: string): Promise<void> => {
       if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
       const url = `${API_BASE}/shipments/${id}/files/${encodeURIComponent(filename)}`;

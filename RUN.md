@@ -48,3 +48,45 @@ node server.js
 
 - In each terminal press **Ctrl+C** to stop that process.
 - Stopping the backend (Ctrl+C) releases port 3001 so the next run works.
+
+---
+
+## Database backup and restore
+
+### Create backup now
+
+Option 1 (recommended for you): double-click `Backup-Now.bat`
+
+Option 2 (terminal):
+```bash
+cd c:\software
+npm run backup:db
+```
+
+Backups are stored in:
+`c:\software\backups`
+
+### Restore from backup
+
+Important: stop backend first before restore.
+
+Option 1 (recommended for you): double-click `Restore-Database.bat` and enter backup file path.
+
+Option 2 (terminal):
+```bash
+cd c:\software
+set RESTORE_CONFIRM=YES && npm run restore:db -- --file backups\ledger-YYYY-MM-DD_HH-mm-ss.db
+```
+
+Notes:
+- Restore script makes a safety copy before replacing database.
+- After restore, start backend again.
+
+### Automatic daily backup (Windows Task Scheduler)
+
+1. Right-click `Setup-Daily-Backup-Task.bat` and Run as Administrator.
+2. Enter time in `HH:MM` (24-hour format). Example: `23:00`.
+3. Task name created: `EXIM_Daily_DB_Backup`.
+
+To remove this scheduler:
+- Run `Remove-Daily-Backup-Task.bat` as Administrator.

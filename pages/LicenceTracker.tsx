@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Licence, LicenceType, LicenceImportProduct, LicenceExportProduct, Shipment, User, UserRole, Material } from '../types';
 import { Award, ShieldAlert, Calendar, FileCheck, TrendingUp, Plus, Briefcase, Settings, X, Save, ArrowDownLeft, ArrowUpRight, Pencil, Trash2, ArrowLeft, FileDown } from 'lucide-react';
@@ -19,8 +19,28 @@ interface LicenceTrackerProps {
   onUpdateShipment: (updated: Shipment) => Promise<void>;
 }
 
+type AlertLevel = 'high' | 'medium';
+interface LicenceAlert {
+  id: string;
+  licenceId: string;
+  level: AlertLevel;
+  title: string;
+  message: string;
+}
+
 const canEditLicence = (user?: User | null) =>
   user?.role === UserRole.MANAGEMENT || user?.role === UserRole.CHECKER;
+
+function normalizeHsnCode(v: string): string {
+  return String(v || '').replace(/\D/g, '').slice(0, 8);
+}
+
+function isPaymentRealized(sh: Shipment): boolean {
+  const toFC = (p: { amount: number; currency: string }) =>
+    p.currency === sh.currency ? p.amount : (p.currency === 'INR' ? p.amount / (sh.exchangeRate || 1) : 0);
+  const receivedFC = (sh.payments || []).filter((p) => p.received === true).reduce((sum, p) => sum + toFC(p), 0);
+  return receivedFC >= (sh.amount || 0);
+}
 
 /** Export: fulfilled INR = sum of allocations for this licence (export shipments), or legacy licenceExportLines/invoiceValueINR. */
 function getFulfilledForLicence(licenceId: string, allShipments: Shipment[]): number {
@@ -166,6 +186,11 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   const [materials, setMaterials] = useState<Material[]>([]);
   const [newImportProducts, setNewImportProducts] = useState<LicenceImportProduct[]>([]);
   const [newExportProducts, setNewExportProducts] = useState<LicenceExportProduct[]>([]);
+  const [founderView, setFounderView] = useState(false);
+  const [countOnlyRealizedExports, setCountOnlyRealizedExports] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [licenceAuditMap, setLicenceAuditMap] = useState<Record<string, { user: string; action: string; date: string }>>({});
 
   useEffect(() => {
     if (showAddLicence) {
@@ -173,14 +198,116 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     }
   }, [showAddLicence]);
 
+  useEffect(() => {
+    let mounted = true;
+    api.auditLogs.list({ limit: 500 }).then((rows: any[]) => {
+      if (!mounted || !Array.isArray(rows)) return;
+      const map: Record<string, { user: string; action: string; date: string }> = {};
+      rows.forEach((row: any) => {
+        const tid = String(row?.targetId || '');
+        if (!tid.startsWith('lic')) return;
+        if (map[tid]) return;
+        map[tid] = {
+          user: row?.userName || row?.userId || 'Unknown',
+          action: row?.action || 'UPDATED',
+          date: row?.createdAt || '',
+        };
+      });
+      setLicenceAuditMap(map);
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, [licences.length]);
+
   const epcgLicences = licences.filter(l => l.type === LicenceType.EPCG);
   const advanceLicences = licences.filter(l => l.type === LicenceType.ADVANCE);
 
+  const getFulfilledForDisplay = (licenceId: string) => {
+    if (!countOnlyRealizedExports) return getFulfilledForLicence(licenceId, shipments);
+    const realizedExports = shipments.filter((s) => !!s.buyerId && isPaymentRealized(s));
+    return getFulfilledForLicence(licenceId, realizedExports);
+  };
+
+  const getFulfilledUSDForDisplay = (licenceId: string) => {
+    if (!countOnlyRealizedExports) return getFulfilledUSDForLicence(licenceId, shipments);
+    const realizedExports = shipments.filter((s) => !!s.buyerId && isPaymentRealized(s));
+    return getFulfilledUSDForLicence(licenceId, realizedExports);
+  };
+
   const stats = {
     totalDutySaved: licences.reduce((acc, l) => acc + (l.dutySaved || 0), 0),
-    totalFulfilled: licences.reduce((acc, l) => acc + getFulfilledForLicence(l.id, shipments), 0),
+    totalFulfilled: licences.reduce((acc, l) => acc + getFulfilledForDisplay(l.id), 0),
     totalRequired: licences.reduce((acc, l) => acc + (l.eoRequired || 0), 0),
   };
+
+  const riskKpis = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const expired = licences.filter((l) => {
+      const exp = new Date(l.expiryDate);
+      return !Number.isNaN(exp.getTime()) && exp.getTime() < now.getTime();
+    }).length;
+    const atRisk = licences.filter((l) => {
+      const exp = new Date(l.expiryDate);
+      if (Number.isNaN(exp.getTime())) return false;
+      const days = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      return days >= 0 && days <= 30;
+    }).length;
+    const overLimit = licences.filter((l) => getUtilizationForLicence(l.id, shipments) > (l.dutySaved || l.amountImportINR || 0)).length;
+    return { expired, atRisk, overLimit };
+  }, [licences, shipments]);
+
+  const licenceAlerts: LicenceAlert[] = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const out: LicenceAlert[] = [];
+    for (const lic of licences) {
+      const exp = new Date(lic.expiryDate);
+      const expDays = Number.isNaN(exp.getTime()) ? 9999 : Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      if (expDays <= 7 && expDays >= 0) {
+        out.push({
+          id: `exp7-${lic.id}`,
+          licenceId: lic.id,
+          level: 'high',
+          title: `Licence ${lic.number} expires in ${expDays} day${expDays === 1 ? '' : 's'}`,
+          message: 'Take immediate action to complete pending obligation.',
+        });
+      } else if (expDays <= 15 && expDays >= 0) {
+        out.push({
+          id: `exp15-${lic.id}`,
+          licenceId: lic.id,
+          level: 'medium',
+          title: `Licence ${lic.number} expires in ${expDays} days`,
+          message: 'Review pending imports/exports and speed up closure.',
+        });
+      } else if (expDays <= 30 && expDays >= 0) {
+        out.push({
+          id: `exp30-${lic.id}`,
+          licenceId: lic.id,
+          level: 'medium',
+          title: `Licence ${lic.number} expires in ${expDays} days`,
+          message: 'Plan shipments early to avoid non-compliance.',
+        });
+      }
+
+      if (lic.importValidityDate) {
+        const imp = new Date(lic.importValidityDate);
+        const impDays = Number.isNaN(imp.getTime()) ? 9999 : Math.ceil((imp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        if (impDays < 0) {
+          const hasLinkedImports = shipments.some((s) => !!s.supplierId && (String(s.linkedLicenceId || '') === String(lic.id) || String(s.epcgLicenceId || '') === String(lic.id) || String(s.advLicenceId || '') === String(lic.id)));
+          if (hasLinkedImports) {
+            out.push({
+              id: `imp-exp-${lic.id}`,
+              licenceId: lic.id,
+              level: 'high',
+              title: `Import validity expired for ${lic.number}`,
+              message: 'This licence still has linked imports. Re-check compliance.',
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }, [licences, shipments]);
 
   useEffect(() => {
     if (!licenceIdFromUrl || !selectedLicenceResolved) return;
@@ -276,9 +403,94 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     }));
   };
 
+  const autoFillFromShipmentValues = () => {
+    setImportShipments(prev => prev.map((s) => {
+      const items = s.items || [];
+      if (items.length === 0) return s;
+      const ex = Number(s.exchangeRate) || 1;
+      const totalINR = Number(s.invoiceValueINR || 0);
+      const totalUSD = ex > 0 ? (totalINR / ex) : 0;
+      const lines = items.map((it: any) => {
+        const inr = Number((it.amount || 0) * ex);
+        const usd = ex > 0 ? (inr / ex) : 0;
+        return {
+          productId: it.productId,
+          productName: it.productName || '',
+          quantity: Number(it.quantity || 0),
+          unit: it.unit || 'KGS',
+          valueINR: inr,
+          amountUSD: usd,
+        };
+      });
+      const normalized = lines.length > 0 ? lines : [{
+        productId: items[0]?.productId,
+        productName: items[0]?.productName || s.invoiceNumber || '',
+        quantity: Number(s.quantity || 0),
+        unit: items[0]?.unit || 'KGS',
+        valueINR: totalINR,
+        amountUSD: totalUSD,
+      }];
+      return { ...s, licenceImportLines: normalized, licenceObligationAmount: totalINR };
+    }));
+
+    setExportShipments(prev => prev.map((s) => {
+      const ex = Number(s.exchangeRate) || 1;
+      const valueINR = Number(s.invoiceValueINR || 0);
+      const valueUSD = Number(s.fobValueFC || (ex > 0 ? valueINR / ex : 0));
+      const qty = Number(s.quantity || 0);
+      return {
+        ...s,
+        licenceExportLines: [{
+          productName: s.invoiceNumber || '',
+          hsnCode: '',
+          quantity: qty,
+          unit: (s.items && s.items[0]?.unit) || 'KGS',
+          valueINR,
+          valueUSD,
+        }],
+      };
+    }));
+  };
+
+  const validateBeforeSave = (): string | null => {
+    const lic = selectedLicenceResolved ?? selectedLicence;
+    if (!lic) return 'Licence not selected.';
+    const perProduct = getPerProductUtilization(lic, importShipments);
+    const overRows = perProduct.filter((r) => (r.limitQty > 0 && r.utilizedQty > r.limitQty) || (r.limitUSD > 0 && r.utilizedUSD > r.limitUSD) || (r.limitINR > 0 && r.utilizedINR > r.limitINR));
+    if (overRows.length > 0) {
+      const names = overRows.slice(0, 3).map(r => r.materialName || r.materialId).join(', ');
+      return `Import allocation exceeds licence product limits for: ${names}${overRows.length > 3 ? '...' : ''}.`;
+    }
+
+    const totalImport = importShipments.reduce((sum, s) => {
+      const lines = getImportLines(s);
+      if (lines.length > 0) return sum + lines.reduce((s2, l) => s2 + (l.valueINR || 0), 0);
+      return sum + (s.licenceObligationAmount ?? s.invoiceValueINR ?? 0);
+    }, 0);
+    const importLimit = Number(lic.dutySaved || lic.amountImportINR || 0);
+    if (importLimit > 0 && totalImport > importLimit) {
+      return `Total import utilization ${formatINR(totalImport)} exceeds licence limit ${formatINR(importLimit)}.`;
+    }
+
+    for (const p of (lic.importProducts || [])) {
+      if (p.hsnCode && !/^\d{8}$/.test(normalizeHsnCode(p.hsnCode))) return `Import product HSN must be exactly 8 digits (${p.materialName || p.materialId}).`;
+    }
+    for (const p of (lic.exportProducts || [])) {
+      if (p.hsnCode && !/^\d{8}$/.test(normalizeHsnCode(p.hsnCode))) return `Export product HSN must be exactly 8 digits (${p.productName || 'product'}).`;
+    }
+    return null;
+  };
+
   const saveObligations = async () => {
     const lic = selectedLicenceResolved ?? selectedLicence;
     if (!lic) return;
+    const validationError = validateBeforeSave();
+    if (validationError) {
+      setSaveError(validationError);
+      return;
+    }
+    setSaveBusy(true);
+    setSaveError(null);
     try {
       for (const sh of importShipments) {
         const lines = getImportLines(sh);
@@ -298,7 +510,14 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
       setSelectedLicence(null);
       if (licenceIdFromUrl) navigate('/');
     } catch (err: any) {
-      alert(err?.message || 'Failed to save licence obligations.');
+      const msg = String(err?.message || 'Failed to save licence obligations.');
+      if (/conflict|409|version/i.test(msg)) {
+        setSaveError('Another user updated this record at the same time. Please refresh and save again.');
+      } else {
+        setSaveError(msg);
+      }
+    } finally {
+      setSaveBusy(false);
     }
   };
 
@@ -314,6 +533,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   }, 0);
   const isOverImportLimit = selectedLicenceResolved != null && totalImportUtilization > (selectedLicenceResolved.dutySaved || selectedLicenceResolved.amountImportINR || 0);
   const fulfilledFromExports = selectedLicenceResolved != null ? exportShipments.reduce((s, x) => {
+    if (countOnlyRealizedExports && !isPaymentRealized(x)) return s;
     if (Array.isArray(x.licenceAllocations) && x.licenceAllocations.length > 0) {
       return s + x.licenceAllocations.filter((a: any) => String(a.licenceId) === licenceIdForManage).reduce((s2: number, a: any) => s2 + (a.allocatedAmountINR || 0), 0);
     }
@@ -324,8 +544,8 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   }, 0) : 0;
 
   const exportSingleLicenceToExcel = React.useCallback((lic: Licence) => {
-    const fulfilled = getFulfilledForLicence(lic.id, shipments);
-    const fulfilledUSD = getFulfilledUSDForLicence(lic.id, shipments);
+    const fulfilled = getFulfilledForDisplay(lic.id);
+    const fulfilledUSD = getFulfilledUSDForDisplay(lic.id);
     const utilized = getUtilizationForLicence(lic.id, shipments);
     const targetUSD = (lic.exportProducts || []).reduce((s, p) => s + (p.amountUSD || 0), 0);
     const progress = targetUSD > 0 ? Math.min(100, (fulfilledUSD / targetUSD) * 100) : (lic.eoRequired > 0 ? (fulfilled / lic.eoRequired) * 100 : 0);
@@ -350,9 +570,38 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     };
 
     const productRows: Record<string, string | number>[] = [];
+    const exceptionRows: Record<string, string | number>[] = [];
+    if (isOverLimit) {
+      exceptionRows.push({
+        'Licence No.': lic.number,
+        'Type': 'OVER_IMPORT_LIMIT',
+        'Details': `Used ${formatINR(utilized)} vs limit ${formatINR(lic.dutySaved || 0)}`,
+      });
+    }
+    if (isNearingExpiry) {
+      exceptionRows.push({
+        'Licence No.': lic.number,
+        'Type': 'NEARING_EXPIRY',
+        'Details': `Due by ${formatDate(lic.expiryDate)}`,
+      });
+    }
+    if (lic.importValidityDate && new Date(lic.importValidityDate).getTime() < Date.now()) {
+      exceptionRows.push({
+        'Licence No.': lic.number,
+        'Type': 'IMPORT_VALIDITY_EXPIRED',
+        'Details': `Import validity ended on ${formatDate(lic.importValidityDate)}`,
+      });
+    }
     if (lic.importProducts && lic.importProducts.length > 0) {
       const rows = getPerProductUtilization(lic, shipments);
       for (const row of rows) {
+        if ((row.limitQty > 0 && row.utilizedQty > row.limitQty) || (row.limitUSD > 0 && row.utilizedUSD > row.limitUSD) || (row.limitINR > 0 && row.utilizedINR > row.limitINR)) {
+          exceptionRows.push({
+            'Licence No.': lic.number,
+            'Type': 'PRODUCT_OVER_LIMIT',
+            'Details': `${row.materialName || row.materialId} exceeded configured limits`,
+          });
+        }
         productRows.push({
           'Licence No.': lic.number,
           'Type': lic.type,
@@ -383,6 +632,12 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
           ? productRows
           : [{ Note: 'No product-wise data (no import products defined on this licence).' }],
       },
+      {
+        sheetName: 'Exceptions',
+        rows: exceptionRows.length > 0
+          ? exceptionRows
+          : [{ Note: 'No exception found for this licence.' }],
+      },
     ]);
   }, [shipments]);
 
@@ -403,7 +658,38 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
         </span>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="md:hidden space-y-3 p-4">
+        {data.map((lic) => {
+          const fulfilled = getFulfilledForDisplay(lic.id);
+          const fulfilledUSD = getFulfilledUSDForDisplay(lic.id);
+          const utilized = getUtilizationForLicence(lic.id, shipments);
+          const targetUSD = (lic.exportProducts || []).reduce((s, p) => s + (p.amountUSD || 0), 0);
+          const progress = targetUSD > 0 ? Math.min(100, (fulfilledUSD / targetUSD) * 100) : (lic.eoRequired > 0 ? (fulfilled / lic.eoRequired) * 100 : 0);
+          const isNearingExpiry = new Date(lic.expiryDate).getTime() - Date.now() < 120 * 24 * 60 * 60 * 1000;
+          const isOverLimit = utilized > (lic.dutySaved || 0);
+          const audit = licenceAuditMap[lic.id];
+          return (
+            <article key={lic.id} className="rounded-2xl border border-slate-200 p-3 bg-white">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black text-slate-900">{lic.number}</p>
+                  <p className="text-[10px] text-slate-500 uppercase">{lic.type} • {lic.company}</p>
+                </div>
+                <button onClick={() => handleManage(lic)} className="px-3 py-2 rounded-lg border border-slate-200 text-[10px] font-bold uppercase">Manage</button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mt-3 text-[11px]">
+                <div className="rounded-lg bg-slate-50 p-2"><p className="text-slate-400">Import Limit</p><p className="font-bold">{formatINR(lic.dutySaved)}</p></div>
+                <div className="rounded-lg bg-slate-50 p-2"><p className="text-slate-400">Import Used</p><p className={`font-bold ${isOverLimit ? 'text-red-600' : ''}`}>{formatINR(utilized)}</p></div>
+                <div className="rounded-lg bg-slate-50 p-2"><p className="text-slate-400">EO Required</p><p className="font-bold">{formatINR(lic.eoRequired)}</p></div>
+                <div className="rounded-lg bg-slate-50 p-2"><p className="text-slate-400">EO Fulfilled</p><p className="font-bold">{formatINR(fulfilled)}</p></div>
+              </div>
+              <p className="text-[10px] mt-2 text-slate-600">Progress: {Math.round(progress)}% • Due: {formatDate(lic.expiryDate)} {isNearingExpiry ? '(Nearing due)' : ''}</p>
+              {audit && <p className="text-[10px] text-slate-400 mt-1">Last change: {audit.action} by {audit.user}</p>}
+            </article>
+          );
+        })}
+      </div>
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr className="bg-slate-50/50 text-left">
@@ -419,8 +705,8 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
           </thead>
           <tbody className="divide-y divide-slate-100">
             {data.map(lic => {
-              const fulfilled = getFulfilledForLicence(lic.id, shipments);
-              const fulfilledUSD = getFulfilledUSDForLicence(lic.id, shipments);
+              const fulfilled = getFulfilledForDisplay(lic.id);
+              const fulfilledUSD = getFulfilledUSDForDisplay(lic.id);
               const utilized = getUtilizationForLicence(lic.id, shipments);
               const targetUSD = (lic.exportProducts || []).reduce((s, p) => s + (p.amountUSD || 0), 0);
               const progress = targetUSD > 0 ? Math.min(100, (fulfilledUSD / targetUSD) * 100) : (lic.eoRequired > 0 ? (fulfilled / lic.eoRequired) * 100 : 0);
@@ -432,6 +718,9 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                   <td className="px-8 py-6">
                     <p className="font-black text-slate-900 text-sm tracking-tight">{lic.number}</p>
                     <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">{lic.type}</p>
+                    {licenceAuditMap[lic.id] && (
+                      <p className="text-[9px] text-slate-400 mt-1">Last change: {licenceAuditMap[lic.id].action} by {licenceAuditMap[lic.id].user}</p>
+                    )}
                   </td>
                   <td className="px-8 py-6">
                     <span className="text-[10px] font-black text-slate-400 bg-white border border-slate-100 px-2 py-1 rounded-lg uppercase tracking-widest">{lic.company}</span>
@@ -515,6 +804,13 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={autoFillFromShipmentValues}
+            className="px-4 py-2 rounded-xl font-bold text-amber-700 border border-amber-200 bg-amber-50 hover:bg-amber-100 flex items-center gap-2 text-xs uppercase tracking-widest"
+          >
+            Auto-fill from invoices
+          </button>
           <button
             type="button"
             onClick={() => exportSingleLicenceToExcel(selectedLicenceResolved)}
@@ -681,6 +977,15 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                 </div>
               </div>
             )}
+            {saveError && (
+              <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3">
+                <ShieldAlert className="text-red-500 shrink-0" size={20} />
+                <div>
+                  <p className="text-sm font-bold text-red-800">Cannot save obligations</p>
+                  <p className="text-xs text-red-600 mt-0.5">{saveError}</p>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               <div className="bg-amber-50 p-6 rounded-2xl border border-amber-100">
@@ -710,7 +1015,19 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
               <div className="space-y-4">
                 <h3 className="text-xs font-black uppercase text-slate-900">Per-product utilization (whichever limit hits first = 100% utilized)</h3>
                 <p className="text-[10px] text-slate-500">As you allocate imports, these amounts are deducted. When quantity, USD or INR limit is reached for a product, that product is fully utilized.</p>
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <div className="md:hidden space-y-2">
+                  {getPerProductUtilization(selectedLicenceResolved, importShipments).map((row, idx) => (
+                    <article key={idx} className="rounded-xl border border-slate-200 p-3 bg-white">
+                      <p className="text-xs font-bold text-slate-900">{row.materialName || row.materialId}</p>
+                      <div className="grid grid-cols-3 gap-2 mt-2 text-[10px]">
+                        <div className="bg-slate-50 rounded p-2"><p className="text-slate-400">Qty</p><p>{row.utilizedQty.toFixed(2)} / {row.limitQty}</p></div>
+                        <div className="bg-slate-50 rounded p-2"><p className="text-slate-400">USD</p><p>{formatCurrency(row.utilizedUSD, 'USD')}</p></div>
+                        <div className="bg-slate-50 rounded p-2"><p className="text-slate-400">INR</p><p>{formatINR(row.utilizedINR)}</p></div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="hidden md:block border border-slate-200 rounded-xl overflow-hidden">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
@@ -886,8 +1203,8 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
 
           <div className="p-6 border-t border-slate-100 bg-white flex justify-end gap-4">
             <button type="button" onClick={() => navigate('/')} className="px-8 py-3 rounded-xl font-bold text-slate-400 hover:text-slate-600 uppercase text-xs tracking-widest">Cancel</button>
-            <button type="button" onClick={saveObligations} className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs tracking-widest shadow-lg shadow-indigo-100 hover:bg-indigo-700 flex items-center gap-2">
-              <Save size={16} /> Save Obligation Ledger
+            <button type="button" onClick={saveObligations} disabled={saveBusy} className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs tracking-widest shadow-lg shadow-indigo-100 hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+              <Save size={16} /> {saveBusy ? 'Saving...' : 'Save Obligation Ledger'}
             </button>
           </div>
         </div>
@@ -902,13 +1219,44 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight uppercase">Licence Audit Control</h1>
           <p className="text-slate-500 font-medium">Duty-free import limits and export obligations: track utilization and fulfillment by due date.</p>
         </div>
-        <button
-          onClick={() => setShowAddLicence(true)}
-          className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center gap-2"
-        >
-          <Plus size={18} /> Add Licence
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setCountOnlyRealizedExports(v => !v)}
+            className={`px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-widest border ${countOnlyRealizedExports ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200'}`}
+            title="Count fulfillment only when export payment is realized"
+          >
+            {countOnlyRealizedExports ? 'Realized-only ON' : 'Realized-only OFF'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setFounderView(v => !v)}
+            className={`px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-widest border ${founderView ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-slate-600 border-slate-200'}`}
+          >
+            {founderView ? 'Founder View ON' : 'Founder View OFF'}
+          </button>
+          <button
+            onClick={() => setShowAddLicence(true)}
+            className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center gap-2"
+          >
+            <Plus size={18} /> Add Licence
+          </button>
+        </div>
       </header>
+
+      {licenceAlerts.length > 0 && (
+        <section className="bg-white border border-slate-100 rounded-2xl p-4">
+          <h3 className="text-xs font-black uppercase text-slate-900 mb-3">Compliance Alerts</h3>
+          <div className="space-y-2">
+            {licenceAlerts.slice(0, 8).map((a) => (
+              <div key={a.id} className={`rounded-xl border px-3 py-2 ${a.level === 'high' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                <p className={`text-xs font-black uppercase ${a.level === 'high' ? 'text-red-700' : 'text-amber-700'}`}>{a.title}</p>
+                <p className={`text-[11px] ${a.level === 'high' ? 'text-red-600' : 'text-amber-700'}`}>{a.message}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Overview Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -946,22 +1294,61 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
         </div>
       </div>
 
-      {/* Divided Sections */}
-      <div className="space-y-12">
-        <LicenceTable 
-            title="EPCG Licence Repository (Capital Assets)" 
-            data={epcgLicences} 
-            icon={Award} 
-            colorClass="bg-indigo-50 text-indigo-600"
-        />
-        
-        <LicenceTable 
-            title="Advance Licence Repository (Raw Materials)" 
-            data={advanceLicences} 
-            icon={Briefcase} 
-            colorClass="bg-amber-50 text-amber-600"
-        />
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-amber-200 bg-amber-50">
+          <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">At Risk (30d)</span>
+          <span className="text-sm font-black text-amber-800">{riskKpis.atRisk}</span>
+        </div>
+        <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-red-200 bg-red-50">
+          <span className="text-[10px] font-black uppercase tracking-widest text-red-700">Over Limit</span>
+          <span className="text-sm font-black text-red-800">{riskKpis.overLimit}</span>
+        </div>
+        <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-300 bg-slate-100">
+          <span className="text-[10px] font-black uppercase tracking-widest text-slate-700">Expired</span>
+          <span className="text-sm font-black text-slate-900">{riskKpis.expired}</span>
+        </div>
       </div>
+
+      {founderView ? (
+        <section className="bg-white rounded-[2rem] border border-slate-100 p-6">
+          <h2 className="text-sm font-black uppercase text-slate-900 mb-4">Founder Summary</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {licences.map((lic) => {
+              const fulfilled = getFulfilledForDisplay(lic.id);
+              const usedImport = getUtilizationForLicence(lic.id, shipments);
+              const remaining = Math.max(0, (lic.eoRequired || 0) - fulfilled);
+              const audit = licenceAuditMap[lic.id];
+              return (
+                <article key={lic.id} className="rounded-xl border border-slate-200 p-4 bg-slate-50">
+                  <p className="text-xs font-black text-slate-900">{lic.number} ({lic.company})</p>
+                  <p className="text-[11px] text-slate-600 mt-1">Obligation: {formatINR(lic.eoRequired || 0)}</p>
+                  <p className="text-[11px] text-emerald-700">Fulfilled: {formatINR(fulfilled)}</p>
+                  <p className="text-[11px] text-rose-700">Remaining: {formatINR(remaining)}</p>
+                  <p className="text-[11px] text-amber-700">Import used: {formatINR(usedImport)}</p>
+                  <p className="text-[10px] text-slate-500 mt-2">Due: {formatDate(lic.expiryDate)}</p>
+                  {audit && <p className="text-[10px] text-slate-400 mt-1">Last change: {audit.action} by {audit.user} ({formatDate(audit.date)})</p>}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : (
+        <div className="space-y-12">
+          <LicenceTable 
+              title="EPCG Licence Repository (Capital Assets)" 
+              data={epcgLicences} 
+              icon={Award} 
+              colorClass="bg-indigo-50 text-indigo-600"
+          />
+          
+          <LicenceTable 
+              title="Advance Licence Repository (Raw Materials)" 
+              data={advanceLicences} 
+              icon={Briefcase} 
+              colorClass="bg-amber-50 text-amber-600"
+          />
+        </div>
+      )}
 
       {/* Manage is now a full page at /licences/:id - see early return when selectedLicenceResolved */}
 
@@ -981,6 +1368,18 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                 if (!newLicence.issueDate || !newLicence.expiryDate || !newLicence.number || !newLicence.company) {
                   alert('Please fill Licence number, Opening date, and Export validity date.');
                   return;
+                }
+                for (const row of newImportProducts) {
+                  if (row.hsnCode && !/^\d{8}$/.test(normalizeHsnCode(row.hsnCode))) {
+                    alert(`Import product HSN must be exactly 8 digits (${row.materialName || row.materialId || 'row'}).`);
+                    return;
+                  }
+                }
+                for (const row of newExportProducts) {
+                  if (row.hsnCode && !/^\d{8}$/.test(normalizeHsnCode(row.hsnCode))) {
+                    alert(`Export product HSN must be exactly 8 digits (${row.productName || 'row'}).`);
+                    return;
+                  }
                 }
                 const id = 'lic' + Date.now();
                 const importTotalUSD = newImportProducts.reduce((s, r) => s + (r.amountUSDLimit || 0), 0);
@@ -1083,7 +1482,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                               {STANDARDISED_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                             </select>
                           </td>
-                          <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.hsnCode || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: e.target.value } : r))} placeholder="HSN" /></td>
+                          <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.hsnCode || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: normalizeHsnCode(e.target.value) } : r))} placeholder="8-digit HSN" maxLength={8} inputMode="numeric" /></td>
                           <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountUSDLimit || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountUSDLimit: parseFloat(e.target.value) || 0 } : r))} /></td>
                           <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountINR ?? ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountINR: parseFloat(e.target.value) || 0 } : r))} /></td>
                           <td className="p-2"><input type="number" step="any" min="0" className="w-16 px-2 py-2 rounded-lg border font-bold text-xs" value={row.uomConversionFactor ?? ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, uomConversionFactor: parseFloat(e.target.value) || undefined } : r))} placeholder="e.g. 2" title="Shipment units per 1 licence unit (e.g. 2 KGS = 1 SQM)" /></td>
@@ -1128,7 +1527,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                       {newExportProducts.map((row, idx) => (
                         <tr key={idx}>
                           <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.productName || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, productName: e.target.value } : r))} placeholder="Name" /></td>
-                          <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.hsnCode || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: e.target.value } : r))} placeholder="HSN" /></td>
+                          <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.hsnCode || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: normalizeHsnCode(e.target.value) } : r))} placeholder="8-digit HSN" maxLength={8} inputMode="numeric" /></td>
                           <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.quantity || ''} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, quantity: parseFloat(e.target.value) || 0 } : r))} /></td>
                           <td className="p-2">
                             <select className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.unit || 'KGS'} onChange={e => setNewExportProducts(prev => prev.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r))}>

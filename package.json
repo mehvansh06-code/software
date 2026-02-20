@@ -22,9 +22,10 @@
     "lucide-react": "^0.344.0",
     "multer": "^2.0.2",
     "number-to-words": "^1.2.4",
-    "pdfjs-dist": "^4.10.38",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "pdf-parse-legacy": "npm:pdf-parse@1.1.1",
+    "pdfjs-dist": "^4.10.38",
     "pizzip": "^3.1.6",
     "react-router-dom": "^7.13.0",
     "tailwindcss": "^4.1.18",
@@ -46,6 +47,8 @@
     "restart": "node --no-deprecation restart-server.js",
     "dev": "vite",
     "clear-data": "node server/clear-sample-data.js",
-    "import-data": "node server/import-from-file.js"
+    "import-data": "node server/import-from-file.js",
+    "backup:db": "node scripts/backup-db.js",
+    "restore:db": "node scripts/restore-db.js"
   }
 }
