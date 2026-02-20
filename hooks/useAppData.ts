@@ -51,6 +51,7 @@ export function useAppData(): UseAppDataReturn {
   const selectorRefetchDone = useRef(false);
   const dataChangedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadAllDataRef = useRef(0);
+  const loadAllDataRef = useRef<(() => Promise<void>) | null>(null);
   const DATA_CHANGED_DEBOUNCE_MS = 600;
   const LOAD_ALL_DATA_THROTTLE_MS = 1200;
 
@@ -91,6 +92,9 @@ export function useAppData(): UseAppDataReturn {
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
     }
   }, []);
+
+  // Keep a stable ref to the latest loadAllData implementation
+  loadAllDataRef.current = loadAllData;
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user');
@@ -181,14 +185,15 @@ export function useAppData(): UseAppDataReturn {
 
   useEffect(() => {
     if (!user || !domain) return;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.hostname}:3001`;
-    let ws: WebSocket;
+    // WebSocket URL from api.ts: uses VITE_API_HOST (https→wss, e.g. wss://api.eiofficial.com) or fallback
+    const wsUrl = getWebSocketUrl();
+    const wsRef = { current: null as WebSocket | null };
     let reconnectTimer: ReturnType<typeof setTimeout>;
     let delay = 2000;
     const connect = () => {
-      ws = new WebSocket(wsUrl);
-      ws.onmessage = (event) => {
+      const socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+      socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'data-changed') {
@@ -197,27 +202,33 @@ export function useAppData(): UseAppDataReturn {
               dataChangedDebounceRef.current = null;
               if (Date.now() - lastLoadAllDataRef.current < LOAD_ALL_DATA_THROTTLE_MS) return;
               lastLoadAllDataRef.current = Date.now();
-              loadAllData();
+              loadAllDataRef.current();
             }, DATA_CHANGED_DEBOUNCE_MS);
           }
         } catch (_) {}
       };
-      ws.onerror = () => { /* reconnection handled on close */ };
-      ws.onclose = () => {
+      socket.onerror = () => { /* reconnection handled on close */ };
+      socket.onclose = () => {
+        if (wsRef.current !== socket) return;
         reconnectTimer = setTimeout(() => {
           delay = Math.min(delay * 1.2, 30000);
           connect();
         }, delay);
       };
-      ws.onopen = () => { delay = 2000; };
+      socket.onopen = () => { delay = 2000; };
     };
     connect();
     return () => {
       if (dataChangedDebounceRef.current) clearTimeout(dataChangedDebounceRef.current);
       clearTimeout(reconnectTimer);
-      ws?.close();
+      const toClose = wsRef.current;
+      wsRef.current = null;
+      if (toClose) {
+        const closeWs = () => { try { toClose.close(); } catch (_) {} };
+        setTimeout(closeWs, 150);
+      }
     };
-  }, [user, domain, loadAllData]);
+  }, [user, domain]);
 
   const handleAddSupplier = useCallback(async (s: Supplier) => {
     await api.suppliers.create(s);

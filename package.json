@@ -21,7 +21,7 @@
     "lucide-react": "^0.344.0",
     "multer": "^2.0.2",
     "number-to-words": "^1.2.4",
-    "pdf-img-convert": "^1.0.3",
+    "pdf-img-convert": "^2.0.0",
     "pdf-parse": "^2.4.5",
     "pdf-parse-legacy": "npm:pdf-parse@1.1.1",
     "pizzip": "^3.1.6",

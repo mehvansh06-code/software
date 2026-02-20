@@ -13,6 +13,10 @@ IMPORTANT: Generated files must open in Word
   3. Repeat for every placeholder (beneficiary_name, amount, bank_swift, etc.).
   4. Save the template. Generate again - the new .docx will open AND show filled fields.
 - The two fields that always show ("ADVANCE BY SWIFT", "0801010128") are static text in the template.
+- If the generated file does NOT OPEN in Word (error opening file): the template was processed with
+  "merge split placeholders". Fix the template in Word (step 2 above: cut/paste each placeholder so
+  it is one run), then set env BANK_PAYMENT_SKIP_MERGE=1 so the generator skips merge and the
+  output opens. Or use a template that already has each placeholder in a single run.
 
 Place the company Word templates here:
 - ZHEJIANG FUSHENGDA.docx  (for GFPL / Gujarat Flotex Pvt Ltd)

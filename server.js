@@ -51,7 +51,7 @@ const userRoutes = require('./server/routes/users');
 const ocrRoutes = require('./server/routes/ocr');
 const auditRoutes = require('./server/routes/audit');
 
-const port = 3001;
+const port = process.env.PORT || 3001;
 const app = express();
 app.use(helmet({
   crossOriginEmbedderPolicy: false,

@@ -8,11 +8,26 @@
 // In the browser, use the same host you opened the app from — so when WiFi/IP changes, no .env update needed.
 // (VITE_API_HOST in .env was causing "offline" after IP change; now we only use it outside the browser.)
 const _envHost = typeof (import.meta as any).env?.VITE_API_HOST === 'string' ? (import.meta as any).env.VITE_API_HOST.trim() : '';
+const isFullUrl = _envHost && /^https?:\/\//i.test(_envHost);
 const API_HOST =
   typeof window !== 'undefined'
     ? (window.location.hostname || 'localhost')
     : (_envHost || 'localhost');
-const API_BASE = `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${API_HOST}:3001/api`;
+const API_BASE = isFullUrl && typeof window !== 'undefined'
+  ? `${_envHost.replace(/\/+$/, '')}/api`
+  : `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${API_HOST}:3001/api`;
+
+/** WebSocket URL: same host as API (wss when VITE_API_HOST is https, else ws://host:3001). */
+export function getWebSocketUrl(): string {
+  if (isFullUrl && _envHost) {
+    const base = _envHost.replace(/\/+$/, '');
+    return /^https:\/\//i.test(base) ? base.replace(/^https:\/\//i, 'wss://') : base.replace(/^http:\/\//i, 'ws://');
+  }
+  if (typeof window !== 'undefined')
+    return (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + (window.location.hostname || 'localhost') + ':3001';
+  return 'ws://localhost:3001';
+}
+
 const FETCH_TIMEOUT = 8000;
 const SAFE_ENDPOINT_REGEX = /^[a-zA-Z0-9\/_\-\.]+$/;
 const MAX_ENDPOINT_LENGTH = 256;

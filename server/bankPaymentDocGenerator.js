@@ -344,7 +344,10 @@ async function generateBankPaymentDocBuffer(data) {
     return out;
   }
 
-  /** Load template; fix {vide certificate and merge split placeholders so docxtemplater can fill them. */
+  /** When true, skip merge/collapse so output opens in Word (template must have each placeholder in one run). */
+  const skipMerge = process.env.BANK_PAYMENT_SKIP_MERGE === '1' || data.skip_merge_placeholders === true;
+
+  /** Load template; fix {vide and double-brace; merge split placeholders only if !skipMerge. */
   function loadTemplateZip() {
     const content = fs.readFileSync(templatePath, 'binary');
     const z = new PizZip(content);
@@ -352,23 +355,20 @@ async function generateBankPaymentDocBuffer(data) {
     if (documentEntry) {
       let xml = documentEntry.asText();
       xml = xml.replace(/\{vide\s+certificate/gi, '\u200Bvide certificate');
-
-      // Normalize double-brace placeholders {{ }} to single { }
       xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
 
-      // Collapse adjacent duplicate { or } tags that Word sometimes creates
-      for (let i = 0; i < 50; i++) {
-        const prev = xml;
-        xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
-        xml = xml.replace(/<w:t[^>]*>\}\s*<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}\s*<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
-        if (xml === prev) break;
+      if (!skipMerge) {
+        for (let i = 0; i < 50; i++) {
+          const prev = xml;
+          xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
+          xml = xml.replace(/<w:t[^>]*>\}\s*<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\}\s*<\/w:t>/g, '<w:t>}</w:t></w:r>$1$2<w:t></w:t>');
+          if (xml === prev) break;
+        }
+        const paraRegex = /<w:p\s*([^>]*)>([\s\S]*?)<\/w:p>/g;
+        xml = xml.replace(paraRegex, (_, attrs, paraContent) => {
+          return '<w:p' + attrs + '>' + mergePlaceholdersInParagraph(paraContent) + '</w:p>';
+        });
       }
-
-      // Merge split placeholders paragraph by paragraph
-      const paraRegex = /<w:p\s*([^>]*)>([\s\S]*?)<\/w:p>/g;
-      xml = xml.replace(paraRegex, (_, attrs, paraContent) => {
-        return '<w:p' + attrs + '>' + mergePlaceholdersInParagraph(paraContent) + '</w:p>';
-      });
       z.file('word/document.xml', xml);
     }
     return z;
