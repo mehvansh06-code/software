@@ -40,7 +40,7 @@ node server.js
 |------------|-------------------------------|
 | **App**    | http://localhost:3000         |
 | **API**    | http://localhost:3001         |
-| **Network**| http://192.168.1.70:3000 (app) / :3001 (API) |
+| **Network**| http://YOUR_LOCAL_IP:3000 (app) / :3001 (API) |
 
 ---
 

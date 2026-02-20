@@ -13,19 +13,11 @@ const API_HOST =
   typeof window !== 'undefined'
     ? (window.location.hostname || 'localhost')
     : (_envHost || 'localhost');
-const API_BASE = isFullUrl && typeof window !== 'undefined'
-  ? `${_envHost.replace(/\/+$/, '')}/api`
-  : `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${API_HOST}:3001/api`;
+const API_BASE = 'https://api.eiofficial.com/api';
 
 /** WebSocket URL: same host as API (wss when VITE_API_HOST is https, else ws://host:3001). */
 export function getWebSocketUrl(): string {
-  if (isFullUrl && _envHost) {
-    const base = _envHost.replace(/\/+$/, '');
-    return /^https:\/\//i.test(base) ? base.replace(/^https:\/\//i, 'wss://') : base.replace(/^http:\/\//i, 'ws://');
-  }
-  if (typeof window !== 'undefined')
-    return (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + (window.location.hostname || 'localhost') + ':3001';
-  return 'ws://localhost:3001';
+  return 'wss://api.eiofficial.com';
 }
 
 const FETCH_TIMEOUT = 8000;
