@@ -8,6 +8,7 @@ const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const helmet = require('helmet');
@@ -24,9 +25,10 @@ const loginLimiter = rateLimit({
 require('./server/db');
 const db = require('./server/db');
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, COMPANY_FOLDER, DOCUMENTS_BASE, AUDIT_ARCHIVE_DAYS } = require('./server/config');
-const { exportAndArchive } = require('./server/services/auditService');
+const { exportAndArchive, log: auditLog } = require('./server/services/auditService');
 const { verifyToken, JWT_SECRET } = require('./server/middleware');
 const { PRESETS, PERMISSION_GROUPS } = require('./server/constants/permissions');
+const { SESSION_IDLE_TIMEOUT_MINUTES, startSession, endSession, deleteExpiredSessions } = require('./server/services/sessionService');
 
 // Auth middleware for /api: protect all /api except login and status
 const authMiddleware = (req, res, next) => {
@@ -50,13 +52,23 @@ const bankPaymentDocsRoutes = require('./server/routes/bankPaymentDocs');
 const userRoutes = require('./server/routes/users');
 const ocrRoutes = require('./server/routes/ocr');
 const auditRoutes = require('./server/routes/audit');
+const paymentsRoutes = require('./server/routes/payments');
 
 const port = process.env.PORT || 3001;
 const app = express();
 app.set('trust proxy', 1);
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: false
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'none'"],
+      baseUri: ["'none'"],
+      frameAncestors: ["'none'"],
+      formAction: ["'none'"],
+      connectSrc: ["'self'"],
+    },
+  },
 }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -109,8 +121,44 @@ app.use((req, res, next) => {
   next();
 });
 
-const corsOrigin = process.env.CORS_ORIGIN || true;
-app.use(cors({ origin: corsOrigin, credentials: false }));
+const DEFAULT_CORS_ORIGINS = ['https://eiofficial.com', 'https://api.eiofficial.com'];
+
+function normalizeOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return '';
+  try {
+    const u = new URL(origin.trim());
+    return `${u.protocol}//${u.host}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function parseCorsOriginEnv(raw) {
+  if (!raw || typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((s) => normalizeOrigin(s))
+    .filter(Boolean);
+}
+
+const corsEnvOrigins = parseCorsOriginEnv(process.env.CORS_ORIGIN);
+const allowedOrigins = new Set(corsEnvOrigins.length > 0 ? corsEnvOrigins : DEFAULT_CORS_ORIGINS);
+allowedOrigins.add('https://eiofficial.com');
+
+if (process.env.NODE_ENV !== 'production') {
+  ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'].forEach((o) => {
+    allowedOrigins.add(o);
+  });
+}
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // allow non-browser clients
+    const normalized = normalizeOrigin(origin);
+    return cb(null, allowedOrigins.has(normalized));
+  },
+  credentials: false,
+}));
 app.use(express.json({ limit: '512kb' }));
 
 // Login: .env ADMIN_USERNAME/ADMIN_PASSWORD or DB users only
@@ -119,18 +167,45 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const ADMIN_PASSWORD_HASH = ADMIN_PASSWORD ? bcrypt.hashSync(ADMIN_PASSWORD, 10) : null;
 const DEFAULT_ALLOWED_DOMAINS = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
 
+function createSessionAndToken(user) {
+  const sessionId = crypto.randomUUID();
+  const started = startSession(db, user.id, sessionId);
+  if (!started.ok) {
+    return {
+      success: false,
+      code: started.code,
+      error: `This account is currently active on another device. Please try again after logout or ${SESSION_IDLE_TIMEOUT_MINUTES} minutes of inactivity.`,
+    };
+  }
+  const token = jwt.sign({ userId: user.id, role: user.role, sid: sessionId }, JWT_SECRET, { expiresIn: '7d' });
+  return { success: true, token };
+}
+
 function handleLogin(req, res) {
   const { username, password } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({ success: false, error: 'Username and password required' });
   }
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ success: false, error: 'Username and password required' });
+  }
+  if (username.length > 128 || password.length > 1024) {
+    return res.status(400).json({ success: false, error: 'Invalid username or password' });
+  }
+  deleteExpiredSessions(db);
   // 1) Env admin takes precedence when set
   if (ADMIN_USERNAME && ADMIN_PASSWORD_HASH) {
     if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
       return res.status(401).json({ success: false, error: 'Invalid username or password' });
     }
     const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [], allowedDomains: ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'] };
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const loginSession = createSessionAndToken(user);
+    if (!loginSession.success) {
+      auditLog(db, user.id, 'LOGIN_BLOCKED_ACTIVE_SESSION', user.id, { username: user.username, reason: loginSession.code });
+      return res.status(409).json({ success: false, code: loginSession.code, error: loginSession.error });
+    }
+    const token = loginSession.token;
+    auditLog(db, user.id, 'LOGIN_SUCCESS', user.id, { username: user.username });
     return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions: user.permissions, allowedDomains: user.allowedDomains } });
   }
   // 2) DB users (from permission migration)
@@ -149,7 +224,13 @@ function handleLogin(req, res) {
         allowedDomains = DEFAULT_ALLOWED_DOMAINS;
       }
       const user = { id: row.id, username: row.username, name: row.name, role: row.role, permissions, allowedDomains };
-      const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+      const loginSession = createSessionAndToken(user);
+      if (!loginSession.success) {
+        auditLog(db, user.id, 'LOGIN_BLOCKED_ACTIVE_SESSION', user.id, { username: user.username, reason: loginSession.code });
+        return res.status(409).json({ success: false, code: loginSession.code, error: loginSession.error });
+      }
+      const token = loginSession.token;
+      auditLog(db, user.id, 'LOGIN_SUCCESS', user.id, { username: user.username });
       return res.json({ success: true, token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions, allowedDomains } });
     }
   } catch (_) {}
@@ -165,7 +246,7 @@ app.get('/api/status', (req, res) => {
 
 app.use('/api', authMiddleware);
 
-// Permission matrix UI: groups and role presets (no auth required for read-only constants)
+// Permission matrix UI: groups and role presets (authenticated via /api middleware)
 app.get('/api/permission-groups', (req, res) => {
   res.json({
     groups: PERMISSION_GROUPS,
@@ -221,6 +302,19 @@ app.get('/api/auth/me', (req, res) => {
   });
 });
 
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    const userId = req.user && req.user.id;
+    const sessionId = req.authSessionId;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+    endSession(db, userId, sessionId);
+    auditLog(db, userId, 'LOGOUT', userId, {});
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: 'Logout failed' });
+  }
+});
+
 app.use('/api/suppliers', supplierRoutes(broadcast));
 app.use('/api/materials', materialRoutes(broadcast));
 app.use('/api/shipments', shipmentRoutes(broadcast));
@@ -234,6 +328,7 @@ app.use('/api/bank-payment-docs', bankPaymentDocsRoutes());
 app.use('/api/users', userRoutes());
 app.use('/api/ocr', ocrRoutes);
 app.use('/api/audit-logs', auditRoutes());
+app.use('/api/payments', paymentsRoutes());
 
 // Audit log export: every 10 days, export logs older than AUDIT_ARCHIVE_DAYS to CSV and remove from DB
 const AUDIT_EXPORT_INTERVAL_MS = 10 * 24 * 60 * 60 * 1000;
@@ -319,13 +414,13 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`Share with others on your network: http://${localIp}:${port} (API) and http://${localIp}:3000 (app)`);
 });
 
-function runDailyBackup() {
+async function runDailyBackup() {
   const backupDir = path.join(__dirname, 'backups');
   if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
   const date = new Date().toISOString().slice(0, 10);
   const backupPath = path.join(backupDir, `ledger-${date}.db`);
   try {
-    db.backup(backupPath);
+    await db.backup(backupPath);
     console.log(`[Backup] Saved to ${backupPath}`);
   } catch (e) {
     console.error('[Backup] Failed:', e.message);
@@ -333,8 +428,8 @@ function runDailyBackup() {
 }
 
 // Run once on startup, then every 24 hours
-runDailyBackup();
-setInterval(runDailyBackup, 24 * 60 * 60 * 1000);
+void runDailyBackup();
+setInterval(() => { void runDailyBackup(); }, 24 * 60 * 60 * 1000);
 
 const shutdown = () => {
   console.log('\nShutting down...');

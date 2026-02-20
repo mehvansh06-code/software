@@ -4,6 +4,7 @@ import './index.css';
 import App from './App';
 
 class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: string }> {
+  declare props: Readonly<{ children: React.ReactNode }>;
   state = { hasError: false, error: '' };
   static getDerivedStateFromError(e: Error) {
     return { hasError: true, error: e.message };

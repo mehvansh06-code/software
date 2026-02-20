@@ -1,11 +1,11 @@
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useDeferredValue, useEffect, useState, useMemo, useCallback } from 'react';
 import { Shipment, Supplier, Buyer, User, UserRole, Licence, LetterOfCredit, ShipmentStatus } from '../types';
 import { Truck, Search, Filter, ArrowUpDown, ChevronRight, FileDown, Plus, X, Trash2, CheckSquare, Square, Calendar, Upload } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatDate, formatCurrency, getCompanyName, COMPANY_OPTIONS, getShipmentStatusLabel } from '../constants';
 import { usePermissions } from '../hooks/usePermissions';
-import * as XLSX from 'xlsx';
+import { downloadAoaAsXlsx, downloadObjectsAsXlsx, readFirstSheetAsObjects } from '../utils/excel';
 import NewShipment from './NewShipment';
 import { api } from '../api';
 
@@ -129,6 +129,9 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
   const [showAddForm, setShowAddForm] = useState(false);
   const [showExportColumnsModal, setShowExportColumnsModal] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [remarksDraft, setRemarksDraft] = useState<Record<string, string>>({});
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const exportColumnsForMode = useMemo(() =>
@@ -143,16 +146,23 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
 
   const { hasPermission } = usePermissions(user);
   const canDelete = hasPermission('shipments.delete');
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+
+  const supplierNameById = useMemo(() => new Map(suppliers.map((s) => [s.id, s.name])), [suppliers]);
+  const buyerNameById = useMemo(() => new Map(buyers.map((b) => [b.id, b.name])), [buyers]);
 
   const getPartnerName = (sh: Shipment) => {
     if (isExport) {
-      return buyers.find(b => b.id === sh.buyerId)?.name || sh.buyerId || 'Unknown Buyer';
+      return (sh.buyerId ? buyerNameById.get(sh.buyerId) : undefined) || sh.buyerId || 'Unknown Buyer';
     }
-    return suppliers.find(s => s.id === sh.supplierId)?.name || sh.supplierId || 'Unknown Vendor';
+    return (sh.supplierId ? supplierNameById.get(sh.supplierId) : undefined) || sh.supplierId || 'Unknown Vendor';
   };
 
   const filteredAndSorted = useMemo(() => {
-    let result = shipments.filter(sh => isExport ? !!sh.buyerId : !!sh.supplierId);
+    let result = shipments.filter(sh => {
+      if (isExport) return !!sh.buyerId;
+      return !!sh.supplierId && sh.status !== ShipmentStatus.REACHED_PLANT;
+    });
 
     if (dateFrom || dateTo) {
       const from = dateFrom ? new Date(dateFrom + 'T00:00:00') : new Date(0);
@@ -163,8 +173,8 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       });
     }
 
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase().trim();
+    if (deferredSearchTerm) {
+      const term = deferredSearchTerm.toLowerCase().trim();
       result = result.filter(sh =>
         sh.invoiceNumber?.toLowerCase().includes(term) ||
         sh.blNumber?.toLowerCase().includes(term) ||
@@ -192,7 +202,22 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     });
 
     return result;
-  }, [shipments, searchTerm, companyFilter, partnerFilter, sortOrder, isExport, dateFrom, dateTo]);
+  }, [shipments, deferredSearchTerm, companyFilter, partnerFilter, sortOrder, isExport, dateFrom, dateTo]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [deferredSearchTerm, companyFilter, partnerFilter, sortOrder, dateFrom, dateTo, isExport, shipments.length]);
+
+  const totalRows = filteredAndSorted.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedShipments = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredAndSorted.slice(start, start + pageSize);
+  }, [filteredAndSorted, safePage, pageSize]);
+
+  const startRow = totalRows === 0 ? 0 : ((safePage - 1) * pageSize + 1);
+  const endRow = Math.min(totalRows, safePage * pageSize);
 
   const getProductNames = (sh: Shipment) => (sh.items && sh.items.length) ? sh.items.map(i => i.productName).join(', ') : (sh as any).productName || '—';
   /** Import: only payments marked as received count toward Paid/Partial */
@@ -225,6 +250,45 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     return FILE_STATUS_OPTIONS.includes(v) ? v : (sh.documentsFolderPath ? 'ok' : 'pending');
   };
   const fileStatusLabel = (v: string) => (v === 'ok' ? 'OK' : v === 'clearing' ? 'Clearing' : 'Pending');
+  const getDraftRemarks = (sh: Shipment) => (remarksDraft[sh.id] ?? (sh.remarks || ''));
+  const setDraftRemarks = (shipmentId: string, value: string) => {
+    setRemarksDraft((prev) => ({ ...prev, [shipmentId]: value }));
+  };
+  const commitRemarks = useCallback((sh: Shipment, nextValue: string) => {
+    if (!onUpdateShipment) return;
+    const current = sh.remarks || '';
+    if (nextValue === current) {
+      setRemarksDraft((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, sh.id)) return prev;
+        const next = { ...prev };
+        delete next[sh.id];
+        return next;
+      });
+      return;
+    }
+    onUpdateShipment({ ...sh, remarks: nextValue });
+  }, [onUpdateShipment]);
+
+  useEffect(() => {
+    setRemarksDraft((prev) => {
+      const shipmentRemarks = new Map(shipments.map((s) => [s.id, s.remarks || '']));
+      let changed = false;
+      const next: Record<string, string> = {};
+      Object.entries(prev).forEach(([id, value]) => {
+        if (!shipmentRemarks.has(id)) {
+          changed = true;
+          return;
+        }
+        const draftValue = typeof value === 'string' ? value : String(value ?? '');
+        if (draftValue === shipmentRemarks.get(id)) {
+          changed = true;
+          return;
+        }
+        next[id] = draftValue;
+      });
+      return changed ? next : prev;
+    });
+  }, [shipments]);
 
   const shipmentToExcelRow = (sh: Shipment): Record<string, string | number | boolean | undefined> => {
     const payStatus = isExport
@@ -315,10 +379,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     if (!file) return;
     setImporting(true);
     try {
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const json = await readFirstSheetAsObjects(file) as any[];
       const rows = json.map((r) => {
         const partnerId = isExport ? (r['Buyer ID'] ?? r.buyerId) : (r['Supplier ID'] ?? r.supplierId);
         const partnerName = isExport ? (r['Buyer Name'] ?? r.buyerName ?? r.Buyer) : (r['Supplier Name'] ?? r.supplierName ?? r.Supplier);
@@ -355,17 +416,14 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     }
   };
 
-  const downloadShipmentTemplate = () => {
+  const downloadShipmentTemplate = async () => {
     const importHeaders = ['Supplier ID', 'Supplier Name', 'Invoice No', 'Company', 'Currency', 'Exchange Rate', 'Product Name', 'HSN Code', 'Quantity', 'Unit', 'Rate', 'Amount', 'Expected Shipment Date', 'Invoice Date'];
     const exportHeaders = ['Buyer ID', 'Buyer Name', 'Invoice No', 'Company', 'Currency', 'Exchange Rate', 'Product Name', 'HSN Code', 'Quantity', 'Unit', 'Rate', 'Amount', 'Expected Shipment Date', 'Invoice Date'];
     const headers = isExport ? exportHeaders : importHeaders;
     const sample = isExport
       ? ['b1', 'London Fashion Hub', 'INV/EXP/001', 'GFPL', 'USD', 84, 'Cotton Yarn', '5205', 1000, 'KGS', 5, 5000, '2025-03-01', '2025-02-15']
       : ['s1', 'Shenzhen Global', 'INV/IMP/001', 'GFPL', 'USD', 84, 'Cotton Yarn', '5205', 5000, 'KGS', 3.5, 17500, '2025-03-01', '2025-02-15'];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
-    XLSX.utils.book_append_sheet(wb, ws, isExport ? 'Export Shipments' : 'Import Shipments');
-    XLSX.writeFile(wb, `shipments_${isExport ? 'export' : 'import'}_template.xlsx`);
+    await downloadAoaAsXlsx(`shipments_${isExport ? 'export' : 'import'}_template.xlsx`, isExport ? 'Export Shipments' : 'Import Shipments', [headers, sample]);
   };
 
   const runExportExcel = useCallback(() => {
@@ -380,10 +438,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       return row;
     });
     if (exportData.length > 0 && selectedExportColumns.size === 0) return;
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Shipments');
-    XLSX.writeFile(workbook, `Shipments_${isExport ? 'Export' : 'Import'}.xlsx`);
+    void downloadObjectsAsXlsx(`Shipments_${isExport ? 'Export' : 'Import'}.xlsx`, 'Shipments', exportData as Record<string, unknown>[]);
     setShowExportColumnsModal(false);
   }, [filteredAndSorted, selectedExportColumns, isExport, exportColumnsForMode]);
 
@@ -419,11 +474,8 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
         'Invoice Value (INR)': sh.invoiceValueINR ?? 0,
       };
     });
-    const worksheet = XLSX.utils.json_to_sheet(form203Rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Form 203 ECGC');
     const prevMonthLabel = prevStart.toISOString().slice(0, 7).replace('-', '_'); // e.g. 2025_01
-    XLSX.writeFile(workbook, `Shipments_Form203_ECGC_${prevMonthLabel}.xlsx`);
+    void downloadObjectsAsXlsx(`Shipments_Form203_ECGC_${prevMonthLabel}.xlsx`, 'Form 203 ECGC', form203Rows as Record<string, unknown>[]);
   }, [filteredAndSorted, buyers, isExport]);
 
   const toggleExportColumn = (key: string) => {
@@ -445,25 +497,25 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">{isExport ? 'Outbound' : 'Inbound'} Logistics Ledger</h1>
           <p className="text-slate-500 font-medium">Tracking {isExport ? 'sales' : 'purchase'} flows and compliance.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 w-full md:w-auto">
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-700 rounded-2xl font-bold hover:bg-slate-200 disabled:opacity-50 transition-all shadow-sm">
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-3 md:py-2.5 bg-slate-100 text-slate-700 rounded-2xl font-bold hover:bg-slate-200 disabled:opacity-50 transition-all shadow-sm">
             <Upload size={18} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
-          <button type="button" onClick={downloadShipmentTemplate} className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all shadow-sm" title="Download template">
+          <button type="button" onClick={downloadShipmentTemplate} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-3 md:py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all shadow-sm" title="Download template">
             <FileDown size={18} /> Template
           </button>
           <button 
             onClick={() => setShowAddForm(true)}
-            className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-white shadow-lg transition-all ${isExport ? 'bg-amber-600 shadow-amber-100 hover:bg-amber-700' : 'bg-indigo-600 shadow-indigo-100 hover:bg-indigo-700'}`}
+            className={`w-full sm:w-auto justify-center flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-white shadow-lg transition-all min-h-[44px] md:min-h-0 ${isExport ? 'bg-amber-600 shadow-amber-100 hover:bg-amber-700' : 'bg-indigo-600 shadow-indigo-100 hover:bg-indigo-700'}`}
           >
             <Plus size={18} /> New {isExport ? 'Export' : 'Import'}
           </button>
-          <button onClick={openExportModal} className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-2xl font-bold hover:bg-slate-50 transition-all shadow-sm">
+          <button onClick={openExportModal} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-3 md:py-2.5 bg-white border border-slate-200 text-slate-600 rounded-2xl font-bold hover:bg-slate-50 transition-all shadow-sm min-h-[44px] md:min-h-0">
             <FileDown size={18} /> Excel
           </button>
           {isExport && (
-            <button onClick={runExportForm203Excel} className="flex items-center gap-2 px-5 py-2.5 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl font-bold hover:bg-amber-100 transition-all shadow-sm" title="Export columns for ECGC Form 203">
+            <button onClick={runExportForm203Excel} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-3 md:py-2.5 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl font-bold hover:bg-amber-100 transition-all shadow-sm min-h-[44px] md:min-h-0" title="Export columns for ECGC Form 203">
               <FileDown size={18} /> Form 203 (ECGC)
             </button>
           )}
@@ -518,8 +570,8 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
               ))}
             </div>
             <div className="p-6 border-t border-slate-100 flex justify-end gap-3 bg-slate-50">
-              <button type="button" onClick={() => setShowExportColumnsModal(false)} className="px-5 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-200 text-sm">Cancel</button>
-              <button type="button" onClick={runExportExcel} disabled={selectedExportColumns.size === 0} className="px-6 py-2.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm flex items-center gap-2">
+              <button type="button" onClick={() => setShowExportColumnsModal(false)} className="px-5 py-3 md:py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-200 text-sm min-h-[44px] md:min-h-0">Cancel</button>
+              <button type="button" onClick={runExportExcel} disabled={selectedExportColumns.size === 0} className="px-6 py-3 md:py-2.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm flex items-center gap-2 min-h-[44px] md:min-h-0">
                 <FileDown size={16} /> Export to Excel
               </button>
             </div>
@@ -527,8 +579,8 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
         </div>
       )}
 
-      <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex flex-wrap items-center gap-4">
-        <div className="flex-1 min-w-[240px] relative">
+      <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-3">
+        <div className="w-full relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
           <input 
             type="text" 
@@ -538,15 +590,14 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
             onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Calendar size={16} className="text-slate-400 shrink-0" />
-            <span className="text-xs font-bold text-slate-600">Invoice date</span>
+        <div className="grid grid-cols-1 lg:grid-cols-[auto,1fr,1fr,1fr] gap-2 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600">
+              <Calendar size={16} className="text-slate-400 shrink-0" />
               From
               <input
                 type="date"
-                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
                 value={dateFrom}
                 onChange={e => setDateFrom(e.target.value)}
                 title="Show shipments from this invoice date"
@@ -556,24 +607,24 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
               To
               <input
                 type="date"
-                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
                 value={dateTo}
                 onChange={e => setDateTo(e.target.value)}
                 title="Show shipments up to this invoice date"
               />
             </label>
           </div>
-          <select className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold" value={companyFilter} onChange={e => setCompanyFilter(e.target.value)}>
+          <select className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold" value={companyFilter} onChange={e => setCompanyFilter(e.target.value)}>
             <option value="ALL">All Companies</option>
             {COMPANY_OPTIONS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700" value={partnerFilter} onChange={e => setPartnerFilter(e.target.value)} title={isExport ? 'Show shipments by buyer' : 'Show all invoices by this supplier'}>
+          <select className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700" value={partnerFilter} onChange={e => setPartnerFilter(e.target.value)} title={isExport ? 'Show shipments by buyer' : 'Show all invoices by this supplier'}>
             <option value="">{isExport ? 'All buyers' : 'All suppliers'}</option>
             {isExport
               ? buyers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)
               : suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          <select className={`px-4 py-2.5 border rounded-2xl text-xs font-bold ${themeClass}`} value={sortOrder} onChange={e => setSortOrder(e.target.value as SortKey)}>
+          <select className={`w-full px-4 py-2.5 border rounded-2xl text-xs font-bold ${themeClass}`} value={sortOrder} onChange={e => setSortOrder(e.target.value as SortKey)}>
             <option value="date_new">Newest First</option>
             <option value="date_old">Oldest First</option>
             <option value="value_high">Value: High-Low</option>
@@ -582,41 +633,253 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       </div>
 
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden min-w-0">
-        <div className="w-full min-w-0">
-          <table className="w-full table-fixed min-w-0">
+        <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs font-semibold text-slate-600">
+            Showing {startRow}-{endRow} of {totalRows} shipments
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs font-semibold text-slate-500">Rows</label>
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value) || 50)}
+              className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 min-h-[36px]"
+            >
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 bg-white disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <span className="text-xs font-bold text-slate-600 min-w-[64px] text-center">
+              {safePage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 bg-white disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+        <div className="md:hidden p-3 space-y-3">
+          {pagedShipments.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-500">
+              No shipments found for the selected filters.
+            </div>
+          ) : (
+            pagedShipments.map((sh) => {
+              const paymentStatus = getPaymentStatus(sh);
+              const exportPayment = getExportPaymentStatus(sh);
+              const fileStatus = getFileStatus(sh);
+              const companyCode = sh.company === 'GTEX' || sh.company === 'GFPL' ? sh.company : 'UNKNOWN';
+              return (
+                <article key={sh.id} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-900 truncate">#{sh.invoiceNumber}</p>
+                      <p className="text-[10px] text-slate-500">{sh.invoiceDate ? formatDate(sh.invoiceDate) : '—'}</p>
+                    </div>
+                    {!isExport ? (
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
+                        companyCode === 'UNKNOWN'
+                          ? 'bg-slate-100 text-slate-600'
+                          : companyCode === 'GTEX'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-indigo-100 text-indigo-700'
+                      }`}>
+                        {companyCode}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide bg-amber-100 text-amber-700">
+                        {getCompanyName(sh.company)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-bold text-slate-800 truncate">{getPartnerName(sh)}</p>
+                    {!isExport && (
+                      <p className="text-[11px] text-slate-600 truncate">{getProductNames(sh)}</p>
+                    )}
+                  </div>
+
+                  {!isExport ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400">Amount</p>
+                        <p className="text-[11px] font-black text-indigo-700">{formatCurrency(sh.amount, sh.currency)}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400">Arrival</p>
+                        <p className="text-[11px] font-bold text-slate-700">{sh.expectedArrivalDate ? formatDate(sh.expectedArrivalDate) : '—'}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400">Payment</p>
+                        <span className={`inline-flex text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${
+                          paymentStatus === 'Paid'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : paymentStatus === 'Partial'
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {paymentStatus}
+                        </span>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400 mb-1">File</p>
+                        <select
+                          value={fileStatus}
+                          onChange={(e) => onUpdateShipment?.({ ...sh, fileStatus: e.target.value as 'pending' | 'clearing' | 'ok' })}
+                          className={`w-full text-[10px] font-bold px-2 py-1.5 rounded border border-slate-200 bg-white focus:ring-1 focus:ring-indigo-200 ${
+                            fileStatus === 'ok' ? 'text-emerald-600' : fileStatus === 'clearing' ? 'text-amber-600' : 'text-slate-500'
+                          }`}
+                        >
+                          {FILE_STATUS_OPTIONS.map((opt) => (
+                            <option key={opt} value={opt}>{fileStatusLabel(opt)}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400">Amount</p>
+                        <p className="text-[11px] font-black text-emerald-700">{formatCurrency(sh.amount, sh.currency)}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400">Received</p>
+                        <p className="text-[11px] font-black text-emerald-700">{formatCurrency(exportPayment.receivedFC, sh.currency)}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400">Pending</p>
+                        <p className="text-[11px] font-black text-slate-700">{formatCurrency(exportPayment.pendingFC, sh.currency)}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400 mb-1">Status</p>
+                        <span className={`inline-flex max-w-full items-center text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase whitespace-nowrap ${
+                          exportPayment.status === 'received'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : exportPayment.status === 'partial'
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {exportPayment.status === 'pending' ? 'Pending' : exportPayment.status === 'received' ? 'Received' : 'Partial'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-2">
+                    {isExport && (
+                      <select
+                        value={fileStatus}
+                        onChange={(e) => onUpdateShipment?.({ ...sh, fileStatus: e.target.value as 'pending' | 'clearing' | 'ok' })}
+                        className={`w-full text-[10px] font-bold px-2 py-2 rounded-xl border border-slate-200 bg-white focus:ring-1 focus:ring-amber-200 ${
+                          fileStatus === 'ok' ? 'text-emerald-600' : fileStatus === 'clearing' ? 'text-amber-600' : 'text-slate-500'
+                        }`}
+                      >
+                        {FILE_STATUS_OPTIONS.map((opt) => (
+                          <option key={opt} value={opt}>{fileStatusLabel(opt)}</option>
+                        ))}
+                      </select>
+                    )}
+                    <input
+                      type="text"
+                      value={getDraftRemarks(sh)}
+                      onChange={(e) => setDraftRemarks(sh.id, e.target.value)}
+                      onBlur={(e) => commitRemarks(sh, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      placeholder="Add note..."
+                      className="text-[11px] px-3 py-2 border border-slate-200 rounded-xl bg-white focus:ring-1 focus:ring-indigo-200 w-full"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Link
+                      to={`/shipments/${sh.id}`}
+                      className={`inline-flex flex-1 items-center justify-center gap-1 px-3 py-2 bg-white border border-slate-200 font-bold rounded-xl transition-all text-[11px] whitespace-nowrap ${
+                        isExport ? 'text-amber-600 hover:bg-amber-50' : 'text-indigo-600 hover:bg-indigo-50'
+                      }`}
+                    >
+                      Manage <ChevronRight size={12} />
+                    </Link>
+                    {canDelete && onDeleteShipment && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm('Delete this shipment? This cannot be undone.')) return;
+                          await onDeleteShipment?.(sh.id);
+                        }}
+                        className="p-2 rounded-xl border border-slate-200 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                        title="Delete shipment"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block w-full overflow-x-auto">
+          <table className={`w-full table-fixed ${isExport ? 'min-w-[1560px]' : 'min-w-[1180px]'}`}>
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
                 {!isExport ? (
                   <>
-                    <th className="w-[11%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice No. & Date</th>
-                    <th className="w-[12%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Supplier</th>
-                    <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">LC</th>
-                    <th className="w-[14%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Product</th>
+                    <th className="w-[10%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice No. & Date</th>
+                    <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Company</th>
+                    <th className="w-[14%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Supplier</th>
+                    <th className="w-[10%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Product</th>
                     <th className="w-[9%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Amount</th>
                     <th className="w-[9%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Arrival</th>
-                    <th className="w-[9%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Payment</th>
-                    <th className="w-[9%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">File</th>
-                    <th className="w-[13%] min-w-0 px-3 py-3 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Actions</th>
+                    <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Payment</th>
+                    <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">File</th>
+                    <th className="w-[180px] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Note</th>
+                    <th className="w-[140px] min-w-0 px-3 py-3 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Actions</th>
                   </>
                 ) : (
                   <>
                     <th className="w-[10%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice</th>
                     <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Company</th>
-                    <th className="w-[7%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">LC</th>
-                    <th className="w-[11%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Buyer</th>
+                    <th className="w-[13%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Buyer</th>
                     <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">ETA</th>
                     <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Pay Date</th>
                     <th className="w-[7%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Term</th>
                     <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Amount</th>
-                    <th className="w-[12%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Payment</th>
+                    <th className="w-[6%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Received</th>
+                    <th className="w-[6%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Pending</th>
+                    <th className="w-[6%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
                     <th className="w-[8%] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">File</th>
-                    <th className="w-[8%] min-w-0 px-3 py-3 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Actions</th>
+                    <th className="w-[200px] min-w-0 px-3 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Note</th>
+                    <th className="w-[140px] min-w-0 px-3 py-3 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Actions</th>
                   </>
                 )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAndSorted.map((sh) => (
+              {pagedShipments.map((sh) => (
+                (() => {
+                  const paymentStatus = getPaymentStatus(sh);
+                  const exportPayment = getExportPaymentStatus(sh);
+                  const fileStatus = getFileStatus(sh);
+                  return (
                 <tr key={sh.id} className="hover:bg-slate-50/50 transition-colors">
                   {!isExport ? (
                     <>
@@ -624,16 +887,34 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                         <div className="flex items-center gap-2 min-w-0">
                           <div className={`p-1.5 rounded-lg shrink-0 ${themeClass}`}><Truck size={14} /></div>
                           <div className="min-w-0">
-                            <p className="font-bold text-slate-900 text-xs truncate" title={sh.invoiceNumber}>#{sh.invoiceNumber}</p>
+                            <p className="font-bold text-slate-900 text-xs" title={sh.invoiceNumber}>#{sh.invoiceNumber}</p>
                             <p className="text-[9px] text-slate-500">{sh.invoiceDate ? formatDate(sh.invoiceDate) : '—'}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-3 py-3 min-w-0">
-                        <p className="font-bold text-slate-700 text-xs truncate" title={getPartnerName(sh)}>{getPartnerName(sh)}</p>
+                        {(() => {
+                          const companyCode = sh.company === 'GTEX' || sh.company === 'GFPL' ? sh.company : 'UNKNOWN';
+                          const isGtex = companyCode === 'GTEX';
+                          const isUnknown = companyCode === 'UNKNOWN';
+                          return (
+                            <span
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
+                                isUnknown
+                                  ? 'bg-slate-100 text-slate-600'
+                                  : isGtex
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-indigo-100 text-indigo-700'
+                              }`}
+                              title={getCompanyName(sh.company)}
+                            >
+                              {companyCode}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-3 min-w-0">
-                        <p className="text-[11px] font-mono font-semibold text-slate-600 truncate" title={sh.lcNumber || ''}>{sh.lcNumber || '—'}</p>
+                        <p className="font-bold text-slate-700 text-xs" title={getPartnerName(sh)}>{getPartnerName(sh)}</p>
                       </td>
                       <td className="px-3 py-3 min-w-0">
                         <p className="text-[11px] text-slate-700 truncate" title={getProductNames(sh)}>{getProductNames(sh)}</p>
@@ -645,24 +926,40 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                         <p className="text-[11px] font-semibold text-slate-700">{sh.expectedArrivalDate ? formatDate(sh.expectedArrivalDate) : '—'}</p>
                       </td>
                       <td className="px-3 py-3 min-w-0">
-                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${getPaymentStatus(sh) === 'Paid' ? 'bg-emerald-100 text-emerald-700' : getPaymentStatus(sh) === 'Partial' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
-                          {getPaymentStatus(sh)}
+                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${paymentStatus === 'Paid' ? 'bg-emerald-100 text-emerald-700' : paymentStatus === 'Partial' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                          {paymentStatus}
                         </span>
                       </td>
                       <td className="px-3 py-3 min-w-0">
                         <select
-                          value={getFileStatus(sh)}
+                          value={fileStatus}
                           onChange={(e) => onUpdateShipment?.({ ...sh, fileStatus: e.target.value as 'pending' | 'clearing' | 'ok' })}
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-200 bg-white focus:ring-1 focus:ring-indigo-200 max-w-full ${getFileStatus(sh) === 'ok' ? 'text-emerald-600' : getFileStatus(sh) === 'clearing' ? 'text-amber-600' : 'text-slate-500'}`}
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-200 bg-white focus:ring-1 focus:ring-indigo-200 max-w-full ${fileStatus === 'ok' ? 'text-emerald-600' : fileStatus === 'clearing' ? 'text-amber-600' : 'text-slate-500'}`}
                         >
                           {FILE_STATUS_OPTIONS.map((opt) => (
                             <option key={opt} value={opt}>{fileStatusLabel(opt)}</option>
                           ))}
                         </select>
                       </td>
-                      <td className="px-3 py-3 min-w-0 text-right">
-                        <div className="flex items-center justify-end gap-1 flex-wrap">
-                          <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-0.5 px-2 py-1 bg-white border border-slate-200 font-bold rounded-lg transition-all text-[10px] text-indigo-600 hover:bg-indigo-50 shrink-0">
+                      <td className="w-[180px] px-3 py-3 min-w-0">
+                        <input
+                          type="text"
+                          value={getDraftRemarks(sh)}
+                          onChange={(e) => setDraftRemarks(sh.id, e.target.value)}
+                          onBlur={(e) => commitRemarks(sh, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          placeholder="Add note..."
+                          className="text-[11px] px-2 py-1 border border-slate-200 rounded bg-white focus:ring-1 focus:ring-indigo-200 w-full"
+                        />
+                      </td>
+                      <td className="w-[140px] px-3 py-3 min-w-0 text-right">
+                        <div className="flex items-center justify-end gap-2 flex-wrap">
+                          <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-0.5 px-2 py-1 bg-white border border-slate-200 font-bold rounded-lg transition-all text-[10px] text-indigo-600 hover:bg-indigo-50 shrink-0 whitespace-nowrap">
                             Manage <ChevronRight size={12} />
                           </Link>
                           {canDelete && onDeleteShipment && (
@@ -678,17 +975,14 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                       <td className="px-3 py-3 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <div className={`p-1.5 rounded-lg shrink-0 ${themeClass}`}><Truck size={14} /></div>
-                          <p className="font-bold text-slate-900 text-xs truncate" title={sh.invoiceNumber}>#{sh.invoiceNumber}</p>
+                          <p className="font-bold text-slate-900 text-xs" title={sh.invoiceNumber}>#{sh.invoiceNumber}</p>
                         </div>
                       </td>
                       <td className="px-3 py-3 min-w-0">
                         <p className="text-[11px] font-semibold text-slate-700 truncate" title={getCompanyName(sh.company)}>{getCompanyName(sh.company)}</p>
                       </td>
                       <td className="px-3 py-3 min-w-0">
-                        <p className="text-[11px] font-mono font-semibold text-slate-600 truncate" title={sh.lcNumber || ''}>{sh.lcNumber || '—'}</p>
-                      </td>
-                      <td className="px-3 py-3 min-w-0">
-                        <p className="font-bold text-slate-700 text-xs truncate" title={getPartnerName(sh)}>{getPartnerName(sh)}</p>
+                        <p className="font-bold text-slate-700 text-xs" title={getPartnerName(sh)}>{getPartnerName(sh)}</p>
                       </td>
                       <td className="px-3 py-3 min-w-0">
                         <p className="text-[11px] font-semibold text-slate-600">{sh.expectedArrivalDate ? formatDate(sh.expectedArrivalDate) : '—'}</p>
@@ -703,33 +997,51 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                         <p className="font-bold text-xs text-emerald-600 whitespace-nowrap">{formatCurrency(sh.amount, sh.currency)}</p>
                       </td>
                       <td className="px-3 py-3 min-w-0">
+                        <p className="text-[11px] font-bold text-emerald-700">{formatCurrency(exportPayment.receivedFC, sh.currency)}</p>
+                      </td>
+                      <td className="px-3 py-3 min-w-0">
+                        <p className="text-[11px] font-bold text-slate-600">{formatCurrency(exportPayment.pendingFC, sh.currency)}</p>
+                      </td>
+                      <td className="px-3 py-3 min-w-0 overflow-hidden">
                         {(() => {
-                          const { status, receivedFC, pendingFC } = getExportPaymentStatus(sh);
+                          const { status } = exportPayment;
                           return (
-                            <div className="flex flex-col gap-0.5 min-w-0">
-                              <p className="text-[9px] font-bold text-emerald-700 truncate">Rcvd: {formatCurrency(receivedFC, sh.currency)}</p>
-                              <p className="text-[9px] font-bold text-slate-600 truncate">Pend: {formatCurrency(pendingFC, sh.currency)}</p>
-                              <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase w-fit ${status === 'received' ? 'bg-emerald-100 text-emerald-700' : status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
-                                {status === 'pending' ? 'Pending' : status === 'received' ? 'Received' : 'Partial'}
-                              </span>
-                            </div>
+                            <span className={`inline-flex max-w-full items-center text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase whitespace-nowrap ${status === 'received' ? 'bg-emerald-100 text-emerald-700' : status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                              {status === 'pending' ? 'Pending' : status === 'received' ? 'Received' : 'Partial'}
+                            </span>
                           );
                         })()}
                       </td>
-                      <td className="px-3 py-3 min-w-0">
+                      <td className="px-3 py-3 min-w-0 overflow-hidden">
                         <select
-                          value={getFileStatus(sh)}
+                          value={fileStatus}
                           onChange={(e) => onUpdateShipment?.({ ...sh, fileStatus: e.target.value as 'pending' | 'clearing' | 'ok' })}
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-200 bg-white focus:ring-1 focus:ring-amber-200 max-w-full ${getFileStatus(sh) === 'ok' ? 'text-emerald-600' : getFileStatus(sh) === 'clearing' ? 'text-amber-600' : 'text-slate-500'}`}
+                          className={`w-full min-w-0 text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-200 bg-white focus:ring-1 focus:ring-amber-200 ${fileStatus === 'ok' ? 'text-emerald-600' : fileStatus === 'clearing' ? 'text-amber-600' : 'text-slate-500'}`}
                         >
                           {FILE_STATUS_OPTIONS.map((opt) => (
                             <option key={opt} value={opt}>{fileStatusLabel(opt)}</option>
                           ))}
                         </select>
                       </td>
-                      <td className="px-3 py-3 min-w-0 text-right">
-                        <div className="flex items-center justify-end gap-1 flex-wrap">
-                          <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-0.5 px-2 py-1 bg-white border border-slate-200 font-bold rounded-lg transition-all text-[10px] text-amber-600 hover:bg-amber-50 shrink-0">
+                      <td className="w-[200px] px-3 py-3 min-w-0">
+                        <input
+                          type="text"
+                          value={getDraftRemarks(sh)}
+                          onChange={(e) => setDraftRemarks(sh.id, e.target.value)}
+                          onBlur={(e) => commitRemarks(sh, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          placeholder="Add note..."
+                          className="text-[11px] px-2 py-1 border border-slate-200 rounded bg-white focus:ring-1 focus:ring-amber-200 w-full"
+                        />
+                      </td>
+                      <td className="w-[140px] px-3 py-3 min-w-0 text-right">
+                        <div className="flex items-center justify-end gap-2 flex-wrap">
+                          <Link to={`/shipments/${sh.id}`} className="inline-flex items-center gap-0.5 px-2 py-1 bg-white border border-slate-200 font-bold rounded-lg transition-all text-[10px] text-amber-600 hover:bg-amber-50 shrink-0 whitespace-nowrap">
                             Manage <ChevronRight size={12} />
                           </Link>
                           {canDelete && onDeleteShipment && (
@@ -742,6 +1054,8 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
                     </>
                   )}
                 </tr>
+                  );
+                })()
               ))}
             </tbody>
           </table>
@@ -752,3 +1066,4 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
 };
 
 export default ShipmentMaster;
+

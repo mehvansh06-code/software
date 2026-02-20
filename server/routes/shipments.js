@@ -1,6 +1,8 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const fse = require('fs-extra');
 const multer = require('multer');
 const db = require('../db');
 const getShipmentValues = db.getShipmentValues;
@@ -10,6 +12,10 @@ const { validateId, hasPermission } = require('../middleware');
 const { log: auditLog, getUserName } = require('../services/auditService');
 
 const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.xlsx', '.docx', '.csv', '.txt'];
+
+function normalizeHsnCode(v) {
+  return String(v || '').replace(/\D/g, '').slice(0, 8);
+}
 
 function safeParseJson(str, fallback) {
   if (str == null || str === '') return fallback;
@@ -120,6 +126,58 @@ function getShipmentHistory(shipmentId) {
   } catch (_) { return null; }
 }
 
+function getShipmentItemsMap(shipmentIds) {
+  const map = new Map();
+  if (!Array.isArray(shipmentIds) || shipmentIds.length === 0) return map;
+  const placeholders = shipmentIds.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT shipmentId, productId, productName, description, hsnCode, quantity, unit, rate, amount, productType
+     FROM shipment_items
+     WHERE shipmentId IN (${placeholders})
+     ORDER BY shipmentId, sortOrder, id`
+  ).all(...shipmentIds);
+  for (const r of rows) {
+    const one = {
+      productId: r.productId,
+      productName: r.productName || '',
+      description: r.description,
+      hsnCode: r.hsnCode || '',
+      quantity: fromCents(r.quantity),
+      unit: r.unit || 'KGS',
+      rate: fromCents(r.rate),
+      amount: fromCents(r.amount),
+      productType: r.productType
+    };
+    if (!map.has(r.shipmentId)) map.set(r.shipmentId, []);
+    map.get(r.shipmentId).push(one);
+  }
+  return map;
+}
+
+function getShipmentHistoryMap(shipmentIds) {
+  const map = new Map();
+  if (!Array.isArray(shipmentIds) || shipmentIds.length === 0) return map;
+  const placeholders = shipmentIds.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT shipmentId, status, date, location, remarks, updatedBy
+     FROM shipment_history
+     WHERE shipmentId IN (${placeholders})
+     ORDER BY shipmentId, sortOrder, id`
+  ).all(...shipmentIds);
+  for (const r of rows) {
+    const one = {
+      status: r.status,
+      date: r.date,
+      location: r.location || '',
+      remarks: r.remarks,
+      updatedBy: r.updatedBy
+    };
+    if (!map.has(r.shipmentId)) map.set(r.shipmentId, []);
+    map.get(r.shipmentId).push(one);
+  }
+  return map;
+}
+
 function setShipmentItems(shipmentId, items) {
   db.prepare('DELETE FROM shipment_items WHERE shipmentId = ?').run(shipmentId);
   if (!items || !Array.isArray(items) || items.length === 0) return;
@@ -130,7 +188,7 @@ function setShipmentItems(shipmentId, items) {
       it.productId || null,
       it.productName || null,
       it.description || null,
-      it.hsnCode || null,
+      normalizeHsnCode(it.hsnCode) || null,
       toCents(it.quantity) ?? null,
       it.unit || 'KGS',
       toCents(it.rate) ?? null,
@@ -363,7 +421,19 @@ function sanitizeFileDownloadFilename(filename) {
   return trimmed;
 }
 
-const multerMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const UPLOAD_TMP_DIR = path.join(os.tmpdir(), 'exim-upload-tmp');
+try { fse.ensureDirSync(UPLOAD_TMP_DIR); } catch (_) {}
+
+const multerDisk = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, UPLOAD_TMP_DIR),
+    filename: (_req, file, cb) => {
+      const ext = (path.extname(file.originalname || '') || '').toLowerCase();
+      cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+    },
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
 
 /** Converts to Windows path; ensures network (UNC) paths start with exactly \\. */
 /** Ensures Windows UNC paths (IP or network name) start with exactly two backslashes (\\), not four or one. */
@@ -378,10 +448,10 @@ function toWindowsPath(pathStr) {
   return s;
 }
 
-function buildShipmentResponse(r) {
+function buildShipmentResponse(r, prefetchedItems, prefetchedHistory) {
   const folderPath = isValidDocumentsFolderPath(r.documentsFolderPath) ? r.documentsFolderPath : null;
-  const items = getShipmentItems(r.id) ?? (r.productId ? [{ productId: r.productId, productName: '', quantity: fromCents(r.quantity), rate: fromCents(r.rate), amount: fromCents(r.quantity) * fromCents(r.rate) }] : []);
-  const history = getShipmentHistory(r.id) ?? [];
+  const items = prefetchedItems ?? getShipmentItems(r.id) ?? (r.productId ? [{ productId: r.productId, productName: '', quantity: fromCents(r.quantity), rate: fromCents(r.rate), amount: fromCents(r.quantity) * fromCents(r.rate) }] : []);
+  const history = prefetchedHistory ?? getShipmentHistory(r.id) ?? [];
   const row = rowToClient(r);
   const { items_json, ...rest } = row;
   return {
@@ -409,10 +479,18 @@ function createRouter(broadcast) {
   router.get('/', hasPermission('shipments.view'), (req, res) => {
     try {
       const rows = db.prepare('SELECT * FROM shipments').all();
+      const shipmentIds = rows.map((r) => r.id).filter(Boolean);
+      const itemsMap = getShipmentItemsMap(shipmentIds);
+      const historyMap = getShipmentHistoryMap(shipmentIds);
       const result = [];
       for (const r of rows) {
         try {
-          result.push(buildShipmentResponse(r));
+          const fallbackItems = r.productId ? [{ productId: r.productId, productName: '', quantity: fromCents(r.quantity), rate: fromCents(r.rate), amount: fromCents(r.quantity) * fromCents(r.rate) }] : [];
+          result.push(buildShipmentResponse(
+            r,
+            itemsMap.get(r.id) || fallbackItems,
+            historyMap.get(r.id) || []
+          ));
         } catch (rowErr) {
           console.warn('Shipment list row error:', r?.id, rowErr.message);
         }
@@ -576,7 +654,8 @@ function createRouter(broadcast) {
     }
   });
 
-  router.post('/:id/files', hasPermission('documents.upload'), multerMemory.single('file'), (req, res) => {
+  router.post('/:id/files', hasPermission('documents.upload'), multerDisk.single('file'), async (req, res) => {
+    let tempFileMoved = false;
     try {
       const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
       if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
@@ -591,11 +670,11 @@ function createRouter(broadcast) {
         return res.status(500).json({ error: 'Documents folder could not be resolved' });
       }
       if (!folderPath || typeof folderPath !== 'string') return res.status(404).json({ error: 'Documents folder not available' });
-      if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file uploaded' });
-      const rawName = req.file.originalname || 'upload';
+      if (!req.file || !req.file.path) return res.status(400).json({ error: 'No file uploaded' });
+      const rawName = req.file.originalname || path.basename(req.file.path) || 'upload';
       const ext = (path.extname(rawName) || '').toLowerCase();
       if (!ALLOWED_FILE_EXTENSIONS.includes(ext)) {
-        return res.status(400).json({ error: 'File type not allowed. Allowed types: PDF, JPG, PNG, XLSX, DOCX.' });
+        return res.status(400).json({ error: 'File type not allowed. Allowed types: PDF, JPG, PNG, XLSX, DOCX, CSV, TXT.' });
       }
       const docTypeRaw = (req.query && typeof req.query.documentType === 'string') ? req.query.documentType.trim() : '';
       let filename;
@@ -628,8 +707,9 @@ function createRouter(broadcast) {
       }
       let written = false;
       try {
-        if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
-        fs.writeFileSync(fullPath, req.file.buffer);
+        await fse.ensureDir(folderPath);
+        await fse.move(req.file.path, fullPath, { overwrite: false });
+        tempFileMoved = true;
         written = true;
       } catch (writeErr) {
         if (isUncPath(folderPath)) {
@@ -641,8 +721,9 @@ function createRouter(broadcast) {
             const localFolder = path.join(localBase, lastTwo[0], lastTwo[1]);
             const localFull = path.join(localFolder, filename);
             try {
-              if (!fs.existsSync(localFolder)) fs.mkdirSync(localFolder, { recursive: true });
-              fs.writeFileSync(localFull, req.file.buffer);
+              await fse.ensureDir(localFolder);
+              await fse.move(req.file.path, localFull, { overwrite: false });
+              tempFileMoved = true;
               folderPath = localFolder;
               fullPath = localFull;
               written = true;
@@ -666,6 +747,10 @@ function createRouter(broadcast) {
     } catch (err) {
       console.error('POST /:id/files error:', err);
       if (!res.headersSent) res.status(500).json({ error: 'An error occurred' });
+    } finally {
+      if (req.file && req.file.path && !tempFileMoved) {
+        try { await fse.remove(req.file.path); } catch (_) {}
+      }
     }
   });
 
@@ -767,7 +852,7 @@ function createRouter(broadcast) {
           if (!supplierId) continue;
         }
         const productName = r.productName || r.ProductName || r.product_name || '';
-        const hsnCode = r.hsnCode || r.HSNCode || r.hsn_code || '';
+        const hsnCode = normalizeHsnCode(r.hsnCode || r.HSNCode || r.hsn_code || '');
         const quantity = Number(r.quantity) || Number(r.Quantity) || 0;
         const unit = r.unit || r.Unit || 'KGS';
         const rate = Number(r.rate) || Number(r.ratePerUnit) || 0;
@@ -883,13 +968,22 @@ function createRouter(broadcast) {
           setShipmentHistory(id, s.history || []);
         } else {
           const version = s.version;
-          const existingRow = db.prepare('SELECT exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, payments_json, licence_allocations_json, licenceExportLines_json, licenceImportLines_json FROM shipments WHERE id = ?').get(id);
+          const existingRow = db.prepare('SELECT exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, documents_json, history_json, payments_json, licence_allocations_json, licenceExportLines_json, licenceImportLines_json FROM shipments WHERE id = ?').get(id);
           const existing = existingRow;
           const existingPayments = safeParseJson(existingRow?.payments_json, []);
           const existingPaymentIds = new Set((existingPayments || []).map(p => p.id));
           const allowedFileStatus = ['pending', 'clearing', 'ok'].includes(s.fileStatus) ? s.fileStatus : (existing?.fileStatus ?? null);
           const consigneeIdVal = s.consigneeId !== undefined ? s.consigneeId : (existing?.consigneeId ?? null);
           const lcSettledVal = s.lcSettled !== undefined ? (s.lcSettled ? 1 : 0) : (existing?.lcSettled ?? 0);
+          const documentsJson = s.documents !== undefined
+            ? JSON.stringify(s.documents || {})
+            : (existingRow?.documents_json ?? '{}');
+          const historyJson = s.history !== undefined
+            ? JSON.stringify(s.history || [])
+            : (existingRow?.history_json ?? '[]');
+          const paymentsJson = s.payments !== undefined
+            ? JSON.stringify(s.payments || [])
+            : (existingRow?.payments_json ?? '[]');
           // Licence lines/allocations are managed in Licence Tracker; preserve when not sent from Shipment Master
           const licenceImportLinesJson = s.licenceImportLines !== undefined
             ? (Array.isArray(s.licenceImportLines) ? JSON.stringify(s.licenceImportLines) : null)
@@ -905,7 +999,7 @@ function createRouter(broadcast) {
             s.status, sNorm.containerNumber, sNorm.blNumber, sNorm.blDate, sNorm.beNumber, sNorm.beDate,
             sNorm.shippingLine, sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
             sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, (sNorm.dutyPenalty != null ? sNorm.dutyPenalty : null), (sNorm.dutyFine != null ? sNorm.dutyFine : null), sNorm.gst, sNorm.trackingUrl,
-            JSON.stringify(s.documents || {}), '[]', JSON.stringify(s.payments || []), null,
+            documentsJson, historyJson, paymentsJson, null,
             sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.epcgLicenceId || null, sNorm.advLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,
             sNorm.incoTerm, sNorm.paymentDueDate, (s.paymentTerm !== undefined ? s.paymentTerm : (existing?.paymentTerm ?? null)), sNorm.expectedArrivalDate || null,
             sNorm.invoiceDate || null, sNorm.freightCharges ?? null, sNorm.otherCharges ?? null,
@@ -934,8 +1028,8 @@ function createRouter(broadcast) {
             err.statusCode = 409;
             throw err;
           }
-          setShipmentItems(id, s.items || []);
-          setShipmentHistory(id, s.history || []);
+          if (s.items !== undefined) setShipmentItems(id, s.items || []);
+          if (s.history !== undefined) setShipmentHistory(id, s.history || []);
           // Apply new LC payments: reduce LC balance and record lc_transaction
           const newPayments = s.payments || [];
           for (const p of newPayments) {

@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Supplier, Shipment, Licence, LetterOfCredit, AppDomain, Buyer } from '../types';
 import { api, getWebSocketUrl } from '../api';
-import { SAMPLE_LICENCES, SAMPLE_LCS, SAMPLE_EXPORT_LCS, SAMPLE_BUYERS, SAMPLE_SHIPMENTS } from '../sampleData';
 
 export interface UseAppDataReturn {
   data: {
@@ -18,7 +17,7 @@ export interface UseAppDataReturn {
   };
   actions: {
     setDomain: (domain: AppDomain | null) => void;
-    handleLogin: (u: User) => void;
+    handleLogin: (u: User) => Promise<void>;
     handleLogout: () => void;
     selectDomain: (d: AppDomain) => void;
     refreshData: () => Promise<void>;
@@ -48,6 +47,7 @@ export function useAppData(): UseAppDataReturn {
   const [isLoading, setIsLoading] = useState(true);
   const [connectionMode, setConnectionMode] = useState<'SQL' | 'OFFLINE'>('SQL');
   const [refreshingUserForSelector, setRefreshingUserForSelector] = useState(false);
+  const authStateVersionRef = useRef(0);
   const selectorRefetchDone = useRef(false);
   const dataChangedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadAllDataRef = useRef(0);
@@ -66,26 +66,10 @@ export function useAppData(): UseAppDataReturn {
         api.lcs.list().catch(() => []),
       ]);
       setSuppliers(Array.isArray(s) ? s : []);
-      const buyersFromApi = Array.isArray(b) ? b : [];
-      setBuyers(buyersFromApi.length > 0 ? buyersFromApi : SAMPLE_BUYERS);
-      const fromApi = Array.isArray(sh) ? sh : [];
-      const baseShipments = fromApi.length > 0 ? fromApi : SAMPLE_SHIPMENTS;
-      const fromLocal = api.system.getMode() === 'OFFLINE' ? api.system.getLocalShipments() : [];
-      setShipments(prev => {
-        const inBase = (id: string) => baseShipments.some((x: Shipment) => x.id === id);
-        const fromPrev = prev.filter(p => !inBase(p.id));
-        const fromStorage = Array.isArray(fromLocal) ? fromLocal.filter((p: Shipment) => !inBase(p.id)) : [];
-        const merged = [...baseShipments];
-        const seen = new Set(baseShipments.map((x: Shipment) => x.id));
-        [...fromStorage, ...fromPrev].forEach((p: Shipment) => {
-          if (!seen.has(p.id)) { seen.add(p.id); merged.push(p); }
-        });
-        return merged;
-      });
-      const licencesFromApi = Array.isArray(l) ? l : [];
-      const lcsFromApi = Array.isArray(lc) ? lc : [];
-      setLicences(licencesFromApi.length > 0 ? licencesFromApi : SAMPLE_LICENCES);
-      setLcs(lcsFromApi.length > 0 ? lcsFromApi : [...SAMPLE_LCS, ...SAMPLE_EXPORT_LCS]);
+      setBuyers(Array.isArray(b) ? b : []);
+      setShipments(Array.isArray(sh) ? sh : []);
+      setLicences(Array.isArray(l) ? l : []);
+      setLcs(Array.isArray(lc) ? lc : []);
       setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
     } catch (err) {
       console.error('Data refresh failed:', err);
@@ -97,6 +81,7 @@ export function useAppData(): UseAppDataReturn {
   loadAllDataRef.current = loadAllData;
 
   useEffect(() => {
+    const versionAtStart = authStateVersionRef.current;
     const savedUser = localStorage.getItem('user');
     if (savedUser && savedUser !== 'undefined' && savedUser !== 'null') {
       try {
@@ -140,6 +125,8 @@ export function useAppData(): UseAppDataReturn {
             }
           }
         } catch (e) {
+          // If auth state changed while init was running (e.g. fresh login), ignore this stale init result.
+          if (authStateVersionRef.current !== versionAtStart) return;
           // Session invalid or API failed: clear token and user so UI shows login
           if (typeof window !== 'undefined') {
             localStorage.removeItem('token');
@@ -150,7 +137,10 @@ export function useAppData(): UseAppDataReturn {
           setDomain(null);
         }
       }
-      setIsLoading(false);
+      // Avoid stale init toggling loading after a newer auth transition already started.
+      if (authStateVersionRef.current === versionAtStart) {
+        setIsLoading(false);
+      }
     };
     init();
   }, [loadAllData]);
@@ -185,7 +175,7 @@ export function useAppData(): UseAppDataReturn {
 
   useEffect(() => {
     if (!user || !domain) return;
-    // WebSocket URL from api.ts: uses VITE_API_HOST (https→wss, e.g. wss://api.eiofficial.com) or fallback
+    // WebSocket URL from api.ts: uses API origin (e.g. wss://api.eiofficial.com)
     const wsUrl = getWebSocketUrl();
     const wsRef = { current: null as WebSocket | null };
     let reconnectTimer: ReturnType<typeof setTimeout>;
@@ -257,7 +247,6 @@ export function useAppData(): UseAppDataReturn {
 
   const handleAddShipment = useCallback(async (sh: Shipment) => {
     await api.shipments.create(sh);
-    api.system.addLocalShipment(sh);
     await loadAllData();
   }, [loadAllData]);
 
@@ -284,8 +273,11 @@ export function useAppData(): UseAppDataReturn {
   }, [loadAllData]);
 
   const handleUpdateLicence = useCallback(async (updated: Licence) => {
-    await api.licences.update(updated.id, updated);
-    setLicences(prev => prev.map(l => (l.id === updated.id ? updated : l)));
+    const response = await api.licences.update(updated.id, updated);
+    const next = response && typeof response.version === 'number'
+      ? { ...updated, version: response.version }
+      : updated;
+    setLicences(prev => prev.map(l => (l.id === updated.id ? next : l)));
     await loadAllData();
   }, [loadAllData]);
 
@@ -296,8 +288,11 @@ export function useAppData(): UseAppDataReturn {
   }, [loadAllData]);
 
   const handleUpdateLC = useCallback(async (updated: LetterOfCredit) => {
-    await api.lcs.update(updated.id, updated);
-    setLcs(prev => prev.map(l => (l.id === updated.id ? updated : l)));
+    const response = await api.lcs.update(updated.id, updated);
+    const next = response && typeof response.version === 'number'
+      ? { ...updated, version: response.version }
+      : updated;
+    setLcs(prev => prev.map(l => (l.id === updated.id ? next : l)));
     await loadAllData();
   }, [loadAllData]);
 
@@ -307,12 +302,31 @@ export function useAppData(): UseAppDataReturn {
     await loadAllData();
   }, [loadAllData]);
 
-  const handleLogin = useCallback((u: User) => {
+  const handleLogin = useCallback(async (u: User) => {
+    authStateVersionRef.current += 1;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (!token) {
+      throw new Error('Login token was not saved. Please try again.');
+    }
     setUser(u);
     localStorage.setItem('user', JSON.stringify(u));
-  }, []);
+    // Token is saved in Login.tsx before onLogin is called.
+    // Immediately refetch all master data so the first post-login render is populated.
+    setIsLoading(true);
+    void (async () => {
+      try {
+        await api.system.ping();
+        setConnectionMode(api.system.getMode() as 'SQL' | 'OFFLINE');
+        await loadAllData();
+      } finally {
+        setIsLoading(false);
+      }
+    })();
+  }, [loadAllData]);
 
   const handleLogout = useCallback(() => {
+    authStateVersionRef.current += 1;
+    api.auth.logout().catch(() => {});
     setUser(null);
     setDomain(null);
     localStorage.removeItem('user');
@@ -327,10 +341,6 @@ export function useAppData(): UseAppDataReturn {
       else localStorage.setItem('domain', d);
     }
   }, []);
-
-  const selectDomain = useCallback((d: AppDomain) => {
-    setDomainWithStorage(d);
-  }, [setDomainWithStorage]);
 
   return {
   data: {
@@ -349,7 +359,7 @@ export function useAppData(): UseAppDataReturn {
       setDomain: setDomainWithStorage,
       handleLogin,
       handleLogout,
-      selectDomain,
+      selectDomain: (d: AppDomain) => setDomainWithStorage(d),
       refreshData: loadAllData,
       handleAddSupplier,
       handleUpdateSupplier,

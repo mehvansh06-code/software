@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Supplier, User, SupplierStatus } from '../types';
 import { Globe, Landmark, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAutoSavedDraft } from '../hooks/useAutoSavedDraft';
 
 interface SupplierRequestProps {
   onSubmit: (supplier: Supplier) => Promise<void>;
@@ -32,6 +33,22 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
     intermediaryBankAddress: '',
   });
 
+  const restoreDraft = useCallback((draft: any) => {
+    if (!draft || typeof draft !== 'object') return;
+    if (draft.formData && typeof draft.formData === 'object') {
+      setFormData((prev) => ({ ...prev, ...draft.formData }));
+    }
+  }, []);
+
+  const { clearDraft } = useAutoSavedDraft({
+    key: 'supplier-request',
+    data: { formData },
+    onRestore: restoreDraft,
+    enabled: !isSubmitting,
+    debounceMs: 600,
+    version: '1',
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
@@ -56,6 +73,7 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
       };
 
       await onSubmit(newSupplier);
+      clearDraft();
       navigate('/suppliers');
     } catch (err: unknown) {
       console.error('Submission failed', err);
@@ -89,7 +107,7 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Legal Company Name</label>
                 <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Country</label>
                   <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.country} onChange={e => setFormData({...formData, country: e.target.value})} />
@@ -99,7 +117,7 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
                   <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.contactPerson} onChange={e => setFormData({...formData, contactPerson: e.target.value})} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Contact Number</label>
                   <input type="tel" className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.contactNumber} onChange={e => setFormData({...formData, contactNumber: e.target.value})} placeholder="e.g. +90 212 123 4567" />
@@ -130,7 +148,7 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Account Number</label>
                 <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} placeholder="e.g. 1234567890" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Bank Institution</label>
                   <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} />
@@ -166,7 +184,7 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Intermediary Bank Account Number</label>
                 <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.intermediaryAccountNumber} onChange={e => setFormData({...formData, intermediaryAccountNumber: e.target.value})} placeholder="e.g. 1234567890" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Intermediary Bank Institution</label>
                   <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-100" value={formData.intermediaryBankName} onChange={e => setFormData({...formData, intermediaryBankName: e.target.value})} />
@@ -184,11 +202,11 @@ const SupplierRequest: React.FC<SupplierRequestProps> = ({ onSubmit, user }) => 
           )}
         </div>
 
-        <div className="fixed bottom-0 left-64 right-0 bg-white border-t p-6 flex justify-end gap-4 z-50 shadow-2xl">
-          <button type="button" onClick={() => navigate('/suppliers')} className="px-10 py-3 rounded-xl font-bold text-slate-400 hover:text-slate-600 uppercase text-[10px] tracking-widest transition-all">
+        <div className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white border-t p-4 sm:p-6 flex flex-col sm:flex-row justify-end gap-3 sm:gap-4 z-50 shadow-2xl">
+          <button type="button" onClick={() => navigate('/suppliers')} className="w-full sm:w-auto px-10 py-3 rounded-xl font-bold text-slate-400 hover:text-slate-600 uppercase text-[10px] tracking-widest transition-all">
             Cancel
           </button>
-          <button type="submit" disabled={isSubmitting} className="px-12 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center gap-2 disabled:opacity-70">
+          <button type="submit" disabled={isSubmitting} className="w-full sm:w-auto px-12 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-70">
             {isSubmitting ? 'Processing...' : 'Onboard Vendor'}
           </button>
         </div>

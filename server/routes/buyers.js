@@ -28,8 +28,15 @@ function createRouter(broadcast) {
     const idCheck = validateId(b.id, 'Buyer ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const consigneesJson = (b.consignees && Array.isArray(b.consignees)) ? JSON.stringify(b.consignees) : null;
-    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
+    const stmt = db.prepare(`INSERT INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    try {
+      stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson, 1);
+    } catch (e) {
+      if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message || '')) {
+        return res.status(409).json({ success: false, error: 'Buyer already exists. Reload and edit the latest record.' });
+      }
+      return res.status(500).json({ success: false, error: e.message || 'Failed to create buyer' });
+    }
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'BUYER_CREATED', idCheck.value, { name: b.name });
     res.json({ success: true });
@@ -41,39 +48,49 @@ function createRouter(broadcast) {
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...] } with buyer objects' });
     const now = new Date().toISOString();
-    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const stmt = db.prepare(`INSERT INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     let count = 0;
+    let skipped = 0;
     try {
       for (const r of rows) {
         const id = r.id || 'b_' + Math.random().toString(36).slice(2, 11);
         const consignees = Array.isArray(r.consignees) ? r.consignees : [];
         const consigneesJson = consignees.length ? JSON.stringify(consignees) : null;
-        stmt.run(
-          id,
-          r.name || '',
-          r.address || '',
-          r.country || '',
-          r.bankName || r.bank_name || '',
-          r.accountHolderName || r.accountHolder || r.account_holder_name || '',
-          r.accountNumber || r.account_number || null,
-          r.swiftCode || r.swift || r.swift_code || '',
-          r.bankAddress || r.bank_address || '',
-          r.contactPerson || r.contact_person || '',
-          r.contactDetails || r.contact_details || (r.contactNumber || r.contactEmail ? [r.contactNumber, r.contactEmail].filter(Boolean).join(' / ') : ''),
-          r.salesPersonName || r.sales_person_name || '',
-          r.salesPersonContact || r.sales_person_contact || r.salesPersonMobile || '',
-          consignees.length ? 1 : 0,
-          r.status || 'APPROVED',
-          r.requestedBy || 'Import',
-          r.createdAt || now,
-          consigneesJson
-        );
-        count++;
+        try {
+          stmt.run(
+            id,
+            r.name || '',
+            r.address || '',
+            r.country || '',
+            r.bankName || r.bank_name || '',
+            r.accountHolderName || r.accountHolder || r.account_holder_name || '',
+            r.accountNumber || r.account_number || null,
+            r.swiftCode || r.swift || r.swift_code || '',
+            r.bankAddress || r.bank_address || '',
+            r.contactPerson || r.contact_person || '',
+            r.contactDetails || r.contact_details || (r.contactNumber || r.contactEmail ? [r.contactNumber, r.contactEmail].filter(Boolean).join(' / ') : ''),
+            r.salesPersonName || r.sales_person_name || '',
+            r.salesPersonContact || r.sales_person_contact || r.salesPersonMobile || '',
+            consignees.length ? 1 : 0,
+            r.status || 'APPROVED',
+            r.requestedBy || 'Import',
+            r.createdAt || now,
+            consigneesJson,
+            1
+          );
+          count++;
+        } catch (e) {
+          if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message || '')) {
+            skipped++;
+            continue;
+          }
+          throw e;
+        }
       }
       const userId = req.user && req.user.id;
-      auditLog(db, userId, 'BUYERS_IMPORTED', null, { count, message: `Imported ${count} buyer(s)` });
+      auditLog(db, userId, 'BUYERS_IMPORTED', null, { imported: count, skipped, message: `Imported ${count} buyer(s), skipped ${skipped}` });
       broadcast();
-      res.json({ success: true, imported: count });
+      res.json({ success: true, imported: count, skipped });
     } catch (e) {
       console.error('buyers import:', e);
       res.status(500).json({ success: false, error: e.message });
@@ -85,12 +102,32 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const b = req.body;
     if (!b || typeof b !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
+    const existing = db.prepare('SELECT id, version FROM buyers WHERE id = ?').get(idCheck.value);
+    if (!existing) return res.status(404).json({ success: false, error: 'Buyer not found' });
+    const version = Number(b.version);
+    if (!Number.isInteger(version) || version < 1) {
+      return res.status(400).json({ success: false, error: 'Version is required for update' });
+    }
     const consigneesJson = (b.consignees && Array.isArray(b.consignees)) ? JSON.stringify(b.consignees) : null;
-    const stmt = db.prepare(`INSERT OR REPLACE INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson);
+    const stmt = db.prepare(`
+      UPDATE buyers SET
+        name=?, address=?, country=?, bankName=?, accountHolderName=?, accountNumber=?, swiftCode=?, bankAddress=?,
+        contactPerson=?, contactDetails=?, salesPersonName=?, salesPersonContact=?, hasConsignee=?, status=?, requestedBy=?, createdAt=?, consignees_json=?,
+        version = version + 1
+      WHERE id=? AND version=?
+    `);
+    const result = stmt.run(
+      b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress,
+      b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson,
+      idCheck.value, version
+    );
+    if (result.changes === 0) {
+      return res.status(409).json({ success: false, error: 'Buyer was modified by another user. Please reload and try again.' });
+    }
+    const versionRow = db.prepare('SELECT version FROM buyers WHERE id = ?').get(idCheck.value);
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'BUYER_UPDATED', idCheck.value, { name: b.name });
-    res.json({ success: true });
+    res.json({ success: true, version: versionRow ? versionRow.version : undefined });
     broadcast();
   });
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Licence, LicenceType, LicenceImportProduct, LicenceExportProduct, Shipment, User, UserRole, Material } from '../types';
 import { Award, ShieldAlert, Calendar, FileCheck, TrendingUp, Plus, Briefcase, Settings, X, Save, ArrowDownLeft, ArrowUpRight, Pencil, Trash2, ArrowLeft, FileDown } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { downloadWorkbookAsXlsx } from '../utils/excel';
 import { formatINR, formatDate, formatCurrency } from '../constants';
 import { COMPANY_OPTIONS } from '../constants';
 import { api } from '../api';
@@ -245,10 +245,11 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
         const nextLines = lines.map((l, i) => i === lineIndex ? next : l);
         return { ...s, licenceImportLines: nextLines };
       }
-      const parsed = field === 'unit' ? value : (parseFloat(String(value)) || 0);
+      const parsed = field === 'unit' ? String(value) : (parseFloat(String(value)) || 0);
       const next = { ...line, [field]: parsed };
-      if (field === 'valueINR' && s.exchangeRate) next.amountUSD = parsed / s.exchangeRate;
-      if (field === 'amountUSD' && s.exchangeRate) next.valueINR = parsed * s.exchangeRate;
+      const exchangeRate = Number(s.exchangeRate) || 0;
+      if (field === 'valueINR' && exchangeRate > 0) next.amountUSD = Number(parsed) / exchangeRate;
+      if (field === 'amountUSD' && exchangeRate > 0) next.valueINR = Number(parsed) * exchangeRate;
       const nextLines = lines.map((l, i) => i === lineIndex ? next : l);
       return { ...s, licenceImportLines: nextLines };
     }));
@@ -278,23 +279,27 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   const saveObligations = async () => {
     const lic = selectedLicenceResolved ?? selectedLicence;
     if (!lic) return;
-    for (const sh of importShipments) {
-      const lines = getImportLines(sh);
-      const totalINR = lines.reduce((sum, l) => sum + (l.valueINR || 0), 0);
-      await onUpdateShipment({ ...sh, licenceImportLines: lines.length > 0 ? lines : undefined, licenceObligationAmount: totalINR });
+    try {
+      for (const sh of importShipments) {
+        const lines = getImportLines(sh);
+        const totalINR = lines.reduce((sum, l) => sum + (l.valueINR || 0), 0);
+        await onUpdateShipment({ ...sh, licenceImportLines: lines.length > 0 ? lines : undefined, licenceObligationAmount: totalINR });
+      }
+      for (const sh of exportShipments) {
+        const def = getExportLineDefaults(sh);
+        const line = { productName: sh.invoiceNumber || '', hsnCode: '', quantity: def.quantity, unit: def.unit, valueINR: def.valueINR, valueUSD: def.valueUSD };
+        await onUpdateShipment({ ...sh, licenceExportLines: [line] });
+      }
+      const totalFulfilled = exportShipments.reduce((sum, s) => {
+        const def = getExportLineDefaults(s);
+        return sum + (def.valueINR || 0);
+      }, 0);
+      await onUpdateItem({ ...lic, eoFulfilled: totalFulfilled });
+      setSelectedLicence(null);
+      if (licenceIdFromUrl) navigate('/');
+    } catch (err: any) {
+      alert(err?.message || 'Failed to save licence obligations.');
     }
-    for (const sh of exportShipments) {
-      const def = getExportLineDefaults(sh);
-      const line = { productName: sh.invoiceNumber || '', hsnCode: '', quantity: def.quantity, unit: def.unit, valueINR: def.valueINR, valueUSD: def.valueUSD };
-      await onUpdateShipment({ ...sh, licenceExportLines: [line] });
-    }
-    const totalFulfilled = exportShipments.reduce((sum, s) => {
-      const def = getExportLineDefaults(s);
-      return sum + (def.valueINR || 0);
-    }, 0);
-    await onUpdateItem({ ...lic, eoFulfilled: totalFulfilled });
-    setSelectedLicence(null);
-    if (licenceIdFromUrl) navigate('/');
   };
 
   const licenceIdForManage = selectedLicenceResolved?.id != null ? String(selectedLicenceResolved.id) : '';
@@ -368,21 +373,17 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
       }
     }
 
-    const wb = XLSX.utils.book_new();
-    const wsSummary = XLSX.utils.json_to_sheet([summaryRow]);
-    XLSX.utils.book_append_sheet(wb, wsSummary, 'Licence');
-
-    if (productRows.length > 0) {
-      const wsProduct = XLSX.utils.json_to_sheet(productRows);
-      XLSX.utils.book_append_sheet(wb, wsProduct, 'Product utilization');
-    } else {
-      const wsProduct = XLSX.utils.json_to_sheet([{ 'Note': 'No product-wise data (no import products defined on this licence).' }]);
-      XLSX.utils.book_append_sheet(wb, wsProduct, 'Product utilization');
-    }
-
     const dateStr = new Date().toISOString().slice(0, 10);
     const safeNumber = (lic.number || 'lic').replace(/[/\\:*?"<>|]/g, '_');
-    XLSX.writeFile(wb, `Licence_${safeNumber}_${dateStr}.xlsx`);
+    void downloadWorkbookAsXlsx(`Licence_${safeNumber}_${dateStr}.xlsx`, [
+      { sheetName: 'Licence', rows: [summaryRow] },
+      {
+        sheetName: 'Product utilization',
+        rows: productRows.length > 0
+          ? productRows
+          : [{ Note: 'No product-wise data (no import products defined on this licence).' }],
+      },
+    ]);
   }, [shipments]);
 
   const LicenceTable = ({ title, data, icon: Icon, colorClass }: { title: string, data: Licence[], icon: React.ElementType, colorClass: string }) => (
@@ -656,8 +657,12 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                         eoFulfilled: selectedLicenceResolved.eoFulfilled,
                         status: (editLicenceForm.status as 'ACTIVE' | 'CLOSED' | 'EXPIRED') ?? selectedLicenceResolved.status,
                       };
-                      await onUpdateItem(updated);
-                      setShowEditLicence(false);
+                      try {
+                        await onUpdateItem(updated);
+                        setShowEditLicence(false);
+                      } catch (err: any) {
+                        alert(err?.message || 'Failed to save licence.');
+                      }
                     }}
                     className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-bold text-xs uppercase flex items-center gap-2 hover:bg-indigo-700"
                   >

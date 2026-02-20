@@ -6,16 +6,12 @@ function validateEnv() {
   const errors = [];
   const warnings = [];
 
-  // Required for production: JWT secret must be set and non-default
+  // Required in all environments: JWT secret must be set, long, and non-default.
   const JWT_SECRET = process.env.JWT_SECRET;
-  if (process.env.NODE_ENV === 'production') {
-    if (!JWT_SECRET || typeof JWT_SECRET !== 'string' || JWT_SECRET.trim().length === 0) {
-      errors.push('JWT_SECRET is required in production. Set a strong random value in .env');
-    } else if (/flotex-ims-secret|change-in-production|secret|password/i.test(JWT_SECRET)) {
-      errors.push('JWT_SECRET must not be a default or guessable value in production.');
-    }
-  } else if (!JWT_SECRET || JWT_SECRET.trim() === '') {
-    warnings.push('JWT_SECRET not set; using default. Set JWT_SECRET in .env for production.');
+  if (!JWT_SECRET || typeof JWT_SECRET !== 'string' || JWT_SECRET.trim().length < 32) {
+    errors.push('JWT_SECRET is required and must be at least 32 characters. Set a strong random value in .env');
+  } else if (/flotex-ims-secret|change-in-production|secret|password/i.test(JWT_SECRET)) {
+    errors.push('JWT_SECRET must not be a default or guessable value.');
   }
 
   // Company-sensitive env (Sales Indent): all required so server refuses to start if any are missing

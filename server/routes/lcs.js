@@ -6,21 +6,29 @@ const { log: auditLog } = require('../services/auditService');
 function createRouter(broadcast) {
   const router = express.Router();
 
-  /** Get payment transactions for an LC with invoice number and payment reference from linked shipment */
-  function getLCPaymentSummary(lcId) {
+  /** Get payment transactions for all LCs with invoice number and payment reference from linked shipment */
+  function getLCPaymentSummaryMap() {
+    const map = new Map();
     try {
       const rows = db.prepare(`
-        SELECT t.id, t.amount, t.currency, t.date, t.type, t.shipmentId, s.invoiceNumber, s.payments_json
+        SELECT t.id, t.lcId, t.amount, t.currency, t.date, t.type, t.shipmentId, s.invoiceNumber, s.payments_json
         FROM lc_transactions t
         LEFT JOIN shipments s ON s.id = t.shipmentId
-        WHERE t.lcId = ?
-        ORDER BY t.date DESC
-      `).all(lcId);
-      return rows.map(row => {
+        ORDER BY t.lcId, t.date DESC
+      `).all();
+      const paymentsCache = new Map();
+      for (const row of rows) {
+        const lcId = row.lcId;
+        if (!lcId) continue;
         let reference = null;
         if (row.shipmentId && row.payments_json) {
           try {
-            const payments = JSON.parse(row.payments_json || '[]');
+            const cacheKey = `${row.shipmentId}::${row.payments_json}`;
+            let payments = paymentsCache.get(cacheKey);
+            if (!payments) {
+              payments = JSON.parse(row.payments_json || '[]');
+              paymentsCache.set(cacheKey, payments);
+            }
             const rowDate = row.date ? String(row.date).slice(0, 10) : null;
             const match = payments.find(p => {
               if (p.linkedLcId !== lcId || Number(p.amount) !== Number(row.amount)) return false;
@@ -31,7 +39,7 @@ function createRouter(broadcast) {
             if (match && match.reference) reference = match.reference;
           } catch (_) {}
         }
-        return {
+        const one = {
           id: row.id,
           date: row.date,
           amount: Number(row.amount) || 0,
@@ -41,17 +49,21 @@ function createRouter(broadcast) {
           invoiceNumber: row.invoiceNumber || null,
           reference: reference || null
         };
-      });
+        if (!map.has(lcId)) map.set(lcId, []);
+        map.get(lcId).push(one);
+      }
     } catch (e) {
-      return [];
+      return map;
     }
+    return map;
   }
 
   router.get('/', hasPermission('lc.view'), (req, res, next) => {
     try {
       const rows = db.prepare('SELECT * FROM lcs').all();
+      const paymentSummaryMap = getLCPaymentSummaryMap();
       const result = (Array.isArray(rows) ? rows : []).map(r => {
-      const paymentSummary = getLCPaymentSummary(r.id);
+      const paymentSummary = paymentSummaryMap.get(r.id) || [];
       const totalPaid = paymentSummary.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
       const amount = Number(r.amount) || 0;
       const balanceAmount = r.balanceAmount != null ? Number(r.balanceAmount) : amount;
@@ -63,6 +75,7 @@ function createRouter(broadcast) {
         status,
         shipments: (() => { try { return JSON.parse(r.shipments_json || '[]'); } catch (_) { return []; } })(),
         balanceAmount,
+        version: r.version != null ? Number(r.version) : 1,
         paymentSummary
       };
     });
@@ -81,19 +94,21 @@ function createRouter(broadcast) {
     const supplierId = l.supplierId || null;
     const amountNum = Number(l.amount) || 0;
     try {
-      const ins = db.prepare(`INSERT OR REPLACE INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, balanceAmount, currency, issueDate, expiryDate, maturityDate, company, status, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-      ins.run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, buyerId, amountNum, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks || null);
+      const ins = db.prepare(`INSERT INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, balanceAmount, currency, issueDate, expiryDate, maturityDate, company, status, remarks, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      ins.run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, buyerId, amountNum, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks || null, 1);
     } catch (e) {
       if (/no such column: balanceAmount/.test(e.message)) {
-        const insLegacy = db.prepare(`INSERT OR REPLACE INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, currency, issueDate, expiryDate, maturityDate, company, status, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-        insLegacy.run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, buyerId, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks || null);
+        const insLegacy = db.prepare(`INSERT INTO lcs (id, lcNumber, issuingBank, supplierId, buyerId, amount, currency, issueDate, expiryDate, maturityDate, company, status, remarks, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+        insLegacy.run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, buyerId, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks || null, 1);
       } else if (/no such column: buyerId/.test(e.message)) {
-        db.prepare(`INSERT OR REPLACE INTO lcs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks);
+        db.prepare(`INSERT INTO lcs (id, lcNumber, issuingBank, supplierId, amount, currency, issueDate, expiryDate, maturityDate, company, status, remarks, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(idCheck.value, l.lcNumber, l.issuingBank, supplierId, amountNum, l.currency, l.issueDate, l.expiryDate, l.maturityDate, l.company, l.status, l.remarks, 1);
+      } else if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message || '')) {
+        return res.status(409).json({ success: false, error: 'LC already exists. Reload and edit the latest record.' });
       } else throw e;
     }
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'LC_CREATED', idCheck.value, { lcNumber: l.lcNumber, amount: l.amount, currency: l.currency });
-    res.json({ success: true });
+    res.json({ success: true, version: 1 });
     broadcast();
   });
 
@@ -103,24 +118,80 @@ function createRouter(broadcast) {
     const id = idCheck.value;
     const l = req.body;
     if (!l || typeof l !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
-    const prev = db.prepare('SELECT status FROM lcs WHERE id = ?').get(id);
-    const newStatus = (l.status || '').toUpperCase();
-    const issueDate = l.issueDate != null && l.issueDate !== '' ? l.issueDate : null;
-    const expiryDate = l.expiryDate != null && l.expiryDate !== '' ? l.expiryDate : null;
-    const maturityDate = l.maturityDate != null && l.maturityDate !== '' ? l.maturityDate : null;
-    const stmt = db.prepare('UPDATE lcs SET status=?, issueDate=?, expiryDate=?, maturityDate=? WHERE id=?');
-    const existing = db.prepare('SELECT issueDate, expiryDate, maturityDate FROM lcs WHERE id = ?').get(id);
-    stmt.run(
-      l.status,
-      issueDate != null ? issueDate : (existing && existing.issueDate),
-      expiryDate != null ? expiryDate : (existing && existing.expiryDate),
-      maturityDate != null ? maturityDate : (existing && existing.maturityDate),
-      id
-    );
+    const existing = db.prepare('SELECT * FROM lcs WHERE id = ?').get(id);
+    if (!existing) return res.status(404).json({ success: false, error: 'LC not found' });
+    const version = Number(l.version);
+    if (!Number.isInteger(version) || version < 1) {
+      return res.status(400).json({ success: false, error: 'Version is required for update' });
+    }
+    const issueDate = l.issueDate != null && l.issueDate !== '' ? l.issueDate : existing.issueDate;
+    const expiryDate = l.expiryDate != null && l.expiryDate !== '' ? l.expiryDate : existing.expiryDate;
+    const maturityDate = l.maturityDate != null && l.maturityDate !== '' ? l.maturityDate : existing.maturityDate;
+    const amount = l.amount != null ? Number(l.amount) || 0 : (Number(existing.amount) || 0);
+    const oldAmount = Number(existing.amount) || 0;
+    const oldBalance = existing.balanceAmount != null ? Number(existing.balanceAmount) : oldAmount;
+    const hasPayments = oldAmount > 0 ? (oldBalance < oldAmount) : false;
+    const balanceAmount = hasPayments ? oldBalance : amount;
+    let result;
+    try {
+      const stmt = db.prepare(`
+        UPDATE lcs SET
+          lcNumber=?, issuingBank=?, supplierId=?, buyerId=?, amount=?, balanceAmount=?, currency=?,
+          issueDate=?, expiryDate=?, maturityDate=?, company=?, status=?, remarks=?, version = version + 1
+        WHERE id=? AND version=?
+      `);
+      result = stmt.run(
+        l.lcNumber ?? existing.lcNumber,
+        l.issuingBank ?? existing.issuingBank,
+        l.supplierId ?? existing.supplierId ?? null,
+        l.buyerId ?? existing.buyerId ?? null,
+        amount,
+        balanceAmount,
+        l.currency ?? existing.currency,
+        issueDate,
+        expiryDate,
+        maturityDate,
+        l.company ?? existing.company,
+        l.status ?? existing.status,
+        l.remarks != null ? l.remarks : existing.remarks,
+        id,
+        version
+      );
+    } catch (e) {
+      if (/no such column: balanceAmount|no such column: buyerId/i.test(e.message || '')) {
+        const fallback = db.prepare(`
+          UPDATE lcs SET
+            lcNumber=?, issuingBank=?, supplierId=?, amount=?, currency=?,
+            issueDate=?, expiryDate=?, maturityDate=?, company=?, status=?, remarks=?, version = version + 1
+          WHERE id=? AND version=?
+        `);
+        result = fallback.run(
+          l.lcNumber ?? existing.lcNumber,
+          l.issuingBank ?? existing.issuingBank,
+          l.supplierId ?? existing.supplierId ?? null,
+          amount,
+          l.currency ?? existing.currency,
+          issueDate,
+          expiryDate,
+          maturityDate,
+          l.company ?? existing.company,
+          l.status ?? existing.status,
+          l.remarks != null ? l.remarks : existing.remarks,
+          id,
+          version
+        );
+      } else {
+        return res.status(500).json({ success: false, error: e.message || 'Failed to update LC' });
+      }
+    }
+    if (!result || result.changes === 0) {
+      return res.status(409).json({ success: false, error: 'LC was modified by another user. Please reload and try again.' });
+    }
     // Payment against LC is made only from Shipments (payment ledger). Do not settle from tracker.
+    const versionRow = db.prepare('SELECT version FROM lcs WHERE id = ?').get(id);
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'LC_UPDATED', id, { lcNumber: l.lcNumber, status: l.status });
-    res.json({ success: true });
+    res.json({ success: true, version: versionRow ? versionRow.version : undefined });
     broadcast();
   });
 
@@ -130,19 +201,13 @@ function createRouter(broadcast) {
     const id = idCheck.value;
     const row = db.prepare('SELECT id, lcNumber FROM lcs WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ success: false, error: 'LC not found' });
-    const shipmentRows = db.prepare(
-      "SELECT id, payments_json FROM shipments WHERE payments_json LIKE ?"
-    ).all(`%${id}%`);
-    let shipmentsWithPayments = 0;
-    for (const sh of shipmentRows) {
-      let payments = [];
-      try {
-        payments = JSON.parse(sh.payments_json || '[]');
-      } catch (_) {}
-      if (!Array.isArray(payments)) continue;
-      const hasLinkedPayment = payments.some(p => p && String(p.linkedLcId) === String(id));
-      if (hasLinkedPayment) shipmentsWithPayments++;
-    }
+    const linkedCountRow = db.prepare(`
+      SELECT COUNT(DISTINCT s.id) AS c
+      FROM shipments s
+      JOIN json_each(COALESCE(s.payments_json, '[]')) p
+      WHERE json_extract(p.value, '$.linkedLcId') = ?
+    `).get(id);
+    const shipmentsWithPayments = Number(linkedCountRow?.c || 0);
     if (shipmentsWithPayments > 0) {
       return res.status(409).json({
         success: false,

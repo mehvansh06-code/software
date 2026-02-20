@@ -6,6 +6,7 @@
     "node": ">=18 <=22"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.82",
     "@tailwindcss/vite": "^4.1.18",
     "bcrypt": "^6.0.0",
     "better-sqlite3": "^11.10.0",
@@ -21,7 +22,7 @@
     "lucide-react": "^0.344.0",
     "multer": "^2.0.2",
     "number-to-words": "^1.2.4",
-    "pdf-img-convert": "^2.0.0",
+    "pdfjs-dist": "^4.10.38",
     "pdf-parse": "^2.4.5",
     "pdf-parse-legacy": "npm:pdf-parse@1.1.1",
     "pizzip": "^3.1.6",
@@ -29,7 +30,7 @@
     "tailwindcss": "^4.1.18",
     "tesseract.js": "^7.0.0",
     "ws": "^8.19.0",
-    "xlsx": "^0.18.5"
+    "xlsx-populate": "^1.21.0"
   },
   "devDependencies": {
     "@types/node": "^25.2.1",

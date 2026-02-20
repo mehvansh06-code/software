@@ -46,20 +46,34 @@ const FIELD_LABELS = {
   mode_shipment: 'Shipment Mode',
 };
 
+function parsePositiveAmount(value) {
+  const cleaned = String(value == null ? '' : value).replace(/,/g, '').trim();
+  if (!/^\d+(\.\d+)?$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 function validateBody(data) {
   if (!data || typeof data !== 'object') return 'Request body required.';
   for (const key of REQUIRED_FIELDS) {
     const val = data[key];
-    const str = typeof val === 'string' ? val.trim() : '';
+    const str = String(val == null ? '' : val).trim();
     if (!str) return `MISSING: '${FIELD_LABELS[key] || key}' is empty.`;
     if (str.includes('Select')) return `INVALID: Please select a valid '${FIELD_LABELS[key] || key}'.`;
   }
-  const qty = (data.quantity || '').trim();
+  const qty = String(data.quantity == null ? '' : data.quantity).trim();
   const parts = qty.split(/\s+/).filter(Boolean);
   if (parts.length < 2 || !parts[0]) return "MISSING: 'Quantity' value is required.";
   if (parts[1] && parts[1].includes('Select')) return "INVALID: Please select a valid Quantity Unit.";
-  const amt = parseFloat(data.raw_amount);
-  if (Number.isNaN(amt) || amt <= 0) return 'ERROR: Amount must be greater than 0.';
+  const amt = parsePositiveAmount(data.raw_amount);
+  if (amt == null) return 'ERROR: Amount must be a valid number greater than 0.';
+  const invoiceAmountRaw = String(data.invoice_amount == null ? '' : data.invoice_amount).trim();
+  if (invoiceAmountRaw) {
+    const invoiceAmount = parsePositiveAmount(invoiceAmountRaw);
+    if (invoiceAmount == null) return 'ERROR: Invoice amount must be a valid number greater than 0.';
+    if (amt > invoiceAmount) return 'ERROR: Remittance amount cannot be more than invoice amount.';
+  }
   return null;
 }
 

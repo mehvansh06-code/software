@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Buyer, Consignee, User, SupplierStatus } from '../types';
 import { Plus, Trash2, Globe, Landmark, CheckCircle, Users, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAutoSavedDraft } from '../hooks/useAutoSavedDraft';
 
 interface BuyerRequestProps {
   onSubmit: (buyer: Buyer) => Promise<void>;
@@ -33,6 +34,25 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
   });
 
   const [consignees, setConsignees] = useState<Consignee[]>([]);
+
+  const restoreDraft = useCallback((draft: any) => {
+    if (!draft || typeof draft !== 'object') return;
+    if (draft.formData && typeof draft.formData === 'object') {
+      setFormData((prev) => ({ ...prev, ...draft.formData }));
+    }
+    if (Array.isArray(draft.consignees)) {
+      setConsignees(draft.consignees);
+    }
+  }, []);
+
+  const { clearDraft } = useAutoSavedDraft({
+    key: 'buyer-request-new',
+    data: { formData, consignees },
+    onRestore: restoreDraft,
+    enabled: !isSubmitting && !isEdit,
+    debounceMs: 600,
+    version: '1',
+  });
 
   useEffect(() => {
     if (initialBuyer) {
@@ -86,6 +106,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
             consignees: formData.hasConsignee ? consignees : [],
             requestedBy: initialBuyer.requestedBy,
             createdAt: initialBuyer.createdAt,
+            version: initialBuyer.version,
           }
         : {
             ...formData,
@@ -96,12 +117,13 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
             createdAt: new Date().toISOString(),
           };
       await onSubmit(payload);
+      clearDraft();
       if (isEdit && onCancel) onCancel();
       else if (onCancel) onCancel();
       else navigate('/buyers');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to save buyer.');
+      alert(err?.message || 'Failed to save buyer.');
     } finally {
       setIsSubmitting(false);
     }
@@ -126,7 +148,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Legal Entity Name</label>
                 <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Country</label>
                   <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.country} onChange={e => setFormData({...formData, country: e.target.value})} />
@@ -136,7 +158,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
                   <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.contactPerson} onChange={e => setFormData({...formData, contactPerson: e.target.value})} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Contact Number</label>
                   <input type="tel" className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.contactNumber} onChange={e => setFormData({...formData, contactNumber: e.target.value})} placeholder="e.g. +44 20 1234 5678" />
@@ -167,7 +189,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Account Number</label>
                 <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} placeholder="e.g. 1234567890" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Bank Name</label>
                   <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} />
@@ -189,7 +211,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
               <Users className="text-amber-600" size={20} />
               <h2 className="text-lg font-bold text-slate-900">Sales Reference</h2>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Sales Person Name</label>
                 <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.salesPersonName} onChange={e => setFormData({...formData, salesPersonName: e.target.value})} />
@@ -254,11 +276,11 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
           </div>
         </div>
 
-        <div className={`fixed bottom-0 right-0 bg-white/80 backdrop-blur-lg border-t border-slate-100 p-6 flex justify-end gap-4 shadow-2xl ${isEdit ? 'left-0' : 'left-64'}`}>
-          <button type="button" onClick={isEdit && onCancel ? onCancel : () => navigate('/buyers')} className="px-8 py-3 rounded-2xl font-bold text-slate-500 hover:bg-slate-100 transition-all">
+        <div className={`fixed bottom-0 right-0 bg-white/80 backdrop-blur-lg border-t border-slate-100 p-4 sm:p-6 flex flex-col sm:flex-row justify-end gap-3 sm:gap-4 shadow-2xl ${isEdit ? 'left-0' : 'left-0 lg:left-64'}`}>
+          <button type="button" onClick={isEdit && onCancel ? onCancel : () => navigate('/buyers')} className="w-full sm:w-auto px-8 py-3 rounded-2xl font-bold text-slate-500 hover:bg-slate-100 transition-all">
             {isEdit ? 'Cancel' : 'Discard'}
           </button>
-          <button type="submit" disabled={isSubmitting} className="px-10 py-3 bg-amber-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-amber-100 hover:bg-amber-700 transition-all flex items-center gap-2 disabled:opacity-50">
+          <button type="submit" disabled={isSubmitting} className="w-full sm:w-auto px-10 py-3 bg-amber-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-amber-100 hover:bg-amber-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
             <CheckCircle size={20} />
             {isSubmitting ? 'Saving...' : isEdit ? 'Save Changes' : 'Submit for Audit'}
           </button>

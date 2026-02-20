@@ -52,22 +52,25 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editData) return;
-    
-    if (editData.id) {
-       // Update
-       await onUpdateItem(editData as LetterOfCredit);
-    } else {
-       // Create
-       const newLC: LetterOfCredit = {
-          ...editData,
-          id: Math.random().toString(36).substr(2, 9),
-          status: LCStatus.OPEN
-       } as LetterOfCredit;
-       await api.lcs.create(newLC);
-       window.location.reload(); // Simple reload to refresh list as prop
+    try {
+      if (editData.id) {
+         // Update
+         await onUpdateItem(editData as LetterOfCredit);
+      } else {
+         // Create
+         const newLC: LetterOfCredit = {
+            ...editData,
+            id: Math.random().toString(36).substr(2, 9),
+            status: LCStatus.OPEN
+         } as LetterOfCredit;
+         await api.lcs.create(newLC);
+         window.location.reload(); // Simple reload to refresh list as prop
+      }
+      setShowModal(false);
+      setEditData(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to save LC.');
     }
-    setShowModal(false);
-    setEditData(null);
   };
 
   const openCreateModal = () => {
@@ -93,13 +96,13 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">LC Management Hub</h1>
           <p className="text-slate-500 font-medium">Tracking Letters of Credit, Bank Guarantees & Payment Dues.</p>
           <p className="text-xs text-slate-400 mt-1">Payment against an LC is made only from Shipments (Payment Ledger). This tracker shows how much you have paid and the current status — an LC is honoured only when total payment lodged in shipments against that LC reaches the LC amount.</p>
         </div>
-        <button onClick={openCreateModal} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
+        <button onClick={openCreateModal} className="w-full sm:w-auto bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 min-h-[44px] md:min-h-0">
           <Plus size={18} /> Open New LC
         </button>
       </header>
@@ -141,10 +144,10 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
             onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-2xl border border-slate-200">
+        <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-2xl border border-slate-200 w-full sm:w-auto">
           <Filter size={14} className="text-slate-400" />
           <select 
-            className="bg-transparent text-xs font-bold text-slate-600 outline-none"
+            className="bg-transparent text-xs font-bold text-slate-600 outline-none w-full"
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value as any)}
           >
@@ -156,7 +159,75 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
 
       {/* Main Table */}
       <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="md:hidden p-3 space-y-3">
+          {filtered.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-500">
+              No Letters of Credit found.
+            </div>
+          ) : (
+            filtered.map((lc) => {
+              const isDueSoon = lc.status === LCStatus.OPEN && new Date(lc.maturityDate).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
+              const payments = lc.paymentSummary || [];
+              const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+              return (
+                <article key={lc.id} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-slate-900 truncate">{lc.lcNumber}</p>
+                      <p className="text-[11px] text-slate-500 truncate">{getSupplierName(lc.supplierId)}</p>
+                    </div>
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide bg-slate-100 text-slate-700">
+                      {lc.company}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400">LC Amount</p>
+                      <p className="text-[11px] font-black text-indigo-700">{formatCurrency(lc.amount, lc.currency)}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400">Balance</p>
+                      <p className="text-[11px] font-black text-slate-700">{formatCurrency(lc.balanceAmount ?? lc.amount ?? 0, lc.currency)}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400">Maturity</p>
+                      <p className={`text-[11px] font-bold ${isDueSoon ? 'text-red-600' : 'text-slate-700'}`}>{formatDate(lc.maturityDate)}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400">Status</p>
+                      <span className={`inline-flex text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${
+                        lc.status === LCStatus.OPEN ? 'bg-blue-100 text-blue-700' : lc.status === LCStatus.PAID ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {lc.status}
+                      </span>
+                    </div>
+                  </div>
+                  {payments.length > 0 && (
+                    <div className="rounded-xl bg-indigo-50/50 border border-indigo-100 p-2">
+                      <p className="text-[9px] font-black uppercase text-indigo-500">Payments</p>
+                      <p className="text-[11px] font-bold text-indigo-700">{payments.length} item(s), total {formatCurrency(totalPaid, lc.currency)}</p>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setManageLc(lc)} className="flex-1 px-3 py-2 rounded-xl border border-indigo-200 text-[12px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100">
+                      Manage
+                    </button>
+                    <button type="button" onClick={() => openEditModal(lc)} className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold text-slate-700 bg-white hover:bg-slate-50">
+                      Edit
+                    </button>
+                    {canDeleteLC && onDeleteItem && (
+                      <button type="button" onClick={(e) => handleDelete(e, lc)} className="p-2 rounded-xl border border-slate-200 text-slate-400 hover:bg-red-50 hover:text-red-600" title="Delete LC">
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50 text-left">
@@ -294,6 +365,7 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
                 <p className="text-xs text-slate-500 mb-3">Payments are lodged only from Shipments. Below are payments recorded against this LC from the shipment Payment Ledger. Status is updated when total paid reaches the LC amount.</p>
                 {(manageLc.paymentSummary && manageLc.paymentSummary.length > 0) ? (
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="overflow-x-auto scroll-touch">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
@@ -314,6 +386,7 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
                         ))}
                       </tbody>
                     </table>
+                    </div>
                     <div className="p-3 border-t border-slate-100 bg-slate-50 text-[10px] font-black text-slate-600">
                       Total paid: {formatCurrency(manageLc.paymentSummary.reduce((s, p) => s + (p.amount || 0), 0), manageLc.currency)}
                     </div>

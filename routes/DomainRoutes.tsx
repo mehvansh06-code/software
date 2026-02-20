@@ -1,24 +1,24 @@
-import React, { useEffect } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { User, Supplier, Shipment, Licence, LetterOfCredit, AppDomain, Buyer } from '../types';
 import Layout from '../components/Layout';
-import Dashboard from '../pages/Dashboard';
-import ExportDashboard from '../pages/ExportDashboard';
-import SupplierMaster from '../pages/SupplierMaster';
-import BuyerMaster from '../pages/BuyerMaster';
-import ShipmentMaster from '../pages/ShipmentMaster';
-import ShipmentDetails from '../pages/ShipmentDetails';
-import ShipmentDetailsPage from '../pages/ShipmentDetailsPage';
-import LicenceTracker from '../pages/LicenceTracker';
-import LCTracker from '../pages/LCTracker';
-import ExportLCTracker from '../pages/ExportLCTracker';
-import MaterialsMaster from '../pages/MaterialsMaster';
-import IndentGenerator from '../pages/IndentGenerator';
-import DomesticBuyerMaster from '../pages/DomesticBuyerMaster';
-import IndentProductsMaster from '../pages/IndentProductsMaster';
-import UserManagement from '../pages/UserManagement';
-import AuditLogs from '../pages/AuditLogs';
-import BankPaymentDocGenerator from '../pages/BankPaymentDocGenerator';
+
+const Dashboard = lazy(() => import('../pages/Dashboard'));
+const ExportDashboard = lazy(() => import('../pages/ExportDashboard'));
+const SupplierMaster = lazy(() => import('../pages/SupplierMaster'));
+const BuyerMaster = lazy(() => import('../pages/BuyerMaster'));
+const ShipmentMaster = lazy(() => import('../pages/ShipmentMaster'));
+const ShipmentDetails = lazy(() => import('../pages/ShipmentDetails'));
+const LicenceTracker = lazy(() => import('../pages/LicenceTracker'));
+const LCTracker = lazy(() => import('../pages/LCTracker'));
+const ExportLCTracker = lazy(() => import('../pages/ExportLCTracker'));
+const MaterialsMaster = lazy(() => import('../pages/MaterialsMaster'));
+const IndentGenerator = lazy(() => import('../pages/IndentGenerator'));
+const DomesticBuyerMaster = lazy(() => import('../pages/DomesticBuyerMaster'));
+const IndentProductsMaster = lazy(() => import('../pages/IndentProductsMaster'));
+const UserManagement = lazy(() => import('../pages/UserManagement'));
+const AuditLogs = lazy(() => import('../pages/AuditLogs'));
+const BankPaymentDocGenerator = lazy(() => import('../pages/BankPaymentDocGenerator'));
 
 export const exportPathMatch = (path: string) =>
   ['/', '/buyers', '/export-shipments', '/export-lcs', '/shipments', '/users', '/audit-logs'].includes(path) ||
@@ -57,6 +57,8 @@ export interface DomainRoutesProps {
 }
 
 const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const {
     domain,
     user,
@@ -91,8 +93,6 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
     handleUpdateLC,
     handleDeleteLC,
   } = props;
-  const location = useLocation();
-  const navigate = useNavigate();
 
   const importPathMatch = (p: string) =>
     ['/', '/suppliers', '/materials', '/shipments', '/lcs', '/bank-payment-docs', '/users', '/audit-logs'].includes(p) || /^\/shipments\/[^/]+$/.test(p);
@@ -114,7 +114,17 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
     onRefreshData,
   };
 
+  const pageFallback = (
+    <div className="min-h-[40vh] flex items-center justify-center">
+      <div className="flex items-center gap-3 text-slate-500">
+        <div className="w-5 h-5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+        <span className="text-sm font-medium">Loading page...</span>
+      </div>
+    </div>
+  );
+
   return (
+    <Suspense fallback={pageFallback}>
     <Routes>
       {domain === AppDomain.LICENCE ? (
         <>
@@ -162,6 +172,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
         </>
       )}
     </Routes>
+    </Suspense>
   );
 };
 

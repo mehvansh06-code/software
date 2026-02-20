@@ -75,13 +75,13 @@ const ExportLCTracker: React.FC<ExportLCTrackerProps> = ({ lcs, buyers, onUpdate
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Export LC Tracker</h1>
           <p className="text-slate-500 font-medium">LCs from which you have to get payment (buyer&apos;s LC in your favor).</p>
           <p className="text-xs text-slate-400 mt-1">Payment is received only when lodged in Shipments (Payment Ledger). This tracker shows how much has been received against each LC and the current status — an LC is settled only when total payment lodged in shipments against that LC and buyer reaches the LC amount.</p>
         </div>
-        <button onClick={openCreateModal} className="bg-amber-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-amber-700 transition-all shadow-lg shadow-amber-100">
+        <button onClick={openCreateModal} className="w-full sm:w-auto bg-amber-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-amber-700 transition-all shadow-lg shadow-amber-100 min-h-[44px] md:min-h-0">
           <Plus size={18} /> Add Export LC
         </button>
       </header>
@@ -121,10 +121,10 @@ const ExportLCTracker: React.FC<ExportLCTrackerProps> = ({ lcs, buyers, onUpdate
             onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-2xl border border-slate-200">
+        <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-2xl border border-slate-200 w-full sm:w-auto">
           <Filter size={14} className="text-slate-400" />
           <select
-            className="bg-transparent text-xs font-bold text-slate-600 outline-none"
+            className="bg-transparent text-xs font-bold text-slate-600 outline-none w-full"
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value as any)}
           >
@@ -135,7 +135,53 @@ const ExportLCTracker: React.FC<ExportLCTrackerProps> = ({ lcs, buyers, onUpdate
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="md:hidden p-3 space-y-3">
+          {filtered.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-500">
+              No export LCs found.
+            </div>
+          ) : (
+            filtered.map((lc) => {
+              const isDueSoon = lc.status === LCStatus.OPEN && new Date(lc.maturityDate).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
+              return (
+                <article key={lc.id} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-slate-900 truncate">{lc.lcNumber}</p>
+                      <p className="text-[11px] text-slate-500 truncate">{getBuyerName(lc.buyerId!)}</p>
+                    </div>
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide bg-amber-100 text-amber-800">
+                      {lc.company}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400">LC Amount</p>
+                      <p className="text-[11px] font-black text-amber-700">{formatCurrency(lc.amount, lc.currency)}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400">Maturity</p>
+                      <p className={`text-[11px] font-bold ${isDueSoon ? 'text-red-600' : 'text-slate-700'}`}>{formatDate(lc.maturityDate)}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-2 col-span-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400">Status</p>
+                      <span className={`inline-flex text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${
+                        lc.status === LCStatus.OPEN ? 'bg-amber-100 text-amber-700' : lc.status === LCStatus.PAID ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {lc.status}
+                      </span>
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => openEditModal(lc)} className="w-full px-3 py-2 rounded-xl border border-amber-200 text-[12px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100">
+                    Manage LC
+                  </button>
+                </article>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50 text-left">

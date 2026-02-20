@@ -28,6 +28,14 @@ function sanitizeFolderName(str) {
   return str.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'Unknown';
 }
 
+function getSafeUploadExtension(mimeType) {
+  const mt = String(mimeType || '').toLowerCase();
+  if (mt === 'application/pdf') return '.pdf';
+  if (mt === 'image/png') return '.png';
+  if (mt === 'image/webp') return '.webp';
+  return '.jpg';
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB (allow 10–12 MB scans)
@@ -218,7 +226,7 @@ router.post('/upload-and-scan', verifyToken, hasPermission('documents.upload'), 
     const scannedDir = path.join(DOCUMENTS_BASE, companyFolderName, safeRef, 'Scanned_Docs');
     await fse.ensureDir(scannedDir);
 
-    const ext = path.extname(originalName) || (mimeType === 'application/pdf' ? '.pdf' : '.jpg');
+    const ext = getSafeUploadExtension(mimeType);
     const baseName = path.basename(originalName, ext);
     const safeName = sanitizeFolderName(baseName) + '_' + Date.now() + ext;
     const filePath = path.join(scannedDir, safeName);

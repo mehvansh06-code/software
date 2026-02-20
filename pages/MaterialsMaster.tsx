@@ -4,7 +4,7 @@ import { Search, Plus, Edit3, Trash2, Upload, FileDown } from 'lucide-react';
 import { api } from '../api';
 import { usePermissions } from '../hooks/usePermissions';
 import { STANDARDISED_UNITS } from '../types';
-import * as XLSX from 'xlsx';
+import { downloadAoaAsXlsx, readFirstSheetAsObjects } from '../utils/excel';
 
 const MaterialsMaster: React.FC = () => {
   const { hasPermission } = usePermissions();
@@ -33,21 +33,27 @@ const MaterialsMaster: React.FC = () => {
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
-    if (editing) {
-      await api.materials.update(editing.id, { ...editing, ...form });
-      setMaterials(prev => prev.map(m => m.id === editing.id ? { ...m, ...form } : m));
-    } else {
-      const newMat: Material = {
-        id: Math.random().toString(36).substr(2, 9),
-        ...form,
-        unit: form.unit || 'KGS',
-      };
-      await api.materials.create(newMat);
-      setMaterials(prev => [...prev, newMat]);
+    try {
+      if (editing) {
+        const response = await api.materials.update(editing.id, { ...editing, ...form, version: editing.version });
+        const nextVersion = response && typeof response.version === 'number' ? response.version : editing.version;
+        setMaterials(prev => prev.map(m => m.id === editing.id ? { ...m, ...form, version: nextVersion } : m));
+      } else {
+        const newMat: Material = {
+          id: Math.random().toString(36).substr(2, 9),
+          ...form,
+          unit: form.unit || 'KGS',
+        };
+        const response = await api.materials.create(newMat);
+        const createdVersion = response && typeof response.version === 'number' ? response.version : 1;
+        setMaterials(prev => [...prev, { ...newMat, version: createdVersion }]);
+      }
+      setShowForm(false);
+      setEditing(null);
+      setForm({ name: '', description: '', hsnCode: '', unit: 'KGS', type: 'RAW_MATERIAL' });
+    } catch (err: any) {
+      alert(err?.message || 'Failed to save material.');
     }
-    setShowForm(false);
-    setEditing(null);
-    setForm({ name: '', description: '', hsnCode: '', unit: 'KGS', type: 'RAW_MATERIAL' });
   };
 
   const openEdit = (m: Material) => {
@@ -77,10 +83,7 @@ const MaterialsMaster: React.FC = () => {
     if (!file) return;
     setImporting(true);
     try {
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const json = await readFirstSheetAsObjects(file) as any[];
       const rows = json.map((r) => ({
         name: r.Name ?? r.name ?? r['Material Name'] ?? '',
         description: r.Description ?? r.description ?? '',
@@ -94,7 +97,10 @@ const MaterialsMaster: React.FC = () => {
       }
       const result = await api.materials.import(rows);
       const count = (result as any)?.imported ?? rows.length;
-      alert(`Imported ${count} material(s). Refreshing the list.`);
+      const skipped = Number((result as any)?.skipped || 0);
+      alert(skipped > 0
+        ? `Imported ${count} material(s), skipped ${skipped} duplicate row(s).`
+        : `Imported ${count} material(s).`);
       await load();
     } catch (err: any) {
       alert(err?.message || 'Import failed.');
@@ -104,12 +110,12 @@ const MaterialsMaster: React.FC = () => {
     }
   };
 
-  const downloadMaterialsTemplate = () => {
+  const downloadMaterialsTemplate = async () => {
     const headers = ['Name', 'Description', 'HSN Code', 'Unit', 'Type'];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers, ['Cotton Yarn 40s', 'Combed cotton', '5205', 'KGS', 'RAW_MATERIAL']]);
-    XLSX.utils.book_append_sheet(wb, ws, 'Materials');
-    XLSX.writeFile(wb, 'materials_import_template.xlsx');
+    await downloadAoaAsXlsx('materials_import_template.xlsx', 'Materials', [
+      headers,
+      ['Cotton Yarn 40s', 'Combed cotton', '5205', 'KGS', 'RAW_MATERIAL'],
+    ]);
   };
 
   return (
@@ -119,26 +125,26 @@ const MaterialsMaster: React.FC = () => {
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Materials Master</h1>
           <p className="text-slate-500 font-medium">Materials we import — select these when creating a shipment.</p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50 transition-all">
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="w-full sm:w-auto px-4 py-3 md:py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center justify-center gap-2 disabled:opacity-50 transition-all min-h-[44px] md:min-h-0">
             <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
-          <button type="button" onClick={downloadMaterialsTemplate} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Download template">
+          <button type="button" onClick={downloadMaterialsTemplate} className="w-full sm:w-auto px-4 py-3 md:py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center justify-center gap-2 min-h-[44px] md:min-h-0" title="Download template">
             <FileDown size={16} /> Download template
           </button>
           <button
             onClick={() => { setEditing(null); setForm({ name: '', description: '', hsnCode: '', unit: 'KGS', type: 'RAW_MATERIAL' }); setShowForm(true); }}
-            className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+            className="w-full sm:w-auto px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 min-h-[44px] md:min-h-0"
           >
             <Plus size={18} /> New Material
           </button>
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input
               type="text"
               placeholder="Search..."
-              className="pl-12 pr-6 py-3 bg-white border border-slate-200 rounded-2xl w-64 outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
+              className="pl-12 pr-6 py-3 bg-white border border-slate-200 rounded-2xl w-full sm:w-64 outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
             />
@@ -188,7 +194,38 @@ const MaterialsMaster: React.FC = () => {
       )}
 
       <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="md:hidden p-3 space-y-3">
+          {filtered.map((m) => (
+            <article key={m.id} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-slate-900 truncate">{m.name}</p>
+                  {m.description && <p className="text-[11px] text-slate-500 truncate">{m.description}</p>}
+                </div>
+                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide bg-slate-100 text-slate-700">
+                  {m.type || '—'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                  <p className="text-[9px] font-black uppercase text-slate-400">HSN</p>
+                  <p className="text-[11px] font-bold text-slate-700">{m.hsnCode || '—'}</p>
+                </div>
+                <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
+                  <p className="text-[9px] font-black uppercase text-slate-400">Unit</p>
+                  <p className="text-[11px] font-bold text-slate-700">{m.unit}</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => openEdit(m)} className="px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold text-slate-700 bg-white hover:bg-slate-50">Edit</button>
+                {canDelete && (
+                  <button onClick={() => handleDelete(m)} className="px-3 py-2 rounded-xl border border-red-200 text-[12px] font-bold text-red-600 bg-red-50 hover:bg-red-100">Delete</button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">

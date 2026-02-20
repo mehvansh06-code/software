@@ -2,10 +2,47 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
-const { PRESETS, PERMISSIONS } = require('../constants/permissions');
+const { PRESETS, PERMISSIONS, ALL_PERMISSION_VALUES } = require('../constants/permissions');
 const { log: auditLog } = require('../services/auditService');
+const { endSession } = require('../services/sessionService');
 
 const MANAGE_PERM = PERMISSIONS.USERS_MANAGE_PERMISSIONS;
+const VALID_ALLOWED_DOMAINS = new Set(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT']);
+const VALID_PERMISSIONS = new Set(ALL_PERMISSION_VALUES || []);
+const VALID_ROLES = new Set(['VIEWER', 'CHECKER', 'MANAGEMENT', 'EXECUTIONER']);
+const MAX_ARRAY_ITEMS = 256;
+
+function normalizeAllowedDomains(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const val = raw.trim().toUpperCase();
+    if (!val || !VALID_ALLOWED_DOMAINS.has(val)) continue;
+    if (!out.includes(val)) out.push(val);
+    if (out.length >= MAX_ARRAY_ITEMS) break;
+  }
+  return out;
+}
+
+function normalizePermissions(input, fallback = []) {
+  const source = Array.isArray(input) ? input : fallback;
+  const out = [];
+  for (const raw of source) {
+    if (typeof raw !== 'string') continue;
+    const val = raw.trim();
+    if (!val || !VALID_PERMISSIONS.has(val)) continue;
+    if (!out.includes(val)) out.push(val);
+    if (out.length >= MAX_ARRAY_ITEMS) break;
+  }
+  return out;
+}
+
+function normalizeRole(input, fallback = 'VIEWER') {
+  const role = typeof input === 'string' ? input.trim().toUpperCase() : '';
+  if (VALID_ROLES.has(role)) return role;
+  return fallback;
+}
 
 function createRouter() {
   const router = express.Router();
@@ -46,14 +83,18 @@ function createRouter() {
     const username = typeof b.username === 'string' ? b.username.trim() : '';
     const password = b.password;
     const name = typeof b.name === 'string' ? b.name.trim() : b.username || '';
-    const role = typeof b.role === 'string' ? b.role.toUpperCase() : 'VIEWER';
-    const allowedDomains = Array.isArray(b.allowedDomains) ? b.allowedDomains : [];
+    const rawRole = typeof b.role === 'string' ? b.role.trim().toUpperCase() : '';
+    if (rawRole && !VALID_ROLES.has(rawRole)) {
+      return res.status(400).json({ success: false, error: 'Invalid role' });
+    }
+    const role = normalizeRole(b.role, 'VIEWER');
+    const allowedDomains = normalizeAllowedDomains(b.allowedDomains);
     if (!username) return res.status(400).json({ success: false, error: 'Username required' });
     if (!password || String(password).length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
     const id = b.id || 'u_' + Math.random().toString(36).slice(2, 11);
     const idCheck = validateId(id, 'User ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
-    const permissions = Array.isArray(b.permissions) ? b.permissions : (PRESETS[role] || PRESETS.VIEWER || []);
+    const permissions = normalizePermissions(b.permissions, PRESETS[role] || PRESETS.VIEWER || []);
     let passwordHash;
     try {
       passwordHash = bcrypt.hashSync(String(password), 10);
@@ -98,9 +139,12 @@ function createRouter() {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const b = req.body || {};
     const name = typeof b.name === 'string' ? b.name.trim() : undefined;
-    const role = typeof b.role === 'string' ? b.role.toUpperCase() : undefined;
+    const role = b.role === undefined ? undefined : normalizeRole(b.role, '');
+    if (b.role !== undefined && !role) {
+      return res.status(400).json({ success: false, error: 'Invalid role' });
+    }
     const username = typeof b.username === 'string' ? b.username.trim() : undefined;
-    const allowedDomains = Array.isArray(b.allowedDomains) ? b.allowedDomains : undefined;
+    const allowedDomains = Array.isArray(b.allowedDomains) ? normalizeAllowedDomains(b.allowedDomains) : undefined;
     const existing = db.prepare('SELECT id, username, name, role FROM users WHERE id = ?').get(idCheck.value);
     if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
     const setClauses = [];
@@ -242,14 +286,36 @@ function createRouter() {
     }
   });
 
+  /** Unlock a user's active session (admin recovery). Requires users.manage_permissions */
+  router.post('/:id/unlock-session', hasPermission('users.manage_permissions'), (req, res) => {
+    const idCheck = validateId(req.params?.id, 'User ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const targetId = idCheck.value;
+    const existing = db.prepare('SELECT id, username, name FROM users WHERE id = ?').get(targetId);
+    if (!existing && targetId !== 'admin') return res.status(404).json({ success: false, error: 'User not found' });
+    try {
+      endSession(db, targetId);
+      const actorId = req.user && req.user.id;
+      auditLog(db, actorId, 'SESSION_UNLOCKED_BY_ADMIN', targetId, {
+        username: existing ? existing.username : 'admin',
+        name: existing ? existing.name : 'Admin',
+      });
+      return res.json({ success: true });
+    } catch (e) {
+      console.error('POST /users/:id/unlock-session:', e);
+      return res.status(500).json({ success: false, error: e.message || 'Failed to unlock session' });
+    }
+  });
+
   /** Update allowed domains (screens) for a user. Requires users.manage_permissions */
   router.patch('/:id/allowed-domains', hasPermission('users.manage_permissions'), (req, res) => {
     const idCheck = validateId(req.params?.id, 'User ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
-    const allowedDomains = req.body?.allowedDomains;
-    if (!Array.isArray(allowedDomains)) {
+    const allowedDomainsRaw = req.body?.allowedDomains;
+    if (!Array.isArray(allowedDomainsRaw)) {
       return res.status(400).json({ success: false, error: 'Body must include allowedDomains array' });
     }
+    const allowedDomains = normalizeAllowedDomains(allowedDomainsRaw);
     const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(idCheck.value);
     if (!existing) return res.status(404).json({ success: false, error: 'User not found' });
     try {
@@ -282,10 +348,11 @@ function createRouter() {
     const idCheck = validateId(req.params?.id, 'User ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const targetId = idCheck.value;
-    const permissions = req.body?.permissions;
-    if (!Array.isArray(permissions)) {
+    const permissionsRaw = req.body?.permissions;
+    if (!Array.isArray(permissionsRaw)) {
       return res.status(400).json({ success: false, error: 'Body must include permissions array' });
     }
+    const permissions = normalizePermissions(permissionsRaw, []);
     const selfId = req.user && req.user.id;
     if (selfId && targetId === selfId && !permissions.includes(MANAGE_PERM)) {
       return res.status(400).json({

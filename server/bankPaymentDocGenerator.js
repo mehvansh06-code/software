@@ -11,13 +11,43 @@ const Docxtemplater = require('docxtemplater');
 const n2w = require('number-to-words');
 const { BANK_PAYMENT_TEMPLATES, BANK_PAYMENT_TEMPLATES_DIR } = require('./config');
 
-const CURRENCY_NAMES = {
-  USD: 'Dollars',
-  EUR: 'Euro',
-  GBP: 'Pounds',
-  JPY: 'Japanese Yen',
-  CNY: 'Chinese Yuan',
-};
+const ZERO_DECIMAL_CURRENCIES = new Set(['JPY', 'CNY']);
+
+function toTitleWords(input) {
+  return String(input || '')
+    .replace(/-/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/** Trim template tag names like "{ beneficiary_name }" so they resolve correctly. */
+function normalizeTemplateTagName(tag) {
+  return String(tag || '')
+    .replace(/\u00A0/g, ' ')
+    .trim()
+    .replace(/\s*_\s*/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_');
+}
+
+function tagParser(tag) {
+  const key = normalizeTemplateTagName(tag);
+  return {
+    get(scope) {
+      if (!scope || key === '') return '';
+      if (scope[key] != null) return scope[key];
+      const lower = key.toLowerCase();
+      if (scope[lower] != null) return scope[lower];
+      const upper = key.toUpperCase();
+      if (scope[upper] != null) return scope[upper];
+      return '';
+    },
+  };
+}
 
 /** Map company_choice from client (display name or GFPL/GTEX) to template key. */
 function resolveCompanyKey(companyChoice) {
@@ -30,22 +60,32 @@ function resolveCompanyKey(companyChoice) {
 
 /** Build amount in words. */
 function amountInWords(amtVal, currCode) {
-  const currName = CURRENCY_NAMES[currCode] || currCode;
+  const code = String(currCode || 'USD').trim().toUpperCase() || 'USD';
   try {
-    if (['JPY', 'CNY'].includes(currCode)) {
-      const words = n2w.toWords(amtVal, { allowNegative: false });
-      return words.charAt(0).toUpperCase() + words.slice(1) + ' ' + currName + ' Only';
+    const raw = Number(amtVal);
+    if (!Number.isFinite(raw) || raw < 0) return `${code} ${amtVal}`;
+
+    let integerPart = Math.floor(raw);
+    let decimalPart = Math.round((raw - integerPart) * 100);
+
+    // Guard floating-point edge cases, e.g. 10.999999 -> 11.00
+    if (decimalPart >= 100) {
+      integerPart += 1;
+      decimalPart = 0;
     }
-    const integerPart = Math.floor(amtVal);
-    const decimalPart = Math.round((amtVal - integerPart) * 100);
-    let words = n2w.toWords(integerPart, { allowNegative: false });
-    words = words.charAt(0).toUpperCase() + words.slice(1);
-    if (decimalPart > 0) {
-      words += ' And ' + n2w.toWords(decimalPart).charAt(0).toUpperCase() + n2w.toWords(decimalPart).slice(1) + ' Cents';
+
+    const integerWords = toTitleWords(n2w.toWords(integerPart));
+
+    // Requested format: "USD Six Hundred Seventy Eight Only"
+    if (ZERO_DECIMAL_CURRENCIES.has(code) || decimalPart === 0) {
+      return `${code} ${integerWords} Only`;
     }
-    return words + ' ' + currName + ' Only';
+
+    // Requested format for cents: "USD Five Hundred And Cents Ninety Eight Only"
+    const centsWords = toTitleWords(n2w.toWords(decimalPart));
+    return `${code} ${integerWords} And Cents ${centsWords} Only`;
   } catch {
-    return `${amtVal} ${currCode}`;
+    return `${code} ${amtVal}`;
   }
 }
 
@@ -69,7 +109,7 @@ async function generateBankPaymentDocBuffer(data) {
   const rawAmount = data.raw_amount != null ? String(data.raw_amount).trim() : '';
   let amtVal = 0;
   if (rawAmount) {
-    const n = parseFloat(rawAmount);
+    const n = Number(rawAmount.replace(/,/g, ''));
     if (Number.isNaN(n) || n <= 0) throw new Error('Remittance amount must be a number greater than 0.');
     amtVal = n;
   }
@@ -148,6 +188,8 @@ async function generateBankPaymentDocBuffer(data) {
       unit: u,
       quantity_and_unit: qtyAndUnit,
       amount: amt,
+      invoice_amount: invoiceAmount,
+      invoice_value: invoiceAmount,
       invoice_no: invNo,
       invoice_date: invDate,
       term: termVal,
@@ -185,6 +227,12 @@ async function generateBankPaymentDocBuffer(data) {
     raw_amount: rawAmount,
     amount_in_words: amtWords,
     invoice_amount: invoiceAmount,
+    invoice_value: invoiceAmount,
+    total_invoice_value: invoiceAmount,
+    invoice_total: invoiceAmount,
+    INVOICE_AMOUNT: invoiceAmount,
+    INVOICE_VALUE: invoiceAmount,
+    TOTAL_INVOICE_VALUE: invoiceAmount,
     quantity: quantityVal,
     beneficiary_name: beneficiaryName,
     beneficiary_address: beneficiaryAddress,
@@ -247,7 +295,7 @@ async function generateBankPaymentDocBuffer(data) {
     'amount', 'amount_in_words', 'bank_name', 'bank_swift', 'beneficiary_account', 'beneficiary_address',
     'beneficiary_country', 'beneficiary_name', 'iban', 'intermediary_bank_name', 'intermediary_bank_swift',
     'intermediary_bank_address', 'intermediary_bank_country', 'currency', 'date', 'document_list', 'goods_desc',
-    'hsn_code', 'invoice_amount', 'invoice_date', 'invoice_no', 'mode_shipment', 'port_discharge', 'port_loading',
+    'hsn_code', 'invoice_amount', 'invoice_value', 'total_invoice_value', 'invoice_date', 'invoice_no', 'mode_shipment', 'port_discharge', 'port_loading',
     'purpose', 'quantity', 'shipment_date', 'term',
   ];
   for (const tag of TEMPLATE_TAGS) {
@@ -347,8 +395,8 @@ async function generateBankPaymentDocBuffer(data) {
   /** When true, skip merge/collapse so output opens in Word (template must have each placeholder in one run). */
   const skipMerge = process.env.BANK_PAYMENT_SKIP_MERGE === '1' || data.skip_merge_placeholders === true;
 
-  /** Load template; fix {vide and double-brace; merge split placeholders only if !skipMerge. */
-  function loadTemplateZip() {
+  /** Load template; fix {vide and double-brace; merge split placeholders only when merge is enabled. */
+  function loadTemplateZip(skipPlaceholderMerge = skipMerge) {
     const content = fs.readFileSync(templatePath, 'binary');
     const z = new PizZip(content);
     const documentEntry = z.files['word/document.xml'];
@@ -357,7 +405,7 @@ async function generateBankPaymentDocBuffer(data) {
       xml = xml.replace(/\{vide\s+certificate/gi, '\u200Bvide certificate');
       xml = xml.replace(/\{\{/g, '{').replace(/\}\}/g, '}');
 
-      if (!skipMerge) {
+      if (!skipPlaceholderMerge) {
         for (let i = 0; i < 50; i++) {
           const prev = xml;
           xml = xml.replace(/<w:t[^>]*>\{<\/w:t>\s*<\/w:r>\s*(<w:r[^>]*>)([\s\S]*?)<w:t[^>]*>\{<\/w:t>/g, '<w:t>{</w:t></w:r>$1$2<w:t></w:t>');
@@ -374,29 +422,38 @@ async function generateBankPaymentDocBuffer(data) {
     return z;
   }
 
-  const zip = loadTemplateZip();
-  const doc = new Docxtemplater(zip, {
-    delimiters: DELIMITERS,
-    paragraphLoop: true,
-    linebreaks: true,
-    errorLogging: false,
-    nullGetter,
-  });
-
-  function renderToBuffer(zipInstance, ctx) {
-    const d = new Docxtemplater(zipInstance, {
+  function createDoc(zipInstance) {
+    return new Docxtemplater(zipInstance, {
       delimiters: DELIMITERS,
       paragraphLoop: true,
       linebreaks: true,
       errorLogging: false,
+      parser: tagParser,
       nullGetter,
     });
+  }
+
+  function renderToBuffer(zipInstance, ctx) {
+    const d = createDoc(zipInstance);
     d.render(ctx);
     return d.getZip().generate({
       type: 'nodebuffer',
       compression: 'DEFLATE',
       compressionOptions: { level: 6 },
     });
+  }
+
+  let zip = loadTemplateZip(skipMerge);
+  let doc;
+  let effectiveSkipMerge = skipMerge;
+  try {
+    doc = createDoc(zip);
+  } catch (compileErr) {
+    if (skipMerge) throw compileErr;
+    // Fallback: if merge introduces malformed tags for this template, retry without merge.
+    effectiveSkipMerge = true;
+    zip = loadTemplateZip(true);
+    doc = createDoc(zip);
   }
 
   let zipOut;
@@ -443,7 +500,7 @@ async function generateBankPaymentDocBuffer(data) {
         ...context,
         items: [{ ...merged, amount: singleItemAmount }],
       };
-      const freshZip = loadTemplateZip();
+      const freshZip = loadTemplateZip(effectiveSkipMerge);
       return renderToBuffer(freshZip, fallbackContext);
     }
     throw renderErr;

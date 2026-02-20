@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 const { PRESETS } = require('../constants/permissions');
+const { validateAndTouchSession, SESSION_IDLE_TIMEOUT_MINUTES } = require('../services/sessionService');
+const { log: auditLog } = require('../services/auditService');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET || typeof JWT_SECRET !== 'string' || JWT_SECRET.trim() === '') {
@@ -25,6 +27,22 @@ function verifyToken(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     const userId = decoded.userId;
     const role = decoded.role;
+    const sessionId = decoded.sid;
+    if (!sessionId) {
+      return res.status(401).json({ success: false, error: 'Session missing. Please log in again.' });
+    }
+
+    const sessionCheck = validateAndTouchSession(db, userId, sessionId);
+    if (!sessionCheck.ok) {
+      if (sessionCheck.code === 'IDLE_TIMEOUT') {
+        auditLog(db, userId, 'SESSION_IDLE_TIMEOUT', userId, { minutes: SESSION_IDLE_TIMEOUT_MINUTES });
+        return res.status(401).json({
+          success: false,
+          error: `Session expired after ${SESSION_IDLE_TIMEOUT_MINUTES} minutes of inactivity. Please log in again.`
+        });
+      }
+      return res.status(401).json({ success: false, error: 'Session is no longer active. Please log in again.' });
+    }
 
     try {
       const row = db.prepare('SELECT id, role, permissions, allowedDomains FROM users WHERE id = ?').get(userId);
@@ -38,6 +56,7 @@ function verifyToken(req, res, next) {
           allowedDomains = JSON.parse(row.allowedDomains || '[]');
         } catch (_) {}
         req.user = { id: row.id, role: row.role, permissions: Array.isArray(permissions) ? permissions : [], allowedDomains };
+        req.authSessionId = sessionId;
         return next();
       }
     } catch (_) {}
@@ -45,6 +64,7 @@ function verifyToken(req, res, next) {
     // User not in DB (e.g. env admin or legacy): use preset by role
     const preset = PRESETS[role] || PRESETS.VIEWER || [];
     req.user = { id: userId, role: role || 'VIEWER', permissions: Array.isArray(preset) ? preset : [] };
+    req.authSessionId = sessionId;
     next();
   } catch (err) {
     return res.status(401).json({ success: false, error: 'Invalid or expired token' });

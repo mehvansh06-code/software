@@ -4,7 +4,7 @@ import { ShieldCheck } from 'lucide-react';
 import { api } from '../api';
 
 interface LoginProps {
-  onLogin: (user: User) => void;
+  onLogin: (user: User) => Promise<void> | void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
@@ -21,6 +21,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       const result = await api.login(username, password);
       if (result.success && result.token && result.user) {
         localStorage.setItem('token', result.token);
+        const persistedToken = localStorage.getItem('token');
+        if (persistedToken !== result.token) {
+          setError('Login token could not be saved. Please retry.');
+          return;
+        }
         const user: User = {
           id: result.user.id,
           username: result.user.username,
@@ -29,7 +34,16 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           permissions: Array.isArray(result.user.permissions) ? result.user.permissions : undefined,
           allowedDomains: Array.isArray(result.user.allowedDomains) ? result.user.allowedDomains as import('../types').AppDomain[] : undefined,
         };
-        onLogin(user);
+        try {
+          await onLogin(user);
+        } catch (loginStateErr: any) {
+          // If frontend state hydration fails after server login succeeded, clear both local token and server session.
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          localStorage.removeItem('domain');
+          await api.auth.logout().catch(() => {});
+          throw loginStateErr;
+        }
       } else {
         setError(result.error || 'Login failed');
       }

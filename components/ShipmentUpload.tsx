@@ -34,6 +34,46 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isEx
     return [{ value: '', label: 'Select document type' }, ...list, { value: 'Other', label: 'Other' }];
   }, [isExport]);
 
+  const inferDocumentTypeFromFileName = (name: string): string | null => {
+    const checklist = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
+    const base = (name || '').replace(/\.[^/.]+$/, '').toUpperCase().trim();
+    const normalized = base.replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!base || !normalized) return null;
+
+    // Sort by longest prefix first so LODGE_ADV wins over LODGE.
+    const sorted = [...checklist].sort((a, b) => (b.prefix?.length || 0) - (a.prefix?.length || 0));
+    for (const doc of sorted) {
+      const id = String(doc.id || '').toUpperCase();
+      const prefix = String(doc.prefix || `${id}_`).toUpperCase();
+      if (!id) continue;
+      if (base.startsWith(prefix)) return doc.id;
+      if (base === id) return doc.id;
+      if (base.startsWith(`${id}_`)) return doc.id;
+      if (base.includes(`_${id}_`)) return doc.id;
+    }
+
+    const availableIds = new Set(checklist.map((d) => String(d.id || '').toUpperCase()));
+    const hasId = (id: string) => availableIds.has(id);
+    const hasToken = (token: string) => new RegExp(`(^|_)${token}(_|$)`).test(normalized);
+    const hasAnyToken = (tokens: string[]) => tokens.some((t) => hasToken(t));
+
+    if (hasId('LODGE_ADV') && hasAnyToken(['LODGE_ADV', 'LODGEMENT_ADV', 'LODGEMENT_ADVICE', 'LODGEMENT_ADVISE'])) return 'LODGE_ADV';
+    if (hasId('LODGE') && hasAnyToken(['LODGE', 'LODGEMENT'])) return 'LODGE';
+    if (hasId('COO') && (hasToken('COO') || normalized.includes('CERTIFICATE_OF_ORIGIN') || normalized.includes('CERT_OF_ORIGIN') || normalized.includes('ORIGIN_CERTIFICATE'))) return 'COO';
+    if (hasId('INS') && (hasToken('INS') || normalized.includes('INSURANCE') || normalized.includes('POLICY'))) return 'INS';
+    if (hasId('EWAY') && (hasToken('EWAY') || normalized.includes('E_WAY') || normalized.includes('EWAY_BILL') || normalized.includes('EWAYBILL'))) return 'EWAY';
+    if (hasId('GP') && (hasToken('GP') || normalized.includes('GATE_PASS') || normalized.includes('GATEPASS'))) return 'GP';
+    if (hasId('BOE') && (hasToken('BOE') || hasToken('BEO') || normalized.includes('BILL_OF_ENTRY') || normalized.includes('OUT_OF_CHARGE'))) return 'BOE';
+    if (hasId('SB') && (hasToken('SB') || normalized.includes('SHIPPING_BILL'))) return 'SB';
+    if (hasId('BL') && (hasToken('BL') || normalized.includes('BILL_OF_LADING') || hasToken('BOL'))) return 'BL';
+    if (hasId('PL') && (hasToken('PL') || normalized.includes('PACKING_LIST'))) return 'PL';
+    if (hasId('CI') && (hasToken('CI') || normalized.includes('COMMERCIAL_INVOICE'))) return 'CI';
+    if (hasId('SI') && (hasToken('SI') || normalized.includes('SALES_INDENT'))) return 'SI';
+    if (hasId('EBRC') && (hasToken('EBRC') || normalized.includes('E_BRC') || normalized.includes('BANK_REALISATION') || normalized.includes('BANK_REALIZATION'))) return 'EBRC';
+
+    return null;
+  };
+
   const showToast = (message: string) => {
     setToast(message);
     const t = setTimeout(() => setToast(null), 3000);
@@ -175,6 +215,12 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isEx
             ref={inputRef}
             type="file"
             disabled={uploading}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const inferred = inferDocumentTypeFromFileName(file.name);
+              if (inferred) setDocumentType(inferred);
+            }}
             className="block w-full text-sm text-gray-500 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100 disabled:opacity-50"
           />
         </div>

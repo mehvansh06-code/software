@@ -24,8 +24,15 @@ function createRouter(broadcast) {
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
     const idCheck = validateId(s.id, 'Supplier ID');
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
-    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    insert.run(idCheck.value, s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress, s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0, s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediaryAccountNumber || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null);
+    const insert = db.prepare(`INSERT INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    try {
+      insert.run(idCheck.value, s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress, s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0, s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediaryAccountNumber || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null, 1);
+    } catch (e) {
+      if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message || '')) {
+        return res.status(409).json({ success: false, error: 'Supplier already exists. Reload and edit the latest record.' });
+      }
+      return res.status(500).json({ success: false, error: e.message || 'Failed to create supplier' });
+    }
     if (s.products && Array.isArray(s.products)) {
       db.prepare('DELETE FROM products WHERE supplierId = ?').run(idCheck.value);
       const prodStmt = db.prepare(`INSERT INTO products VALUES (?,?,?,?,?,?,?)`);
@@ -45,47 +52,57 @@ function createRouter(broadcast) {
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Send { rows: [...] } with supplier objects' });
     const now = new Date().toISOString();
-    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insert = db.prepare(`INSERT INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     let count = 0;
+    let skipped = 0;
     try {
       for (const r of rows) {
         const id = (r.id && /^[a-zA-Z0-9_-]+$/.test(r.id)) ? r.id : 's_' + Math.random().toString(36).slice(2, 11);
-        insert.run(
-          id,
-          r.name || '',
-          r.address || '',
-          r.country || '',
-          r.bankName || r.bank_name || '',
-          r.accountHolderName || r.accountHolder || r.account_holder_name || '',
-          r.accountNumber || r.account_number || null,
-          r.swiftCode || r.swift || r.swift_code || '',
-          r.bankAddress || r.bank_address || '',
-          r.contactPerson || r.contact_person || '',
-          r.contactDetails || r.contact_details || (r.contactNumber || r.contactEmail ? [r.contactNumber, r.contactEmail].filter(Boolean).join(' / ') : '') || null,
-          r.status || 'APPROVED',
-          r.requestedBy || 'Import',
-          r.createdAt || now,
-          r.hasIntermediaryBank ? 1 : 0,
-          r.intermediaryBankName || null,
-          r.intermediaryAccountHolderName || null,
-          r.intermediaryAccountNumber || r.intermediary_account_number || null,
-          r.intermediarySwiftCode || null,
-          r.intermediaryBankAddress || null
-        );
-        if (r.products && Array.isArray(r.products) && r.products.length > 0) {
-          db.prepare('DELETE FROM products WHERE supplierId = ?').run(id);
-          const prodStmt = db.prepare(`INSERT INTO products VALUES (?,?,?,?,?,?,?)`);
-          for (const p of r.products) {
-            const pid = (p && p.id && /^[a-zA-Z0-9_-]+$/.test(p.id)) ? p.id : 'p_' + Math.random().toString(36).slice(2, 11);
-            prodStmt.run(pid, id, p.name || '', p.description || null, p.hsnCode || null, p.unit || 'KGS', p.type || null);
+        try {
+          insert.run(
+            id,
+            r.name || '',
+            r.address || '',
+            r.country || '',
+            r.bankName || r.bank_name || '',
+            r.accountHolderName || r.accountHolder || r.account_holder_name || '',
+            r.accountNumber || r.account_number || null,
+            r.swiftCode || r.swift || r.swift_code || '',
+            r.bankAddress || r.bank_address || '',
+            r.contactPerson || r.contact_person || '',
+            r.contactDetails || r.contact_details || (r.contactNumber || r.contactEmail ? [r.contactNumber, r.contactEmail].filter(Boolean).join(' / ') : '') || null,
+            r.status || 'APPROVED',
+            r.requestedBy || 'Import',
+            r.createdAt || now,
+            r.hasIntermediaryBank ? 1 : 0,
+            r.intermediaryBankName || null,
+            r.intermediaryAccountHolderName || null,
+            r.intermediaryAccountNumber || r.intermediary_account_number || null,
+            r.intermediarySwiftCode || null,
+            r.intermediaryBankAddress || null,
+            1
+          );
+          if (r.products && Array.isArray(r.products) && r.products.length > 0) {
+            db.prepare('DELETE FROM products WHERE supplierId = ?').run(id);
+            const prodStmt = db.prepare(`INSERT INTO products VALUES (?,?,?,?,?,?,?)`);
+            for (const p of r.products) {
+              const pid = (p && p.id && /^[a-zA-Z0-9_-]+$/.test(p.id)) ? p.id : 'p_' + Math.random().toString(36).slice(2, 11);
+              prodStmt.run(pid, id, p.name || '', p.description || null, p.hsnCode || null, p.unit || 'KGS', p.type || null);
+            }
           }
+          count++;
+        } catch (e) {
+          if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message || '')) {
+            skipped++;
+            continue;
+          }
+          throw e;
         }
-        count++;
       }
       const userId = req.user && req.user.id;
-      auditLog(db, userId, 'SUPPLIERS_IMPORTED', null, { count, message: `Imported ${count} supplier(s)` });
+      auditLog(db, userId, 'SUPPLIERS_IMPORTED', null, { imported: count, skipped, message: `Imported ${count} supplier(s), skipped ${skipped}` });
       broadcast();
-      res.json({ success: true, imported: count });
+      res.json({ success: true, imported: count, skipped });
     } catch (e) {
       console.error('suppliers import:', e);
       res.status(500).json({ success: false, error: e.message });
@@ -97,19 +114,54 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const s = req.body;
     if (!s || typeof s !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
-    const insert = db.prepare(`INSERT OR REPLACE INTO suppliers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, status, requestedBy, createdAt, hasIntermediaryBank, intermediaryBankName, intermediaryAccountHolderName, intermediaryAccountNumber, intermediarySwiftCode, intermediaryBankAddress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    insert.run(idCheck.value, s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress, s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0, s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediaryAccountNumber || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null);
-    if (s.products && Array.isArray(s.products)) {
-      db.prepare('DELETE FROM products WHERE supplierId = ?').run(idCheck.value);
-      const prodStmt = db.prepare(`INSERT INTO products VALUES (?,?,?,?,?,?,?)`);
-      for (const p of s.products) {
-        const pid = validateId(p && p.id, 'Product ID');
-        if (pid.valid) prodStmt.run(pid.value, idCheck.value, p.name, p.description, p.hsnCode, p.unit, p.type);
-      }
+    const existing = db.prepare('SELECT id, version FROM suppliers WHERE id = ?').get(idCheck.value);
+    if (!existing) return res.status(404).json({ success: false, error: 'Supplier not found' });
+    const version = Number(s.version);
+    if (!Number.isInteger(version) || version < 1) {
+      return res.status(400).json({ success: false, error: 'Version is required for update' });
     }
+
+    const update = db.prepare(`
+      UPDATE suppliers SET
+        name=?, address=?, country=?, bankName=?, accountHolderName=?, accountNumber=?, swiftCode=?, bankAddress=?,
+        contactPerson=?, contactDetails=?, status=?, requestedBy=?, createdAt=?, hasIntermediaryBank=?,
+        intermediaryBankName=?, intermediaryAccountHolderName=?, intermediaryAccountNumber=?, intermediarySwiftCode=?, intermediaryBankAddress=?,
+        version = version + 1
+      WHERE id=? AND version=?
+    `);
+
+    try {
+      const runTx = db.transaction(() => {
+        const result = update.run(
+          s.name, s.address, s.country, s.bankName, s.accountHolderName, s.accountNumber || null, s.swiftCode, s.bankAddress,
+          s.contactPerson, s.contactDetails, s.status, s.requestedBy, s.createdAt, s.hasIntermediaryBank ? 1 : 0,
+          s.intermediaryBankName || null, s.intermediaryAccountHolderName || null, s.intermediaryAccountNumber || null, s.intermediarySwiftCode || null, s.intermediaryBankAddress || null,
+          idCheck.value, version
+        );
+        if (result.changes === 0) {
+          const err = new Error('Supplier was modified by another user. Please reload and try again.');
+          err.statusCode = 409;
+          throw err;
+        }
+        if (s.products && Array.isArray(s.products)) {
+          db.prepare('DELETE FROM products WHERE supplierId = ?').run(idCheck.value);
+          const prodStmt = db.prepare(`INSERT INTO products VALUES (?,?,?,?,?,?,?)`);
+          for (const p of s.products) {
+            const pid = validateId(p && p.id, 'Product ID');
+            if (pid.valid) prodStmt.run(pid.value, idCheck.value, p.name, p.description, p.hsnCode, p.unit, p.type);
+          }
+        }
+      });
+      runTx();
+    } catch (e) {
+      if (e.statusCode === 409) return res.status(409).json({ success: false, error: e.message });
+      return res.status(500).json({ success: false, error: e.message || 'Failed to update supplier' });
+    }
+
+    const versionRow = db.prepare('SELECT version FROM suppliers WHERE id = ?').get(idCheck.value);
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'SUPPLIER_UPDATED', idCheck.value, { name: s.name });
-    res.json({ success: true });
+    res.json({ success: true, version: versionRow ? versionRow.version : undefined });
     broadcast();
   });
 

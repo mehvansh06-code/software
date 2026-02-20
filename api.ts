@@ -8,16 +8,27 @@
 // In the browser, use the same host you opened the app from — so when WiFi/IP changes, no .env update needed.
 // (VITE_API_HOST in .env was causing "offline" after IP change; now we only use it outside the browser.)
 const _envHost = typeof (import.meta as any).env?.VITE_API_HOST === 'string' ? (import.meta as any).env.VITE_API_HOST.trim() : '';
-const isFullUrl = _envHost && /^https?:\/\//i.test(_envHost);
-const API_HOST =
-  typeof window !== 'undefined'
-    ? (window.location.hostname || 'localhost')
-    : (_envHost || 'localhost');
-const API_BASE = 'https://api.eiofficial.com/api';
+const DEFAULT_API_ORIGIN = 'https://api.eiofficial.com';
 
-/** WebSocket URL: same host as API (wss when VITE_API_HOST is https, else ws://host:3001). */
+function normalizeOrigin(input: string): string {
+  if (!input || typeof input !== 'string') return '';
+  try {
+    const u = new URL(input.trim());
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return '';
+  }
+}
+
+const envOrigin = normalizeOrigin(_envHost);
+const API_ORIGIN = envOrigin || DEFAULT_API_ORIGIN;
+const API_BASE = `${API_ORIGIN}/api`;
+
+/** WebSocket URL: same host as API origin. */
 export function getWebSocketUrl(): string {
-  return 'wss://api.eiofficial.com';
+  const wsProtocol = API_ORIGIN.startsWith('https://') ? 'wss://' : 'ws://';
+  const host = API_ORIGIN.replace(/^https?:\/\//i, '');
+  return `${wsProtocol}${host}`;
 }
 
 const FETCH_TIMEOUT = 8000;
@@ -100,8 +111,8 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
     });
 
     clearTimeout(timeoutId);
-    // Any HTTP response means the server is reachable (online)
-    serverAvailable = true;
+    // Reachable and healthy-ish responses keep SQL mode green.
+    serverAvailable = response.ok || response.status === 401 || response.status === 403 || response.status === 409;
 
     if (response.status === 401) {
       if (typeof window !== 'undefined') localStorage.removeItem('token');
@@ -132,7 +143,10 @@ async function fetchApi(endpoint: string, options: FetchApiOptions = {}) {
       /failed to fetch|network error|load failed|connection refused/i.test(error?.message || '');
     if (isNetworkFailure) {
       serverAvailable = false;
-      return handleSimulatedRequest(safeEndpoint, options);
+      if (forceSimulated) {
+        return handleSimulatedRequest(safeEndpoint, options);
+      }
+      throw new Error('Server unreachable. Please retry in a moment.');
     }
     throw error;
   }
@@ -143,6 +157,46 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
   const table = endpoint.split('/')[0] as keyof typeof sim;
   const idMatch = endpoint.split('/')[1];
   const method = (options.method || 'GET').toUpperCase();
+
+  if (endpoint === 'payments/outgoing' || endpoint === 'payments/incoming') {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const end = new Date(today);
+    end.setDate(end.getDate() + 30);
+    const isOutgoing = endpoint === 'payments/outgoing';
+    const items = (sim.shipments || [])
+      .filter((s: any) => isOutgoing ? !!s.supplierId : !!s.buyerId)
+      .filter((s: any) => !!s.paymentDueDate)
+      .filter((s: any) => {
+        const due = new Date(`${s.paymentDueDate}T00:00:00`);
+        return !Number.isNaN(due.getTime()) && due >= today && due <= end;
+      })
+      .map((s: any) => {
+        const due = new Date(`${s.paymentDueDate}T00:00:00`);
+        const daysUntil = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        return {
+          shipmentId: s.id,
+          entityName: isOutgoing ? 'Supplier' : 'Customer',
+          invoiceNumber: s.invoiceNumber || 'NA',
+          amount: Number(s.amount || 0),
+          currency: s.currency || 'USD',
+          dueDate: s.paymentDueDate,
+          daysUntil,
+          status: daysUntil === 0 ? 'Due today' : `Due in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`,
+          direction: isOutgoing ? 'outgoing' : 'incoming',
+          amountInr: Number(s.invoiceValueINR || 0),
+        };
+      });
+    const totalInr = items.reduce((sum: number, item: any) => sum + (Number(item.amountInr) || 0), 0);
+    return {
+      windowDays: 30,
+      items,
+      summary: {
+        count: items.length,
+        totalInr,
+      }
+    };
+  }
 
   if (endpoint === 'stats') {
     return {
@@ -201,7 +255,7 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
 
 export const api = {
   /** Login: POST /api/auth/login (no Authorization header). Stores token in localStorage on success. */
-  login: (username: string, password: string): Promise<{ success: boolean; token?: string; user?: { id: string; username: string; name: string; role: string; permissions?: string[] }; error?: string }> => {
+  login: (username: string, password: string): Promise<{ success: boolean; token?: string; user?: { id: string; username: string; name: string; role: string; permissions?: string[]; allowedDomains?: string[] }; error?: string }> => {
     const safe = sanitizeEndpoint('auth/login');
     if (!safe) return Promise.reject(new Error('Invalid endpoint'));
     return fetch(`${API_BASE}/${safe}`, {
@@ -229,6 +283,8 @@ export const api = {
           allowedDomains: Array.isArray(data.allowedDomains) ? data.allowedDomains : undefined,
         };
       }),
+    logout: (): Promise<{ success: boolean }> =>
+      fetchApi('auth/logout', { method: 'POST' }),
   },
   users: {
     list: (): Promise<Array<{ id: string; username: string; name: string; role: string; permissions: string[]; allowedDomains?: string[] }>> =>
@@ -245,6 +301,8 @@ export const api = {
       fetchApi(`users/${id}/permissions`, { method: 'PATCH', body: JSON.stringify({ permissions }) }),
     updateAllowedDomains: (id: string, allowedDomains: string[]): Promise<any> =>
       fetchApi(`users/${id}/allowed-domains`, { method: 'PATCH', body: JSON.stringify({ allowedDomains }) }),
+    unlockSession: (id: string): Promise<{ success: boolean }> =>
+      fetchApi(`users/${id}/unlock-session`, { method: 'POST' }),
   },
   suppliers: {
     list: () => fetchApi('suppliers'),
@@ -366,6 +424,12 @@ export const api = {
     update: (id: string, data: any) => fetchApi(`lcs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => fetchApi(`lcs/${id}`, { method: 'DELETE' }),
     transactions: (): Promise<any[]> => fetchApi('lc-transactions'),
+  },
+  payments: {
+    outgoing: (days = 30): Promise<{ windowDays: number; items: any[]; summary: { count: number; totalInr: number } }> =>
+      fetchApi('payments/outgoing', { queryString: `days=${Math.max(1, Math.min(90, Number(days) || 30))}` }),
+    incoming: (days = 30): Promise<{ windowDays: number; items: any[]; summary: { count: number; totalInr: number } }> =>
+      fetchApi('payments/incoming', { queryString: `days=${Math.max(1, Math.min(90, Number(days) || 30))}` }),
   },
   materials: {
     list: () => fetchApi('materials'),
@@ -497,7 +561,7 @@ export const api = {
     },
     getStats: () => fetchApi('stats'),
     setMode: (mode: 'SQL' | 'BROWSER') => { forceSimulated = mode === 'BROWSER'; },
-    getMode: () => forceSimulated ? 'BROWSER' : (serverAvailable ? 'SQL' : 'OFFLINE'),
+    getMode: () => (forceSimulated ? 'OFFLINE' : (serverAvailable ? 'SQL' : 'OFFLINE')),
     /** Shipments stored in browser (localStorage). Use after reload to show shipments created while server was unreachable. */
     getLocalShipments: () => (typeof window !== 'undefined' ? getSimData().shipments || [] : []),
     /** Keep a copy of a shipment in browser store so it survives reload and stays visible until server has it. */

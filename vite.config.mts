@@ -11,8 +11,9 @@ export default defineConfig(({ mode }) => {
     return {
       server: {
         port: 3000,
-        host: '0.0.0.0',
-        allowedHosts: ['eiofficial.com', 'www.eiofficial.com', 'localhost'],
+        strictPort: true,
+        host: '127.0.0.1',
+        allowedHosts: ['eiofficial.com', 'www.eiofficial.com', 'api.eiofficial.com', 'localhost'],
       },
       plugins: [react(), tailwindcss()],
       define: {

@@ -3,7 +3,7 @@ import { DomesticBuyer, User } from '../types';
 import { Search, Plus, X, Eye, Edit3, Trash2, Upload } from 'lucide-react';
 import { api } from '../api';
 import DomesticBuyerForm from './DomesticBuyerForm';
-import * as XLSX from 'xlsx';
+import { readFirstSheetAsObjects } from '../utils/excel';
 
 interface DomesticBuyerMasterProps {
   user: User;
@@ -43,21 +43,33 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
   );
 
   const handleAdd = async (b: DomesticBuyer) => {
-    await api.domesticBuyers.create(b);
-    await load();
-    setShowAddForm(false);
+    try {
+      await api.domesticBuyers.create(b);
+      await load();
+      setShowAddForm(false);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to create domestic buyer.');
+    }
   };
   const handleUpdate = async (b: DomesticBuyer) => {
-    await api.domesticBuyers.update(b.id, b);
-    await load();
-    setEditing(null);
+    try {
+      await api.domesticBuyers.update(b.id, b);
+      await load();
+      setEditing(null);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to update domestic buyer.');
+    }
   };
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this domestic buyer?')) return;
-    await api.domesticBuyers.delete(id);
-    await load();
-    setViewing(null);
-    setEditing(null);
+    try {
+      await api.domesticBuyers.delete(id);
+      await load();
+      setViewing(null);
+      setEditing(null);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to delete domestic buyer.');
+    }
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -65,10 +77,7 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
     if (!file) return;
     setImporting(true);
     try {
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const json = await readFirstSheetAsObjects(file) as any[];
       const rows = json.map((r) => {
         const name = r['Customer Name'] ?? r.name ?? r['CustomerName'] ?? '';
         const billingAddress = r['Billing Address'] ?? r.billingAddress ?? r['BillingAddress'] ?? '';
@@ -100,7 +109,11 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
         return;
       }
       const result = await api.domesticBuyers.import(rows);
-      alert(`Imported ${(result as any)?.imported ?? rows.length} domestic buyers.`);
+      const imported = Number((result as any)?.imported ?? rows.length);
+      const skipped = Number((result as any)?.skipped || 0);
+      alert(skipped > 0
+        ? `Imported ${imported} domestic buyer(s), skipped ${skipped} duplicate row(s).`
+        : `Imported ${imported} domestic buyer(s).`);
       await load();
     } catch (err: any) {
       alert(err?.message || 'Import failed.');
@@ -117,23 +130,23 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Domestic Buyers</h1>
           <p className="text-slate-500 font-medium">Manage India-based customers for sales indent.</p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
-          <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50">
+          <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="w-full sm:w-auto px-4 py-3 md:py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center justify-center gap-2 disabled:opacity-50 min-h-[44px] md:min-h-0">
             <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
           <button
             onClick={() => setShowAddForm(true)}
-            className="px-6 py-3 bg-rose-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-rose-700 transition-all shadow-lg shadow-rose-100"
+            className="w-full sm:w-auto px-6 py-3 bg-rose-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-rose-700 transition-all shadow-lg shadow-rose-100 min-h-[44px] md:min-h-0"
           >
             <Plus size={18} /> New Domestic Buyer
           </button>
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input
               type="text"
               placeholder="Search..."
-              className="pl-12 pr-6 py-3 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-rose-500 shadow-sm w-64"
+              className="pl-12 pr-6 py-3 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-rose-500 shadow-sm w-full sm:w-64"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -154,7 +167,8 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
         <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 p-12 text-center text-slate-500">Loading...</div>
       ) : (
         <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
-          <table className="w-full">
+          <div className="overflow-x-auto scroll-touch">
+          <table className="w-full min-w-[760px]">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="px-6 py-5 text-left text-xs font-black text-slate-400 uppercase tracking-widest">Buyer</th>
@@ -191,6 +205,7 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
               ))}
             </tbody>
           </table>
+          </div>
           {filtered.length === 0 && (
             <div className="p-12 text-center text-slate-500">No domestic buyers found. Add one to use in Sales Indent.</div>
           )}
@@ -207,7 +222,7 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
             <div className="p-8 space-y-6">
               <div><span className="text-xs font-bold text-slate-400 uppercase">Name</span><p className="text-slate-900 font-semibold mt-1">{viewing.name}</p></div>
               <div><span className="text-xs font-bold text-slate-400 uppercase">Billing Address</span><p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewing.billingAddress || '—'}</p></div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div><span className="text-xs font-bold text-slate-400 uppercase">State</span><p className="text-slate-700 mt-1">{viewing.state || '—'}</p></div>
                 <div><span className="text-xs font-bold text-slate-400 uppercase">GST No</span><p className="text-slate-700 mt-1">{viewing.gstNo || '—'}</p></div>
               </div>

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DomesticBuyer, DomesticBuyerSite } from '../types';
 import { Plus, Trash2, MapPin } from 'lucide-react';
+import { useAutoSavedDraft } from '../hooks/useAutoSavedDraft';
 
 const PAYMENT_TERMS = [
   'Payment Fully Advance',
@@ -35,6 +36,23 @@ export const DomesticBuyerForm: React.FC<DomesticBuyerFormProps> = ({ initialBuy
   });
   const [sites, setSites] = useState<DomesticBuyerSite[]>([]);
 
+  const restoreDraft = useCallback((draft: any) => {
+    if (!draft || typeof draft !== 'object') return;
+    if (draft.formData && typeof draft.formData === 'object') {
+      setFormData((prev) => ({ ...prev, ...draft.formData }));
+    }
+    if (Array.isArray(draft.sites)) setSites(draft.sites);
+  }, []);
+
+  const { clearDraft } = useAutoSavedDraft({
+    key: 'domestic-buyer-form-new',
+    data: { formData, sites },
+    onRestore: restoreDraft,
+    enabled: !isSubmitting && !isEdit,
+    debounceMs: 600,
+    version: '1',
+  });
+
   useEffect(() => {
     if (initialBuyer) {
       setFormData({
@@ -65,7 +83,7 @@ export const DomesticBuyerForm: React.FC<DomesticBuyerFormProps> = ({ initialBuy
     setIsSubmitting(true);
     try {
       const payload: DomesticBuyer = isEdit && initialBuyer
-        ? { ...formData, id: initialBuyer.id, sites, createdAt: initialBuyer.createdAt }
+        ? { ...formData, id: initialBuyer.id, sites, createdAt: initialBuyer.createdAt, version: initialBuyer.version }
         : {
             ...formData,
             id: 'db_' + Math.random().toString(36).slice(2, 11),
@@ -73,10 +91,11 @@ export const DomesticBuyerForm: React.FC<DomesticBuyerFormProps> = ({ initialBuy
             createdAt: new Date().toISOString(),
           };
       await onSubmit(payload);
+      clearDraft();
       if (onCancel) onCancel();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to save domestic buyer.');
+      alert(err?.message || 'Failed to save domestic buyer.');
     } finally {
       setIsSubmitting(false);
     }

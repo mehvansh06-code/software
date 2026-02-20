@@ -1,11 +1,12 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Supplier, Shipment, ShipmentStatus, Licence, Buyer, Consignee, ProductType, LicenceType, ShipmentItem, STANDARDISED_UNITS, MasterProduct, Material, LetterOfCredit, LCStatus } from '../types';
 import { UploadCloud, Award, CreditCard, Package, Zap, Trash2, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatCurrency, formatINR, formatDate, COMPANY_OPTIONS } from '../constants';
 import { api } from '../api';
 import { MASTER_PRODUCTS } from '../sampleData';
+import { useAutoSavedDraft } from '../hooks/useAutoSavedDraft';
 
 interface NewShipmentProps {
   suppliers?: Supplier[];
@@ -56,6 +57,34 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     lcAmount: undefined as number | undefined,
     hasCOO: false, // Certificate of Origin (if any) — only then add to document ledger
     consigneeId: '' as string, // Export: selected consignee (from buyer.consignees)
+  });
+
+  const restoreDraft = useCallback((draft: any) => {
+    if (!draft || typeof draft !== 'object') return;
+    if (draft.formData && typeof draft.formData === 'object') {
+      setFormData((prev: any) => ({ ...prev, ...draft.formData }));
+    }
+    if (typeof draft.selectedEntityId === 'string') setSelectedEntityId(draft.selectedEntityId);
+    if (Array.isArray(draft.currentItems)) setCurrentItems(draft.currentItems);
+    if (draft.activeItem && typeof draft.activeItem === 'object') {
+      setActiveItem((prev) => ({ ...prev, ...draft.activeItem }));
+    }
+    if (typeof draft.invoiceUploaded === 'boolean') setInvoiceUploaded(draft.invoiceUploaded);
+  }, []);
+
+  const { clearDraft } = useAutoSavedDraft({
+    key: isExport ? 'new-shipment-export' : 'new-shipment-import',
+    data: {
+      formData,
+      selectedEntityId,
+      currentItems,
+      activeItem,
+      invoiceUploaded,
+    },
+    onRestore: restoreDraft,
+    enabled: !isSubmitting,
+    debounceMs: 600,
+    version: '1',
   });
 
   useEffect(() => {
@@ -233,6 +262,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
       };
 
       await onSubmit(newShipment);
+      clearDraft();
       navigate(isExport ? '/export-shipments' : '/shipments');
     } catch (error) {
       alert('Failed to register shipment to ledger.');
@@ -244,7 +274,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
   return (
     <div className="space-y-8 animate-in slide-in-from-bottom-4 pb-32">
       <header>
-        <h1 className="text-3xl font-black text-slate-900 tracking-tight uppercase">
+        <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight uppercase">
           New {isExport ? 'Export' : 'Import'} Registration
         </h1>
         <p className="text-slate-500 font-medium italic">
@@ -255,7 +285,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
       <form onSubmit={handleSubmit} className="space-y-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100">
                <h2 className="text-xs font-black uppercase text-slate-400 mb-4 flex items-center gap-2">Company</h2>
                <p className="text-[10px] text-slate-500 mb-4">Select which company this {isExport ? 'export' : 'import'} shipment is for.</p>
                <div className="flex flex-wrap gap-4">
@@ -267,7 +297,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                  ))}
                </div>
             </div>
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100">
                <h2 className="text-xs font-black uppercase text-slate-400 mb-6 flex items-center gap-2"><Package size={16} /> Partner & Currency</h2>
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                  <div className="md:col-span-2">
@@ -323,7 +353,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
             </div>
 
             {!isExport && (
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100">
               <h2 className="text-xs font-black uppercase text-slate-400 mb-6 flex items-center gap-2">
                 <Zap size={16} />
                 Material Selection (Materials Master)
@@ -367,13 +397,14 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                     <input type="number" placeholder="Rate" className="w-full px-3 py-2 rounded-xl border text-sm font-bold" value={activeItem.rate} onChange={e => setActiveItem({...activeItem, rate: e.target.value})} />
                  </div>
               </div>
-              <button type="button" onClick={handleAddItem} className="mt-4 w-full py-2 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all bg-indigo-600 hover:bg-indigo-700">
+              <button type="button" onClick={handleAddItem} className="mt-4 w-full py-3 md:py-2 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all bg-indigo-600 hover:bg-indigo-700 min-h-[44px] md:min-h-0">
                 + Append Item to Invoice
               </button>
 
               {currentItems.length > 0 && (
                 <div className="mt-8 border-t border-slate-50 pt-6">
-                  <table className="w-full">
+                  <div className="w-full overflow-x-auto">
+                  <table className="w-full min-w-[760px]">
                     <thead>
                       <tr className="text-left text-[9px] font-black uppercase text-slate-400 border-b pb-2">
                         <th className="pb-2">Item Name</th>
@@ -401,13 +432,14 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
             )}
 
             {isExport && (
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100">
               <h2 className="text-xs font-black uppercase text-slate-400 mb-4 flex items-center gap-2"><Zap size={16} /> Amount</h2>
               <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Amount (Foreign Currency)</label>
@@ -417,7 +449,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
             </div>
             )}
 
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100">
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center gap-4">
                     <div className={`p-3 rounded-2xl ${isExport ? 'bg-amber-50 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}><CreditCard size={20} /></div>
@@ -430,7 +462,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                 </div>
                 
                 {formData.isUnderLC && (
-                  <div className="grid grid-cols-2 gap-6 p-4 bg-slate-50 rounded-2xl border border-slate-100 animate-in slide-in-from-top-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-slate-50 rounded-2xl border border-slate-100 animate-in slide-in-from-top-2">
                     {!isExport ? (
                       <>
                         <div>
@@ -487,7 +519,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
               </div>
 
             {!isExport && (
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 space-y-4">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100 space-y-4">
               <div className="flex items-center justify-between border-b pb-4 mb-4">
                 <h3 className="font-bold flex items-center gap-2 text-slate-700 uppercase text-xs tracking-widest">
                   <Award size={18} className="text-emerald-600" /> 
@@ -548,7 +580,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
             </div>
             )}
 
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Invoice / Ref Reference</label>
                    <input required className="w-full px-4 py-3 rounded-xl border font-bold" placeholder="e.g. GFPL/EXP/24-25/001" value={formData.invoiceNumber} onChange={e => handleChange('invoiceNumber', e.target.value)} />
@@ -573,7 +605,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
             </div>
 
             {!isExport && (
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
                <div>
                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Freight Charges (if any)</label>
                  <input type="number" step="0.01" min="0" className="w-full px-4 py-3 rounded-xl border font-bold" placeholder="0" value={formData.freightCharges} onChange={e => handleChange('freightCharges', e.target.value)} />
@@ -586,7 +618,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
             )}
 
             {!isExport && (
-            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+            <div className="bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100">
                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Payment Due Date</label>
                <input type="date" className="w-full px-4 py-3 rounded-xl border font-bold" value={formData.paymentDueDate} onChange={e => handleChange('paymentDueDate', e.target.value)} />
                <p className="text-[9px] text-slate-400 mt-2 italic">System will remind 3 days prior to due date.</p>
@@ -595,7 +627,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
           </div>
 
           <div className="space-y-6">
-            <div className="bg-white p-8 rounded-3xl border border-slate-100 sticky top-8 text-center space-y-6 shadow-sm">
+            <div className="bg-white p-5 sm:p-8 rounded-3xl border border-slate-100 lg:sticky lg:top-8 text-center space-y-6 shadow-sm">
               <div onClick={() => setInvoiceUploaded(!invoiceUploaded)} className={`p-8 border-2 border-dashed rounded-2xl cursor-pointer transition-all flex flex-col items-center justify-center gap-4 ${invoiceUploaded ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200 hover:border-indigo-400'}`}>
                 {invoiceUploaded ? (
                   <>
@@ -612,7 +644,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                 )}
               </div>
 
-              <div className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-2xl border border-slate-100 bg-slate-50">
                 <div>
                   <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight">Certificate of Origin (if any)</p>
                   <p className="text-[9px] text-slate-500 mt-0.5">Add COO to document ledger only when applicable</p>
@@ -620,7 +652,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                 <input type="checkbox" className="w-5 h-5 rounded accent-indigo-600" checked={formData.hasCOO} onChange={e => handleChange('hasCOO', e.target.checked)} />
               </div>
               
-              <div className="bg-slate-900 p-8 rounded-[2rem] text-white text-left">
+              <div className="bg-slate-900 p-5 sm:p-8 rounded-[2rem] text-white text-left">
                 {!isExport && (
                   <>
                     <p className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-400 mb-1">Subtotal</p>
@@ -644,9 +676,9 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
           </div>
         </div>
 
-        <div className="fixed bottom-0 left-64 right-0 bg-white/95 backdrop-blur-md border-t p-6 flex justify-end gap-4 shadow-2xl z-50">
-          <button type="button" onClick={() => navigate(-1)} className="px-10 py-3 text-slate-400 font-bold hover:text-slate-600 uppercase text-[10px] tracking-widest">Discard</button>
-          <button type="submit" disabled={isSubmitting} className="px-16 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest disabled:opacity-50 hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100">
+        <div className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-md border-t p-4 md:p-6 flex flex-col sm:flex-row justify-end gap-3 shadow-2xl z-50">
+          <button type="button" onClick={() => navigate(-1)} className="px-8 md:px-10 py-3 text-slate-400 font-bold hover:text-slate-600 uppercase text-[10px] tracking-widest min-h-[44px] md:min-h-0">Discard</button>
+          <button type="submit" disabled={isSubmitting} className="px-10 md:px-16 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest disabled:opacity-50 hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 min-h-[44px] md:min-h-0">
             {isSubmitting ? 'Processing Sync...' : 'Commit to Ledger'}
           </button>
         </div>
@@ -656,3 +688,4 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 };
 
 export default NewShipment;
+

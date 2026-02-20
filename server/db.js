@@ -27,7 +27,8 @@ db.exec(`
     intermediaryBankName TEXT,
     intermediaryAccountHolderName TEXT,
     intermediarySwiftCode TEXT,
-    intermediaryBankAddress TEXT
+    intermediaryBankAddress TEXT,
+    version INTEGER DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS products (
@@ -47,7 +48,8 @@ db.exec(`
     description TEXT,
     hsnCode TEXT,
     unit TEXT DEFAULT 'KGS',
-    type TEXT
+    type TEXT,
+    version INTEGER DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS buyers (
@@ -66,7 +68,8 @@ db.exec(`
     hasConsignee INTEGER,
     status TEXT DEFAULT 'PENDING',
     requestedBy TEXT,
-    createdAt TEXT
+    createdAt TEXT,
+    version INTEGER DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS shipments (
@@ -130,7 +133,8 @@ db.exec(`
     eoRequired REAL,
     eoFulfilled REAL,
     company TEXT,
-    status TEXT
+    status TEXT,
+    version INTEGER DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS lcs (
@@ -145,7 +149,16 @@ db.exec(`
     maturityDate TEXT,
     company TEXT,
     status TEXT,
-    remarks TEXT
+    remarks TEXT,
+    version INTEGER DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS user_sessions (
+    userId TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    lastActivityAt TEXT NOT NULL,
+    expiresAt TEXT NOT NULL
   );
 `);
 
@@ -206,6 +219,16 @@ runMigration('ALTER TABLE shipments ADD COLUMN linkedLcId TEXT', 'shipments.link
 runMigration('ALTER TABLE shipments ADD COLUMN licence_allocations_json TEXT', 'shipments.licence_allocations_json');
 runMigration('ALTER TABLE suppliers ADD COLUMN accountNumber TEXT', 'suppliers.accountNumber');
 runMigration('ALTER TABLE buyers ADD COLUMN accountNumber TEXT', 'buyers.accountNumber');
+runMigration('ALTER TABLE suppliers ADD COLUMN version INTEGER DEFAULT 1', 'suppliers.version');
+runMigration('ALTER TABLE buyers ADD COLUMN version INTEGER DEFAULT 1', 'buyers.version');
+runMigration('ALTER TABLE licences ADD COLUMN version INTEGER DEFAULT 1', 'licences.version');
+runMigration('ALTER TABLE lcs ADD COLUMN version INTEGER DEFAULT 1', 'lcs.version');
+runMigration('ALTER TABLE materials ADD COLUMN version INTEGER DEFAULT 1', 'materials.version');
+runMigration('UPDATE suppliers SET version = 1 WHERE version IS NULL', 'suppliers.version_backfill');
+runMigration('UPDATE buyers SET version = 1 WHERE version IS NULL', 'buyers.version_backfill');
+runMigration('UPDATE licences SET version = 1 WHERE version IS NULL', 'licences.version_backfill');
+runMigration('UPDATE lcs SET version = 1 WHERE version IS NULL', 'lcs.version_backfill');
+runMigration('UPDATE materials SET version = 1 WHERE version IS NULL', 'materials.version_backfill');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS lc_transactions (
@@ -254,6 +277,15 @@ runMigration(`
 
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_items_shipmentId ON shipment_items(shipmentId)', 'idx_shipment_items');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_history_shipmentId ON shipment_history(shipmentId)', 'idx_shipment_history');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_supplierId ON shipments(supplierId)', 'idx_shipments_supplierId');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_buyerId ON shipments(buyerId)', 'idx_shipments_buyerId');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_company ON shipments(company)', 'idx_shipments_company');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status)', 'idx_shipments_status');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_createdAt ON shipments(createdAt)', 'idx_shipments_createdAt');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_invoiceDate ON shipments(invoiceDate)', 'idx_shipments_invoiceDate');
+runMigration('CREATE INDEX IF NOT EXISTS idx_lc_transactions_lcId_date ON lc_transactions(lcId, date)', 'idx_lc_transactions_lcId_date');
+runMigration('CREATE INDEX IF NOT EXISTS idx_lc_transactions_shipmentId ON lc_transactions(shipmentId)', 'idx_lc_transactions_shipmentId');
+runMigration('CREATE INDEX IF NOT EXISTS idx_user_sessions_expiresAt ON user_sessions(expiresAt)', 'idx_user_sessions_expiresAt');
 
 // Sales Indent domain: domestic buyers (India) and indent product master
 runMigration(`
@@ -268,7 +300,8 @@ runMigration(`
     salesPersonMobile TEXT,
     salesPersonEmail TEXT,
     paymentTerms TEXT,
-    createdAt TEXT
+    createdAt TEXT,
+    version INTEGER DEFAULT 1
   )
 `, 'domestic_buyers');
 runMigration(`
@@ -291,9 +324,14 @@ runMigration(`
     unit TEXT DEFAULT 'MTR',
     rateInr REAL DEFAULT 0,
     rateUsd REAL DEFAULT 0,
-    rateGbp REAL DEFAULT 0
+    rateGbp REAL DEFAULT 0,
+    version INTEGER DEFAULT 1
   )
 `, 'indent_products');
+runMigration('ALTER TABLE domestic_buyers ADD COLUMN version INTEGER DEFAULT 1', 'domestic_buyers.version');
+runMigration('ALTER TABLE indent_products ADD COLUMN version INTEGER DEFAULT 1', 'indent_products.version');
+runMigration('UPDATE domestic_buyers SET version = 1 WHERE version IS NULL', 'domestic_buyers.version_backfill');
+runMigration('UPDATE indent_products SET version = 1 WHERE version IS NULL', 'indent_products.version_backfill');
 runMigration('CREATE INDEX IF NOT EXISTS idx_domestic_buyer_sites_buyerId ON domestic_buyer_sites(domesticBuyerId)', 'idx_domestic_buyer_sites');
 runMigration('CREATE INDEX IF NOT EXISTS idx_indent_products_quality ON indent_products(quality)', 'idx_indent_products_quality');
 

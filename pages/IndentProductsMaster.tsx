@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { IndentProduct } from '../types';
 import { Search, Plus, X, Edit3, Trash2, Upload } from 'lucide-react';
 import { api } from '../api';
-import * as XLSX from 'xlsx';
+import { readFirstSheetAsObjects } from '../utils/excel';
 
 export const IndentProductsMaster: React.FC = () => {
   const [products, setProducts] = useState<IndentProduct[]>([]);
@@ -37,9 +37,13 @@ export const IndentProductsMaster: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this product?')) return;
-    await api.indentProducts.delete(id);
-    await load();
-    setEditing(null);
+    try {
+      await api.indentProducts.delete(id);
+      await load();
+      setEditing(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete product.');
+    }
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -47,10 +51,7 @@ export const IndentProductsMaster: React.FC = () => {
     if (!file) return;
     setImporting(true);
     try {
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const json = await readFirstSheetAsObjects(file) as any[];
       const rows = json.map((r) => {
         const quality = r.Quality ?? r.quality ?? '';
         const desc = r.Description ?? r.Desc ?? r.description ?? '';
@@ -79,7 +80,11 @@ export const IndentProductsMaster: React.FC = () => {
         return;
       }
       const result = await api.indentProducts.import(rows);
-      alert(`Imported ${(result as any)?.imported ?? rows.length} products.`);
+      const imported = Number((result as any)?.imported ?? rows.length);
+      const skipped = Number((result as any)?.skipped || 0);
+      alert(skipped > 0
+        ? `Imported ${imported} product(s), skipped ${skipped} duplicate row(s).`
+        : `Imported ${imported} product(s).`);
       await load();
     } catch (err: any) {
       alert(err?.message || 'Import failed.');
@@ -96,21 +101,21 @@ export const IndentProductsMaster: React.FC = () => {
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Indent Products</h1>
           <p className="text-slate-500 font-medium">Product master for sales indent (quality, design, shade, rates).</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={importing}
-            className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50"
+            className="w-full sm:w-auto px-4 py-3 md:py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center justify-center gap-2 disabled:opacity-50 min-h-[44px] md:min-h-0"
           >
             <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input
               type="text"
               placeholder="Search quality, design, shade..."
-              className="pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 w-64 outline-none focus:ring-2 focus:ring-rose-500"
+              className="pl-10 pr-4 py-3 md:py-2.5 rounded-xl border border-slate-200 w-full sm:w-64 outline-none focus:ring-2 focus:ring-rose-500"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -122,7 +127,8 @@ export const IndentProductsMaster: React.FC = () => {
         <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 p-12 text-center text-slate-500">Loading...</div>
       ) : (
         <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto scroll-touch">
+          <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-3 text-left font-black text-slate-500 uppercase">Quality</th>
@@ -155,6 +161,7 @@ export const IndentProductsMaster: React.FC = () => {
               ))}
             </tbody>
           </table>
+          </div>
           {filtered.length === 0 && (
             <div className="p-12 text-center text-slate-500">No products. Import from Excel or add manually.</div>
           )}
@@ -165,9 +172,13 @@ export const IndentProductsMaster: React.FC = () => {
         <EditProductModal
           product={editing}
           onSave={async (p) => {
-            await api.indentProducts.update(p.id, p);
-            await load();
-            setEditing(null);
+            try {
+              await api.indentProducts.update(p.id, p);
+              await load();
+              setEditing(null);
+            } catch (err: any) {
+              alert(err?.message || 'Failed to save product.');
+            }
           }}
           onClose={() => setEditing(null)}
         />
@@ -191,7 +202,7 @@ function EditProductModal({ product, onSave, onClose }: { product: IndentProduct
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quality</label>
             <input className="w-full px-3 py-2 rounded-xl border border-slate-200" value={form.quality} onChange={(e) => setForm({ ...form, quality: e.target.value })} />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Design No</label>
               <input className="w-full px-3 py-2 rounded-xl border border-slate-200" value={form.designNo} onChange={(e) => setForm({ ...form, designNo: e.target.value })} />
@@ -213,7 +224,7 @@ function EditProductModal({ product, onSave, onClose }: { product: IndentProduct
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Unit</label>
             <input className="w-full px-3 py-2 rounded-xl border border-slate-200" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Rate INR</label>
               <input type="number" step={0.01} className="w-full px-3 py-2 rounded-xl border border-slate-200" value={form.rateInr} onChange={(e) => setForm({ ...form, rateInr: parseFloat(e.target.value) || 0 })} />

@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Supplier, Shipment, User } from '../types';
-import { FileText, Landmark, Truck, Banknote, Loader2, Plus, Trash2 } from 'lucide-react';
+import { FileText, Landmark, Truck, Banknote, Loader2, Plus, Trash2, Info } from 'lucide-react';
 import { api } from '../api';
+import { useAutoSavedDraft } from '../hooks/useAutoSavedDraft';
 
 export interface ProductLine {
   id: string;
@@ -71,6 +72,10 @@ function parseInvoiceValue(s: string | undefined): number | null {
   return Number.isNaN(n) ? null : n;
 }
 
+function normalizeHsnCode(v: string): string {
+  return String(v || '').replace(/\D/g, '').slice(0, 8);
+}
+
 interface BankPaymentDocGeneratorProps {
   suppliers: Supplier[];
   shipments: Shipment[];
@@ -123,29 +128,107 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
   const nextIdRef = React.useRef(2);
   const [error, setError] = useState<string | null>(null);
 
+  const restoreDraft = useCallback((draft: any) => {
+    if (!draft || typeof draft !== 'object') return;
+    if (typeof draft.companyChoice === 'string') setCompanyChoice(draft.companyChoice);
+    if (typeof draft.supplierId === 'string') setSupplierId(draft.supplierId);
+    if (typeof draft.shipmentId === 'string') setShipmentId(draft.shipmentId);
+    if (draft.payMode === 'Advance' || draft.payMode === 'Balance') setPayMode(draft.payMode);
+    if (typeof draft.includeBankAdvise === 'boolean') setIncludeBankAdvise(draft.includeBankAdvise);
+    if (draft.balanceChecklist && typeof draft.balanceChecklist === 'object') {
+      setBalanceChecklist((prev) => ({ ...prev, ...draft.balanceChecklist }));
+    }
+    if (typeof draft.amount === 'string') setAmount(draft.amount);
+    if (typeof draft.currency === 'string') setCurrency(draft.currency);
+    if (typeof draft.invoiceValueDiff === 'string') setInvoiceValueDiff(draft.invoiceValueDiff);
+    if (typeof draft.invoiceNo === 'string') setInvoiceNo(draft.invoiceNo);
+    if (typeof draft.invoiceDate === 'string') setInvoiceDate(draft.invoiceDate);
+    if (typeof draft.paymentDate === 'string') setPaymentDate(draft.paymentDate);
+    if (typeof draft.shipmentDate === 'string') setShipmentDate(draft.shipmentDate);
+    if (typeof draft.beneficiaryName === 'string') setBeneficiaryName(draft.beneficiaryName);
+    if (typeof draft.beneficiaryAddress === 'string') setBeneficiaryAddress(draft.beneficiaryAddress);
+    if (typeof draft.beneficiaryCountry === 'string') setBeneficiaryCountry(draft.beneficiaryCountry);
+    if (typeof draft.beneficiaryAccount === 'string') setBeneficiaryAccount(draft.beneficiaryAccount);
+    if (typeof draft.iban === 'string') setIban(draft.iban);
+    if (typeof draft.bankName === 'string') setBankName(draft.bankName);
+    if (typeof draft.bankSwift === 'string') setBankSwift(draft.bankSwift);
+    if (typeof draft.bankAddress === 'string') setBankAddress(draft.bankAddress);
+    if (typeof draft.intermediaryBankName === 'string') setIntermediaryBankName(draft.intermediaryBankName);
+    if (typeof draft.intermediaryBankSwift === 'string') setIntermediaryBankSwift(draft.intermediaryBankSwift);
+    if (typeof draft.intermediaryBankAddress === 'string') setIntermediaryBankAddress(draft.intermediaryBankAddress);
+    if (typeof draft.intermediaryBankCountry === 'string') setIntermediaryBankCountry(draft.intermediaryBankCountry);
+    if (typeof draft.portLoading === 'string') setPortLoading(draft.portLoading);
+    if (typeof draft.portDischarge === 'string') setPortDischarge(draft.portDischarge);
+    if (typeof draft.term === 'string') setTerm(draft.term);
+    if (typeof draft.modeShipment === 'string') setModeShipment(draft.modeShipment);
+    if (Array.isArray(draft.productLines) && draft.productLines.length > 0) {
+      setProductLines(draft.productLines);
+      const numericIds = draft.productLines
+        .map((row: ProductLine) => parseInt(String(row.id || ''), 10))
+        .filter((id: number) => Number.isFinite(id));
+      const nextId = numericIds.length > 0 ? Math.max(...numericIds) + 1 : draft.productLines.length + 1;
+      nextIdRef.current = Math.max(2, nextId);
+    }
+  }, []);
+
+  useAutoSavedDraft({
+    key: 'bank-payment-doc-generator',
+    data: {
+      companyChoice,
+      supplierId,
+      shipmentId,
+      payMode,
+      includeBankAdvise,
+      balanceChecklist,
+      amount,
+      currency,
+      invoiceValueDiff,
+      invoiceNo,
+      invoiceDate,
+      paymentDate,
+      shipmentDate,
+      beneficiaryName,
+      beneficiaryAddress,
+      beneficiaryCountry,
+      beneficiaryAccount,
+      iban,
+      bankName,
+      bankSwift,
+      bankAddress,
+      intermediaryBankName,
+      intermediaryBankSwift,
+      intermediaryBankAddress,
+      intermediaryBankCountry,
+      portLoading,
+      portDischarge,
+      term,
+      modeShipment,
+      productLines,
+    },
+    onRestore: restoreDraft,
+    enabled: !generating,
+    debounceMs: 700,
+    version: '1',
+  });
+
   const importShipments = useMemo(
     () => shipments.filter((s) => s.supplierId),
     [shipments]
   );
 
-  /** Suppliers that have at least one running import shipment for the selected importer (company). */
+  /** Suppliers for the selected importer (company). Require companyChoice first. */
   const suppliersForSelect = useMemo(() => {
-    if (!companyChoice) return suppliers.filter((s) => importShipments.some((sh) => sh.supplierId === s.id));
+    if (!companyChoice) return [];
     return suppliers.filter((s) =>
       importShipments.some((sh) => sh.supplierId === s.id && sh.company === companyChoice)
     );
   }, [suppliers, importShipments, companyChoice]);
 
-  /** Shipments for the selected importer and supplier (only that supplier's when supplier selected). */
-  const shipmentsForSelect = useMemo(
-    () =>
-      importShipments.filter(
-        (s) =>
-          (!companyChoice || s.company === companyChoice) &&
-          (!supplierId || s.supplierId === supplierId)
-      ),
-    [importShipments, companyChoice, supplierId]
-  );
+  /** Shipments for the selected importer and supplier. Require companyChoice then supplierId. */
+  const shipmentsForSelect = useMemo(() => {
+    if (!companyChoice) return [];
+    return importShipments.filter((s) => s.company === companyChoice && (!supplierId || s.supplierId === supplierId));
+  }, [importShipments, companyChoice, supplierId]);
 
   const selectedSupplier = useMemo(
     () => suppliers.find((s) => s.id === supplierId),
@@ -156,6 +239,32 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     () => importShipments.find((s) => s.id === shipmentId),
     [importShipments, shipmentId]
   );
+
+  const clearSupplierFields = useCallback(() => {
+    setBeneficiaryName('');
+    setBeneficiaryAddress('');
+    setBeneficiaryCountry('');
+    setBeneficiaryAccount('');
+    setIban('');
+    setBankName('');
+    setBankSwift('');
+    setBankAddress('');
+    setIntermediaryBankName('');
+    setIntermediaryBankSwift('');
+    setIntermediaryBankAddress('');
+    setIntermediaryBankCountry('');
+  }, []);
+
+  const clearShipmentFields = useCallback(() => {
+    setInvoiceNo('');
+    setInvoiceDate('');
+    setShipmentDate('');
+    setInvoiceValueDiff('');
+    setPortLoading('');
+    setPortDischarge('');
+    setTerm('');
+    setProductLines([newProductLine('1')]);
+  }, []);
 
   const fillFromSupplier = useCallback((sup: Supplier) => {
     setBeneficiaryName(sup.name);
@@ -169,7 +278,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       const p = sup.products[0];
       setProductLines((prev) => {
         const next = [...prev];
-        if (next.length) next[0] = { ...next[0], description: p.description || p.name || '', hsnCode: p.hsnCode || '' };
+        if (next.length) next[0] = { ...next[0], description: p.description || p.name || '', hsnCode: normalizeHsnCode(p.hsnCode || '') };
         return next;
       });
     }
@@ -184,14 +293,17 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       const invAmt = sh.amount != null ? Number(sh.amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
       setInvoiceValueDiff(invAmt);
       setPortLoading(sh.portOfLoading || '');
-      setPortDischarge(sh.portOfDischarge || '');
+      const discharge = (sh.portOfDischarge || '').trim();
+      const portCode = (sh.portCode || '').trim();
+      const looksLikeCode = /^[A-Z]{2}[A-Z0-9]{3,8}$/i.test(discharge);
+      setPortDischarge((discharge && looksLikeCode && portCode && discharge.toUpperCase() === portCode.toUpperCase()) ? '' : discharge);
       setTerm(sh.incoTerm || '');
       if (sh.items?.length) {
         setProductLines(
           sh.items.map((i, idx) => ({
             id: `ship-${idx}-${i.productId || idx}`,
             description: (i.productName || i.description || '').trim(),
-            hsnCode: (i.hsnCode || '').trim(),
+            hsnCode: normalizeHsnCode((i.hsnCode || '').trim()),
             quantity: String(i.quantity ?? ''),
             unit: i.unit || 'KGS',
             amount: String(i.amount ?? ''),
@@ -213,11 +325,13 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
 
   React.useEffect(() => {
     if (selectedSupplier) fillFromSupplier(selectedSupplier);
-  }, [supplierId]);
+    else clearSupplierFields();
+  }, [selectedSupplier, fillFromSupplier, clearSupplierFields]);
 
   React.useEffect(() => {
     if (selectedShipment) fillFromShipment(selectedShipment);
-  }, [shipmentId]);
+    else clearShipmentFields();
+  }, [selectedShipment, fillFromShipment, clearShipmentFields]);
 
   const addProductLine = useCallback(() => {
     const id = String(nextIdRef.current++);
@@ -233,7 +347,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
 
   const updateProductLine = useCallback((id: string, field: keyof ProductLine, value: string) => {
     setProductLines((prev) =>
-      prev.map((row) => (row.id === id ? { ...row, [field]: value } : row))
+      prev.map((row) => (row.id === id ? { ...row, [field]: field === 'hsnCode' ? normalizeHsnCode(value) : value } : row))
     );
   }, []);
 
@@ -256,7 +370,6 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       (sum, row) => sum + (parseFloat(row.amount) || 0),
       0
     );
-    // Treat 0 as "no value" so we fall through to shipment amount when optional amount fields are empty
     const totalInvoiceValue =
       parseInvoiceValue(invoiceValueDiff) ?? (totalFromItems > 0 ? totalFromItems : null) ?? (selectedShipment?.amount ?? null);
     if (totalInvoiceValue != null && totalInvoiceValue >= 0 && amtNum > totalInvoiceValue) {
@@ -280,7 +393,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     for (let i = 0; i < productLines.length; i++) {
       const row = productLines[i];
       if (!row.description.trim()) return `Product line ${i + 1}: Goods description is required.`;
-      if (!row.hsnCode.trim()) return `Product line ${i + 1}: HSN code is required.`;
+      if (!/^\d{8}$/.test(normalizeHsnCode(row.hsnCode.trim()))) return `Product line ${i + 1}: HSN code must be exactly 8 digits.`;
       if (!row.quantity.trim()) return `Product line ${i + 1}: Quantity is required.`;
       if (!row.unit) return `Product line ${i + 1}: Unit is required.`;
       const amt = parseFloat(row.amount);
@@ -300,16 +413,22 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     const docList = buildDocumentList();
     const documentListStr = docList.map((item, i) => `${i + 1}.       ${item}`).join('\n') + '\n';
     const amtNum = parseFloat(amount);
+    const preTotalFromItems = productLines.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
+    const invoiceAmountNum =
+      parseInvoiceValue(invoiceValueDiff) ??
+      (preTotalFromItems > 0 ? preTotalFromItems : null) ??
+      (selectedShipment?.amount ?? null) ??
+      amtNum;
 
     const items = productLines.map((row) => {
       const qtyNum = parseFloat(row.quantity);
       const amt = row.amount.trim() ? parseFloat(row.amount) : null;
       return {
         description: row.description.trim(),
-        hsn_code: row.hsnCode.trim(),
+        hsn_code: normalizeHsnCode(row.hsnCode.trim()),
         quantity: Number.isNaN(qtyNum) ? row.quantity : qtyNum,
         unit: row.unit || 'KGS',
-        amount: amt != null && !Number.isNaN(amt) ? amt : (productLines.length === 1 ? amtNum : 0),
+        amount: amt != null && !Number.isNaN(amt) ? amt : (productLines.length === 1 ? invoiceAmountNum : 0),
       };
     });
 
@@ -318,10 +437,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     const quantityStr = items.map((i) => `${i.quantity} ${i.unit}`).join(', ');
     const purpose = `PAYMENT FOR PURCHASE OF ${goodsDescStr.toUpperCase()}`;
 
-    const totalFromItems = items.reduce((sum, i) => sum + (typeof i.amount === 'number' ? i.amount : 0), 0);
-    const invoiceAmountVal =
-      invoiceValueDiff.trim() ||
-      (totalFromItems > 0 ? totalFromItems.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : amtNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+    const invoiceAmountVal = Number(invoiceAmountNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     const payload: Record<string, unknown> = {
       company_choice: companyLabel,
@@ -379,12 +495,12 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
   const inputClass =
     'w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent';
   const labelClass = 'block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2';
-  const cardClass = 'bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100';
+  const cardClass = 'bg-white p-5 sm:p-8 rounded-[2rem] shadow-sm border border-slate-100';
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-24">
       <header>
-        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Bank Import Payment Document Generator</h1>
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Bank Import Payment Document Generator</h1>
         <p className="text-slate-500 font-medium mt-1">Generate payment documents for bank submission using supplier and shipment data.</p>
       </header>
 
@@ -411,51 +527,70 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
                 setCompanyChoice(v);
                 setSupplierId('');
                 setShipmentId('');
+                clearSupplierFields();
+                clearShipmentFields();
               }}
+              title="Select the importer/company first. This filters suppliers and invoices."
             >
               <option value="">Select company...</option>
               {COMPANY_OPTIONS.map((c) => (
                 <option key={c.value} value={c.value}>{c.label}</option>
               ))}
             </select>
+            <span className="inline-flex items-center mt-2 text-slate-400" title="Start by selecting the Importer (company). This enables the Supplier list.">
+              <Info size={16} />
+              <span className="sr-only">Start by selecting the Importer (company). This enables the Supplier list.</span>
+            </span>
           </div>
           <div>
             <label className={labelClass}>Supplier *</label>
             <select
               required
+              disabled={!companyChoice}
               className={inputClass}
               value={supplierId}
               onChange={(e) => {
                 const v = e.target.value;
                 setSupplierId(v);
-                const keepShipment = v && importShipments.some((s) => s.id === shipmentId && s.supplierId === v);
-                if (!keepShipment) setShipmentId('');
+                setShipmentId('');
+                clearShipmentFields();
               }}
+              title={companyChoice ? 'Select supplier to load invoices' : 'Select company first to enable suppliers'}
             >
-              <option value="">Select supplier...</option>
+              <option value="">{companyChoice ? 'Select supplier...' : 'Select company first'}</option>
               {suppliersForSelect.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
+            <span className="inline-flex items-center mt-2 text-slate-400" title="After choosing a company, pick the Supplier to filter invoices for that supplier.">
+              <Info size={16} />
+              <span className="sr-only">After choosing a company, pick the Supplier to filter invoices for that supplier.</span>
+            </span>
           </div>
           <div className="md:col-span-2">
-            <label className={labelClass}>Pre-fill from shipment (optional)</label>
+            <label className={labelClass}>Pre-fill from shipment (invoice) *</label>
             <select
               className={inputClass}
+              disabled={!supplierId}
               value={shipmentId}
               onChange={(e) => setShipmentId(e.target.value)}
+              title={supplierId ? 'Select an invoice to pre-fill fields' : 'Select supplier first to enable invoices'}
             >
-              <option value="">None</option>
+              <option value="">{supplierId ? 'None' : 'Select supplier first'}</option>
               {shipmentsForSelect.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.invoiceNumber} – {s.expectedShipmentDate ? formatDateForDoc(s.expectedShipmentDate) : 'No date'}
                 </option>
               ))}
             </select>
+            <span className="inline-flex items-center mt-2 text-slate-400" title="Choose an invoice to auto-fill invoice and shipment details. This requires company → supplier selection first.">
+              <Info size={16} />
+              <span className="sr-only">Choose an invoice to auto-fill invoice and shipment details. This requires company → supplier selection first.</span>
+            </span>
           </div>
           <div>
             <label className={labelClass}>Payment mode</label>
-            <div className="flex gap-6">
+            <div className="flex flex-wrap gap-4 sm:gap-6">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="radio"
@@ -491,7 +626,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
         {payMode === 'Balance' && (
           <div className="mt-6">
             <label className={labelClass}>Document checklist</label>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {BALANCE_DOCS.map((d) => (
                 <label key={d} className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -685,12 +820,12 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
         </div>
 
         <div className="mt-8">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <label className={labelClass}>Product lines *</label>
             <button
               type="button"
               onClick={addProductLine}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 font-medium hover:bg-indigo-100 text-sm"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 font-medium hover:bg-indigo-100 text-sm min-h-[44px]"
             >
               <Plus size={16} /> Add product line
             </button>
@@ -716,7 +851,9 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
                     className={inputClass}
                     value={row.hsnCode}
                     onChange={(e) => updateProductLine(row.id, 'hsnCode', e.target.value)}
-                    placeholder="HSN"
+                    placeholder="8-digit HSN"
+                    inputMode="numeric"
+                    maxLength={8}
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -751,12 +888,12 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
                     placeholder={productLines.length === 1 ? 'Optional' : 'Per product'}
                   />
                 </div>
-                <div className="md:col-span-1 flex justify-end">
+                <div className="md:col-span-1 flex justify-start md:justify-end">
                   <button
                     type="button"
                     onClick={() => removeProductLine(row.id)}
                     disabled={productLines.length <= 1}
-                    className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                    className="p-3 md:p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0"
                     title={productLines.length <= 1 ? 'At least one product line required' : 'Remove product line'}
                   >
                     <Trash2 size={18} />
@@ -773,7 +910,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
           type="button"
           onClick={handleGenerate}
           disabled={generating}
-          className="px-8 py-3.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg"
+          className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg min-h-[48px]"
         >
           {generating ? <Loader2 size={18} className="animate-spin" /> : <FileText size={18} />}
           {generating ? 'Generating...' : 'Generate documents'}

@@ -11,6 +11,7 @@ function createRouter(broadcast) {
     const { importProducts_json, exportProducts_json, ...rest } = r;
     return {
       ...rest,
+      version: r.version != null ? Number(r.version) : 1,
       amountImportUSD: r.amountImportUSD != null ? Number(r.amountImportUSD) : undefined,
       amountImportINR: r.amountImportINR != null ? Number(r.amountImportINR) : undefined,
       importProducts: safeParseJson(importProducts_json, undefined),
@@ -43,11 +44,18 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const importProductsJson = Array.isArray(l.importProducts) ? JSON.stringify(l.importProducts) : null;
     const exportProductsJson = Array.isArray(l.exportProducts) ? JSON.stringify(l.exportProducts) : null;
-    const ins = db.prepare('INSERT OR REPLACE INTO licences (id, number, type, issueDate, importValidityDate, expiryDate, dutySaved, eoRequired, eoFulfilled, company, status, amountImportUSD, amountImportINR, importProducts_json, exportProducts_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-    ins.run(idCheck.value, l.number || null, l.type, l.issueDate || null, l.importValidityDate || null, l.expiryDate || null, l.dutySaved ?? 0, l.eoRequired ?? 0, l.eoFulfilled ?? 0, l.company || null, l.status || 'ACTIVE', l.amountImportUSD ?? null, l.amountImportINR ?? null, importProductsJson, exportProductsJson);
+    const ins = db.prepare('INSERT INTO licences (id, number, type, issueDate, importValidityDate, expiryDate, dutySaved, eoRequired, eoFulfilled, company, status, amountImportUSD, amountImportINR, importProducts_json, exportProducts_json, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    try {
+      ins.run(idCheck.value, l.number || null, l.type, l.issueDate || null, l.importValidityDate || null, l.expiryDate || null, l.dutySaved ?? 0, l.eoRequired ?? 0, l.eoFulfilled ?? 0, l.company || null, l.status || 'ACTIVE', l.amountImportUSD ?? null, l.amountImportINR ?? null, importProductsJson, exportProductsJson, 1);
+    } catch (e) {
+      if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message || '')) {
+        return res.status(409).json({ success: false, error: 'Licence already exists. Reload and edit the latest record.' });
+      }
+      return res.status(500).json({ success: false, error: e.message || 'Failed to create licence' });
+    }
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'LICENCE_CREATED', idCheck.value, { number: l.number, type: l.type, company: l.company });
-    res.json({ success: true });
+    res.json({ success: true, version: 1 });
     broadcast();
   });
 
@@ -56,23 +64,34 @@ function createRouter(broadcast) {
     if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
     const l = req.body;
     if (!l || typeof l !== 'object') return res.status(400).json({ success: false, error: 'Request body required' });
+    const existing = db.prepare('SELECT id, version FROM licences WHERE id = ?').get(idCheck.value);
+    if (!existing) return res.status(404).json({ success: false, error: 'Licence not found' });
+    const version = Number(l.version);
+    if (!Number.isInteger(version) || version < 1) {
+      return res.status(400).json({ success: false, error: 'Version is required for update' });
+    }
     const importProductsJson = Array.isArray(l.importProducts) ? JSON.stringify(l.importProducts) : null;
     const exportProductsJson = Array.isArray(l.exportProducts) ? JSON.stringify(l.exportProducts) : null;
-    db.prepare(`
+    const result = db.prepare(`
       UPDATE licences SET
         number=?, type=?, issueDate=?, importValidityDate=?, expiryDate=?,
         dutySaved=?, eoRequired=?, eoFulfilled=?, company=?, status=?,
-        amountImportUSD=?, amountImportINR=?, importProducts_json=?, exportProducts_json=?
-      WHERE id=?
+        amountImportUSD=?, amountImportINR=?, importProducts_json=?, exportProducts_json=?,
+        version = version + 1
+      WHERE id=? AND version=?
     `).run(
       l.number ?? null, l.type ?? null, l.issueDate ?? null, l.importValidityDate ?? null, l.expiryDate ?? null,
       l.dutySaved ?? 0, l.eoRequired ?? 0, l.eoFulfilled ?? 0, l.company ?? null, l.status ?? 'ACTIVE',
       l.amountImportUSD ?? null, l.amountImportINR ?? null, importProductsJson, exportProductsJson,
-      idCheck.value
+      idCheck.value, version
     );
+    if (result.changes === 0) {
+      return res.status(409).json({ success: false, error: 'Licence was modified by another user. Please reload and try again.' });
+    }
+    const versionRow = db.prepare('SELECT version FROM licences WHERE id = ?').get(idCheck.value);
     const userId = req.user && req.user.id;
     auditLog(db, userId, 'LICENCE_UPDATED', idCheck.value, { number: l.number, type: l.type, status: l.status });
-    res.json({ success: true });
+    res.json({ success: true, version: versionRow ? versionRow.version : undefined });
     broadcast();
   });
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Supplier, SupplierStatus, User, UserRole, Product, ProductType } from '../types';
 import { 
   Search, 
@@ -20,7 +20,7 @@ import {
 import { formatDate } from '../constants';
 import SupplierRequest from './SupplierRequest';
 import { api } from '../api';
-import * as XLSX from 'xlsx';
+import { downloadAoaAsXlsx, readFirstSheetAsObjects } from '../utils/excel';
 
 interface SupplierMasterProps {
   suppliers: Supplier[];
@@ -38,6 +38,8 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canApprove = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
@@ -63,15 +65,26 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
     return matchesSearch && matchesStatus;
   });
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterStatus, suppliers.length]);
+
+  const totalRows = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedFiltered = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, safePage, pageSize]);
+  const startRow = totalRows === 0 ? 0 : ((safePage - 1) * pageSize + 1);
+  const endRow = Math.min(totalRows, safePage * pageSize);
+
   const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setImporting(true);
     try {
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws) as any[];
+      const json = await readFirstSheetAsObjects(file) as any[];
       const rows = json.map((r) => {
         const name = r.Name ?? r.name ?? r['Supplier Name'] ?? '';
         const address = r.Address ?? r.address ?? '';
@@ -124,12 +137,12 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
     }
   };
 
-  const downloadSupplierTemplate = () => {
+  const downloadSupplierTemplate = async () => {
     const headers = ['Name', 'Address', 'Country', 'Bank Name', 'Account Holder', 'Account Number', 'SWIFT Code', 'Bank Address', 'Contact Person', 'Contact Number', 'Contact Email'];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers, ['Example Supplier Ltd', '123 Trade St', 'China', 'Bank of China', 'Example Supplier Ltd', '1234567890', 'BKCHCNBJ', 'Beijing', 'Li Wei', '+86 123 456 7890', 'contact@example.com']]);
-    XLSX.utils.book_append_sheet(wb, ws, 'Suppliers');
-    XLSX.writeFile(wb, 'suppliers_import_template.xlsx');
+    await downloadAoaAsXlsx('suppliers_import_template.xlsx', 'Suppliers', [
+      headers,
+      ['Example Supplier Ltd', '123 Trade St', 'China', 'Bank of China', 'Example Supplier Ltd', '1234567890', 'BKCHCNBJ', 'Beijing', 'Li Wei', '+86 123 456 7890', 'contact@example.com'],
+    ]);
   };
 
   return (
@@ -140,26 +153,26 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
           <p className="text-slate-500 font-medium">Bulk management and partner compliance verification.</p>
         </div>
         
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 w-full md:w-auto">
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50 transition-all">
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="w-full sm:w-auto px-4 py-3 md:py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 flex items-center justify-center gap-2 disabled:opacity-50 transition-all min-h-[44px] md:min-h-0">
             <Upload size={16} /> {importing ? 'Importing...' : 'Import from Excel'}
           </button>
-          <button type="button" onClick={downloadSupplierTemplate} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center gap-2" title="Download template">
+          <button type="button" onClick={downloadSupplierTemplate} className="w-full sm:w-auto px-4 py-3 md:py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200 flex items-center justify-center gap-2 min-h-[44px] md:min-h-0" title="Download template">
             <FileDown size={16} /> Download template
           </button>
           <button 
             onClick={() => setShowAddForm(true)}
-            className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+            className="w-full sm:w-auto px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 min-h-[44px] md:min-h-0"
           >
             <Plus size={18} /> New Supplier
           </button>
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input 
               type="text" 
               placeholder="Search..." 
-              className="pl-12 pr-6 py-3 bg-white border border-slate-200 rounded-2xl w-64 outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
+              className="pl-12 pr-6 py-3 bg-white border border-slate-200 rounded-2xl w-full sm:w-64 outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
             />
@@ -168,16 +181,16 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
       </header>
 
       {selectedIds.length > 0 && canApprove && (
-        <div className="bg-indigo-600 p-4 rounded-2xl flex items-center justify-between text-white shadow-xl animate-in slide-in-from-top-4">
+        <div className="bg-indigo-600 p-4 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-white shadow-xl animate-in slide-in-from-top-4">
           <div className="flex items-center gap-4">
             <span className="text-sm font-black uppercase tracking-widest">{selectedIds.length} Suppliers Selected</span>
             <button onClick={() => setSelectedIds([])} className="text-white/60 hover:text-white"><X size={18} /></button>
           </div>
-          <div className="flex gap-2">
-            <button onClick={() => handleBulkAction(SupplierStatus.APPROVED)} className="px-6 py-2 bg-emerald-500 hover:bg-emerald-600 rounded-xl font-bold flex items-center gap-2 transition-all">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full md:w-auto">
+            <button onClick={() => handleBulkAction(SupplierStatus.APPROVED)} className="w-full sm:w-auto px-6 py-3 md:py-2 bg-emerald-500 hover:bg-emerald-600 rounded-xl font-bold flex items-center justify-center gap-2 transition-all min-h-[44px] md:min-h-0">
               <CheckCircle size={16} /> Approve Selected
             </button>
-            <button onClick={() => handleBulkAction(SupplierStatus.REJECTED)} className="px-6 py-2 bg-red-500 hover:bg-red-600 rounded-xl font-bold flex items-center gap-2 transition-all">
+            <button onClick={() => handleBulkAction(SupplierStatus.REJECTED)} className="w-full sm:w-auto px-6 py-3 md:py-2 bg-red-500 hover:bg-red-600 rounded-xl font-bold flex items-center justify-center gap-2 transition-all min-h-[44px] md:min-h-0">
               <XCircle size={16} /> Reject Selected
             </button>
           </div>
@@ -199,8 +212,63 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
       )}
 
       <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
+        <div className="px-6 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs font-semibold text-slate-600">
+            Showing {startRow}-{endRow} of {totalRows} suppliers
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs font-semibold text-slate-500">Rows</label>
+            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value) || 50)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700">
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+            </select>
+            <button type="button" onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1} className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 bg-white disabled:opacity-40">Prev</button>
+            <span className="text-xs font-bold text-slate-600 min-w-[64px] text-center">{safePage} / {totalPages}</span>
+            <button type="button" onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages} className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 bg-white disabled:opacity-40">Next</button>
+          </div>
+        </div>
+
+        <div className="md:hidden p-3 space-y-3">
+          {pagedFiltered.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-500">
+              No suppliers found.
+            </div>
+          ) : (
+            pagedFiltered.map((s) => (
+              <article key={s.id} className={`rounded-2xl border p-3 space-y-3 shadow-sm ${selectedIds.includes(s.id) ? 'border-indigo-300 bg-indigo-50/30' : 'border-slate-200 bg-white'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-slate-900 truncate">{s.name}</p>
+                    <p className="text-[11px] text-slate-500 truncate">{s.country}</p>
+                  </div>
+                  <button onClick={() => toggleSelect(s.id)} className="p-2 rounded-lg border border-slate-200 bg-white shrink-0" title="Select">
+                    {selectedIds.includes(s.id) ? <CheckSquare className="text-indigo-600" size={18} /> : <Square className="text-slate-300" size={18} />}
+                  </button>
+                </div>
+                <div>
+                  <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase ${
+                    s.status === SupplierStatus.APPROVED ? 'bg-emerald-100 text-emerald-700' :
+                    s.status === SupplierStatus.PENDING ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                  }`}>
+                    {s.status === SupplierStatus.APPROVED && <CheckCircle size={12} />}
+                    {s.status}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setViewingSupplier(s)} className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold text-slate-700 bg-white hover:bg-slate-50">View</button>
+                  {canEdit && (
+                    <button onClick={() => setEditingSupplier({ ...s })} className="flex-1 px-3 py-2 rounded-xl border border-indigo-200 text-[12px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100">Edit</button>
+                  )}
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full min-w-[760px]">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="w-12 px-6 py-5">
@@ -215,7 +283,7 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((s) => (
+              {pagedFiltered.map((s) => (
                 <tr key={s.id} className={`hover:bg-slate-50/50 transition-colors ${selectedIds.includes(s.id) ? 'bg-indigo-50/30' : ''}`}>
                   <td className="px-6 py-5">
                     <button onClick={() => toggleSelect(s.id)}>
@@ -280,7 +348,7 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                 <span className="text-xs font-bold text-slate-400 uppercase">Address</span>
                 <p className="text-slate-700 mt-1 whitespace-pre-wrap">{viewingSupplier.address}</p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <span className="text-xs font-bold text-slate-400 uppercase">Contact Person</span>
                   <p className="text-slate-900 font-semibold mt-1">{viewingSupplier.contactPerson}</p>
@@ -355,7 +423,7 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Address</label>
                 <textarea rows={3} className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.address} onChange={e => setEditingSupplier({...editingSupplier, address: e.target.value})} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Contact Person</label>
                   <input className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500" value={editingSupplier.contactPerson} onChange={e => setEditingSupplier({...editingSupplier, contactPerson: e.target.value})} />
@@ -417,7 +485,19 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                   </div>
                 </>
               )}
-              <button onClick={async () => { await onUpdateItem(editingSupplier); setEditingSupplier(null); }} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl mt-4 hover:bg-indigo-700">Save Changes</button>
+              <button
+                onClick={async () => {
+                  try {
+                    await onUpdateItem(editingSupplier);
+                    setEditingSupplier(null);
+                  } catch (err: any) {
+                    alert(err?.message || 'Failed to save supplier.');
+                  }
+                }}
+                className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl mt-4 hover:bg-indigo-700"
+              >
+                Save Changes
+              </button>
             </div>
           </div>
         </div>
@@ -427,3 +507,4 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
 };
 
 export default SupplierMaster;
+

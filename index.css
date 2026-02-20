@@ -17,3 +17,31 @@
     -webkit-overflow-scrolling: touch;
   }
 }
+
+@media (max-width: 768px) {
+  .overflow-x-auto,
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Keep tables readable on small screens by allowing horizontal swipe */
+  .overflow-x-auto > table {
+    min-width: 760px;
+  }
+
+  /* Stack plain 2/3/4/5/6/12-column grids on mobile */
+  .grid.grid-cols-2,
+  .grid.grid-cols-3,
+  .grid.grid-cols-4,
+  .grid.grid-cols-5,
+  .grid.grid-cols-6,
+  .grid.grid-cols-12 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* Improve tap targets for button-style controls */
+  button[class*="px-"][class*="py-"],
+  a[class*="px-"][class*="py-"] {
+    min-height: 44px;
+  }
+}

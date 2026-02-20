@@ -33,6 +33,7 @@ export interface DomesticBuyer {
   paymentTerms: string;
   sites: DomesticBuyerSite[];
   createdAt?: string;
+  version?: number;
 }
 
 export interface IndentProduct {
@@ -46,6 +47,7 @@ export interface IndentProduct {
   rateInr: number;
   rateUsd: number;
   rateGbp: number;
+  version?: number;
 }
 
 export interface IndentCartItem {
@@ -186,6 +188,8 @@ export interface Supplier {
   intermediaryAccountNumber?: string;
   intermediarySwiftCode?: string;
   intermediaryBankAddress?: string;
+  /** Optimistic locking version (server returns on GET/PUT). */
+  version?: number;
 }
 
 export interface Consignee {
@@ -215,6 +219,8 @@ export interface Buyer {
   status: SupplierStatus; 
   requestedBy: string;
   createdAt: string;
+  /** Optimistic locking version (server returns on GET/PUT). */
+  version?: number;
 }
 
 export enum ShipmentStatus {
@@ -261,6 +267,7 @@ export interface Material {
   hsnCode?: string;
   unit: string;
   type?: string;
+  version?: number;
 }
 
 /** Per–Bill of Entry product line when linking an import shipment to a licence. */
@@ -468,6 +475,8 @@ export interface Licence {
   importProducts?: LicenceImportProduct[];
   /** Export obligation product lines (name, HSN, qty, unit, amount USD/INR). */
   exportProducts?: LicenceExportProduct[];
+  /** Optimistic locking version (server returns on GET/PUT). */
+  version?: number;
 }
 
 export enum LCStatus {
@@ -510,6 +519,8 @@ export interface LetterOfCredit {
     invoiceNumber: string | null;
     reference?: string | null;
   }>;
+  /** Optimistic locking version (server returns on GET/PUT). */
+  version?: number;
 }
 
 /** Transaction record when an LC is honored (settled). Import = DEBIT, Export = CREDIT. */

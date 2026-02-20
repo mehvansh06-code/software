@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Buyer, User, DomesticBuyer, IndentProduct, IndentCartItem } from '../types';
 import { FileText, Plus, Trash2, X, Package, Users, MapPin } from 'lucide-react';
 import { api } from '../api';
 import BuyerRequest from './BuyerRequest';
 import DomesticBuyerForm from './DomesticBuyerForm';
+import { useAutoSavedDraft } from '../hooks/useAutoSavedDraft';
 
 const PAYMENT_TERMS = [
   'Payment Fully Advance',
@@ -57,6 +58,68 @@ export const IndentGenerator: React.FC<IndentGeneratorProps> = ({ buyers, user, 
   const [showAddDomestic, setShowAddDomestic] = useState(false);
   const [showAddExport, setShowAddExport] = useState(false);
   const [generating, setGenerating] = useState(false);
+
+  const restoreDraft = useCallback((draft: any) => {
+    if (!draft || typeof draft !== 'object') return;
+    if (draft.txnType === 'Domestic' || draft.txnType === 'Export') setTxnType(draft.txnType);
+    if (typeof draft.company === 'string') setCompany(draft.company);
+    if (typeof draft.currency === 'string') setCurrency(draft.currency);
+    if (typeof draft.ourRef === 'string') setOurRef(draft.ourRef);
+    if (typeof draft.buyerRef === 'string') setBuyerRef(draft.buyerRef);
+    if (typeof draft.ordRef === 'string') setOrdRef(draft.ordRef);
+    if (typeof draft.indentDate === 'string') setIndentDate(draft.indentDate);
+    if (typeof draft.selectedBuyerId === 'string') setSelectedBuyerId(draft.selectedBuyerId);
+    if (typeof draft.selectedConsignee === 'string') setSelectedConsignee(draft.selectedConsignee);
+    if (typeof draft.salesName === 'string') setSalesName(draft.salesName);
+    if (typeof draft.salesMob === 'string') setSalesMob(draft.salesMob);
+    if (typeof draft.salesMail === 'string') setSalesMail(draft.salesMail);
+    if (typeof draft.incoterm === 'string') setIncoterm(draft.incoterm);
+    if (typeof draft.countryOrigin === 'string') setCountryOrigin(draft.countryOrigin);
+    if (typeof draft.countryDest === 'string') setCountryDest(draft.countryDest);
+    if (typeof draft.portLoad === 'string') setPortLoad(draft.portLoad);
+    if (typeof draft.portDis === 'string') setPortDis(draft.portDis);
+    if (typeof draft.shippingDate === 'string') setShippingDate(draft.shippingDate);
+    if (typeof draft.validityDays === 'number' && Number.isFinite(draft.validityDays)) setValidityDays(draft.validityDays);
+    if (typeof draft.paymentTerms === 'string') setPaymentTerms(draft.paymentTerms);
+    if (typeof draft.sampling === 'string') setSampling(draft.sampling);
+    if (typeof draft.packaging === 'string') setPackaging(draft.packaging);
+    if (typeof draft.terms === 'string') setTerms(draft.terms);
+    if (Array.isArray(draft.cart)) setCart(draft.cart);
+  }, []);
+
+  useAutoSavedDraft({
+    key: 'indent-generator',
+    data: {
+      txnType,
+      company,
+      currency,
+      ourRef,
+      buyerRef,
+      ordRef,
+      indentDate,
+      selectedBuyerId,
+      selectedConsignee,
+      salesName,
+      salesMob,
+      salesMail,
+      incoterm,
+      countryOrigin,
+      countryDest,
+      portLoad,
+      portDis,
+      shippingDate,
+      validityDays,
+      paymentTerms,
+      sampling,
+      packaging,
+      terms,
+      cart,
+    },
+    onRestore: restoreDraft,
+    enabled: !generating,
+    debounceMs: 700,
+    version: '1',
+  });
 
   useEffect(() => {
     (async () => {
@@ -234,18 +297,18 @@ export const IndentGenerator: React.FC<IndentGeneratorProps> = ({ buyers, user, 
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Sales Indent Generator</h1>
           <p className="text-slate-500 font-medium">Create proforma indents for domestic and export buyers.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={() => setShowAddDomestic(true)}
-            className="px-4 py-2.5 rounded-xl bg-rose-50 text-rose-600 font-bold text-sm hover:bg-rose-100 flex items-center gap-2"
+            className="px-4 py-3 md:py-2.5 rounded-xl bg-rose-50 text-rose-600 font-bold text-sm hover:bg-rose-100 flex items-center gap-2 min-h-[44px] md:min-h-0"
           >
             <Plus size={16} /> Domestic Buyer
           </button>
           <button
             type="button"
             onClick={() => setShowAddExport(true)}
-            className="px-4 py-2.5 rounded-xl bg-amber-50 text-amber-600 font-bold text-sm hover:bg-amber-100 flex items-center gap-2"
+            className="px-4 py-3 md:py-2.5 rounded-xl bg-amber-50 text-amber-600 font-bold text-sm hover:bg-amber-100 flex items-center gap-2 min-h-[44px] md:min-h-0"
           >
             <Plus size={16} /> Export Buyer
           </button>
@@ -479,7 +542,7 @@ export const IndentGenerator: React.FC<IndentGeneratorProps> = ({ buyers, user, 
       </div>
 
       <div className="flex justify-end">
-        <button type="button" onClick={handleGenerate} disabled={generating || !company || !ourRef.trim() || !buyerRef.trim() || !buyerName || cart.length === 0} className="px-10 py-4 bg-rose-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl hover:bg-rose-700 disabled:opacity-50 flex items-center gap-2">
+        <button type="button" onClick={handleGenerate} disabled={generating || !company || !ourRef.trim() || !buyerRef.trim() || !buyerName || cart.length === 0} className="px-10 py-4 bg-rose-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl hover:bg-rose-700 disabled:opacity-50 flex items-center gap-2 min-h-[44px] md:min-h-0">
           <FileText size={20} /> {generating ? 'Generating...' : 'Generate Word'}
         </button>
       </div>
@@ -541,7 +604,8 @@ function ProductSelectModal({
   };
 
   const handleAdd = () => {
-    const toAdd = Object.entries(selected)
+    const entries = Object.entries(selected) as Array<[string, { qty: number; rate: number }]>;
+    const toAdd = entries
       .filter(([, v]) => v.qty > 0)
       .map(([id, v]) => {
         const product = items.find((p) => p.id === id)!;
@@ -551,7 +615,7 @@ function ProductSelectModal({
     onClose();
   };
 
-  const selectedCount = Object.values(selected).filter((v) => v.qty > 0).length;
+  const selectedCount = (Object.values(selected) as Array<{ qty: number; rate: number }>).filter((v) => v.qty > 0).length;
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
@@ -565,8 +629,8 @@ function ProductSelectModal({
             <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors" aria-label="Close"><X size={22} className="text-slate-500" /></button>
           </div>
         </div>
-        <div className="overflow-y-auto flex-1 min-h-0">
-          <table className="w-full text-sm">
+        <div className="overflow-y-auto overflow-x-auto flex-1 min-h-0">
+          <table className="w-full text-sm min-w-[760px]">
             <thead className="sticky top-0 bg-slate-50 z-10">
               <tr className="border-b border-slate-200">
                 <th className="px-4 py-3 text-left font-black text-slate-500 uppercase text-xs">Design</th>
@@ -608,8 +672,8 @@ function ProductSelectModal({
             {selectedCount > 0 ? <><strong>{selectedCount} line(s)</strong> with qty &gt; 0 will be added to cart.</> : 'Enter quantity (and rate if needed) for the lines you want to add.'}
           </p>
           <div className="flex gap-3">
-            <button type="button" onClick={onClose} className="px-5 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">Cancel</button>
-            <button type="button" onClick={handleAdd} disabled={selectedCount === 0} className="px-6 py-2.5 rounded-xl font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 disabled:pointer-events-none transition-colors shadow-lg shadow-rose-100">
+            <button type="button" onClick={onClose} className="px-5 py-3 md:py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors min-h-[44px] md:min-h-0">Cancel</button>
+            <button type="button" onClick={handleAdd} disabled={selectedCount === 0} className="px-6 py-3 md:py-2.5 rounded-xl font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 disabled:pointer-events-none transition-colors shadow-lg shadow-rose-100 min-h-[44px] md:min-h-0">
               Add to cart
             </button>
           </div>
@@ -620,3 +684,4 @@ function ProductSelectModal({
 }
 
 export default IndentGenerator;
+

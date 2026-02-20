@@ -189,6 +189,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     const val = parseFloat(s.replace(/,/g, ''));
     return Number.isNaN(val) ? undefined : val;
   };
+  const normalizeHsnCode = (v: string): string => String(v || '').replace(/\D/g, '').slice(0, 8);
+  const isValidHsnCode = (v: string): boolean => /^\d{8}$/.test(normalizeHsnCode(v));
 
   const handleOcrConfirm = useCallback(async (reviewed: OcrReviewedPayload) => {
     const payload = pendingOcrPayload;
@@ -206,11 +208,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         // Bill of Entry (import): only BOE-section fields
         update.beNumber = reviewed.number || null;
         update.beDate = reviewed.date || null;
-        update.portOfDischarge = reviewed.portCode || null;
         const val = parseNum(reviewed.invoiceValue);
         if (val !== undefined) update.assessedValue = val;
         const exch = parseNum(reviewed.exchangeRate);
-        if (exch !== undefined) update.exchangeRate = exch;
+        if (exch !== undefined) {
+          update.exchangeRate = exch;
+          const invoiceFc = Number(shipment.amount) || 0;
+          update.invoiceValueINR = invoiceFc * exch;
+        }
         if (reviewed.incoTerm !== undefined) (update as any).incoTerm = reviewed.incoTerm || null;
         const dutyBCD = parseNum(reviewed.dutyBCD);
         const dutySWS = parseNum(reviewed.dutySWS);
@@ -239,6 +244,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         if (val !== undefined) update.fobValueFC = val;
         const fobInr = parseNum(reviewed.fobValueINR);
         if (fobInr !== undefined) (update as any).fobValueINR = fobInr;
+        if (exch !== undefined) {
+          const baseFc = Number(update.fobValueFC ?? shipment.fobValueFC ?? shipment.amount) || 0;
+          update.invoiceValueINR = baseFc * exch;
+          if (fobInr === undefined) (update as any).fobValueINR = baseFc * exch;
+        }
         const dbkVal = parseNum(reviewed.dbk);
         if (dbkVal !== undefined) (update as any).dbk = dbkVal;
         const rodtepVal = parseNum(reviewed.rodtep);
@@ -382,8 +392,31 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       .trim() || 'ref';
     const lodgementRef = ((shipment as any)?.lodgement || invRef).replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim() || 'ref';
     const baseName = (f: string) => f.replace(/\.[^/.]+$/, '').trim();
-    const findMatch = (expected: string) =>
-      folderFiles.find((f) => baseName(f).toUpperCase() === expected.toUpperCase()) ?? null;
+    const normalize = (v: string) => (v || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const hasTrailingCopyIndex = (fileNorm: string, expectedNorm: string) => new RegExp(`^${expectedNorm}_[0-9]+$`).test(fileNorm);
+    const hasAnySuffixAfterExpected = (fileNorm: string, expectedNorm: string) => fileNorm.startsWith(`${expectedNorm}_`);
+    const endsWithRef = (fileNorm: string, refNorm: string) =>
+      fileNorm.endsWith(`_${refNorm}`) || new RegExp(`_${refNorm}_[0-9]+$`).test(fileNorm);
+    const findDocMatch = (prefix: string, ref: string) => {
+      const prefixNorm = normalize(prefix);
+      const refNorm = normalize(ref);
+      const expectedNorm = normalize(`${prefix}${ref}`);
+      return folderFiles.find((f) => {
+        const fileNorm = normalize(baseName(f));
+        if (!fileNorm) return false;
+        if (fileNorm === expectedNorm || hasTrailingCopyIndex(fileNorm, expectedNorm)) return true;
+        if (prefixNorm && refNorm && fileNorm.startsWith(prefixNorm) && endsWithRef(fileNorm, refNorm)) return true;
+        return false;
+      }) ?? null;
+    };
+    const findPaymentMatch = (expected: string) => {
+      const expectedNorm = normalize(expected);
+      return folderFiles.find((f) => {
+        const fileNorm = normalize(baseName(f));
+        if (!fileNorm) return false;
+        return fileNorm === expectedNorm || hasTrailingCopyIndex(fileNorm, expectedNorm) || hasAnySuffixAfterExpected(fileNorm, expectedNorm);
+      }) ?? null;
+    };
     const rows: { label: string; expectedName: string; found: boolean; matchedFileName: string | null }[] = [];
     const staticList = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
     const matchedNames = new Set<string>();
@@ -391,7 +424,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       const prefix = (doc as { prefix?: string }).prefix || doc.id + '_';
       const ref = doc.id === 'LODGE' ? lodgementRef : invRef;
       const expected = prefix + ref;
-      const matched = findMatch(expected);
+      const matched = findDocMatch(prefix, ref);
       if (matched) matchedNames.add(matched);
       rows.push({ label: doc.label, expectedName: expected, found: !!matched, matchedFileName: matched });
     });
@@ -399,7 +432,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       const amount = Number(pay.amount);
       const currency = (pay.currency || 'USD').toUpperCase();
       const expected = `PAY_ADV_${amount}_${currency}`;
-      const matched = findMatch(expected);
+      const matched = findPaymentMatch(expected);
       if (matched) matchedNames.add(matched);
       rows.push({
         label: `Payment Advise — ${formatCurrency(amount, currency)}`,
@@ -486,8 +519,16 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     try {
       const items = invoiceEditData.items.map((it) => ({
         ...it,
+        hsnCode: normalizeHsnCode(String(it.hsnCode || '')),
         amount: it.quantity * it.rate
       }));
+      const invalidHsnIndex = items.findIndex((it) => !isValidHsnCode(String(it.hsnCode || '')));
+      if (invalidHsnIndex >= 0) {
+        setToastVariant('error');
+        setToastMessage(`HSN code must be exactly 8 digits (line ${invalidHsnIndex + 1}).`);
+        setTimeout(() => setToastMessage(null), 5000);
+        return;
+      }
       const subtotal = items.reduce((s, it) => s + it.amount, 0);
       const totalAmount = subtotal + (invoiceEditData.freightCharges || 0) + (invoiceEditData.otherCharges || 0);
       const updated: Shipment = {
@@ -517,6 +558,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
         const num = typeof value === 'number' ? value : parseFloat(String(value)) || 0;
         (item as any)[field] = num;
         item.amount = item.quantity * item.rate;
+      } else if (field === 'hsnCode') {
+        item.hsnCode = normalizeHsnCode(String(value));
       } else {
         (item as any)[field] = value;
       }
@@ -542,10 +585,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     try {
       const dutyINT = dutiesData.dutyInterest + dutiesData.dutyPenalty + dutiesData.dutyFine;
       const linkedId = licenceImportData.linkedLicenceId || undefined;
+      const exchRate = Number(dutiesData.exchangeRate) || Number(shipment.exchangeRate) || 1;
+      const invoiceFc = Number(shipment.amount) || 0;
       const updated = {
         ...shipment,
         ...dutiesData,
         dutyINT,
+        invoiceValueINR: invoiceFc * exchRate,
         portCode: dutiesData.portCode,
         isUnderLicence: !!linkedId,
         linkedLicenceId: linkedId,
@@ -563,6 +609,11 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     try {
       const linkedId = epcgLicenceId || advLicenceId || undefined;
       const updated: any = { ...shipment, ...exportDocData };
+      const exchRate = Number(exportDocData.exchangeRate) || Number(shipment.exchangeRate) || 1;
+      const invoiceFc = Number(shipment.amount ?? shipment.fobValueFC) || 0;
+      updated.exchangeRate = exchRate;
+      updated.invoiceValueINR = invoiceFc * exchRate;
+      updated.fobValueINR = invoiceFc * exchRate;
       updated.isUnderLicence = !!linkedId;
       updated.linkedLicenceId = linkedId;
       delete updated.licenceExportLines;
@@ -577,7 +628,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleSaveAll = async () => {
     try {
-      const items = invoiceEditData.items.map((it) => ({ ...it, amount: it.quantity * it.rate }));
+      const items = invoiceEditData.items.map((it) => ({ ...it, hsnCode: normalizeHsnCode(String(it.hsnCode || '')), amount: it.quantity * it.rate }));
+      const invalidHsnIndex = items.findIndex((it) => !isValidHsnCode(String(it.hsnCode || '')));
+      if (invalidHsnIndex >= 0) {
+        setToastVariant('error');
+        setToastMessage(`HSN code must be exactly 8 digits (line ${invalidHsnIndex + 1}).`);
+        setTimeout(() => setToastMessage(null), 5000);
+        return;
+      }
       const subtotal = items.reduce((s, it) => s + it.amount, 0);
       const totalAmount = isExport
         ? (Number(invoiceEditData.amountFC) || 0)
@@ -699,7 +757,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setLodgementDateValue((shipment as any).lodgementDate || '');
     setEditAll(false);
     setEditInvoice(false);
-    setEditInvoiceRate(false);
     setEditExportDoc(false);
     setEditLogistics(false);
     setEditDuties(false);
@@ -872,7 +929,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setEditHistoryDraft(null);
   };
 
-  const totalDuty = dutiesData.dutyBCD + dutiesData.dutySWS + dutiesData.dutyInterest + dutiesData.dutyPenalty + dutiesData.dutyFine;
+  const totalDuty = dutiesData.dutyBCD + dutiesData.dutySWS + dutiesData.dutyInterest + dutiesData.dutyPenalty + dutiesData.dutyFine + dutiesData.gst;
 
   const handleMarkPaymentReceived = async (payId: string) => {
     const payments = (shipment.payments || []).map(p => p.id === payId ? { ...p, received: true } : p);
@@ -896,7 +953,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       </div>
     )}
     <div className="space-y-6 pb-24 animate-in fade-in">
-      <header className="flex items-center justify-between bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
         <div className="flex items-center gap-6">
           <button onClick={() => navigate(-1)} className="p-3 bg-slate-50 rounded-2xl hover:bg-slate-100 transition-colors"><ArrowLeft size={20} /></button>
           <div>
@@ -909,12 +966,12 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{String(partnerName)}</p>
           </div>
         </div>
-        <div className="flex gap-4">
-           <button onClick={() => setShowUpdateModal(true)} className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
+        <div className="flex flex-wrap gap-3">
+           <button onClick={() => setShowUpdateModal(true)} className="px-6 py-3 md:py-2.5 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 min-h-[44px] md:min-h-0">
               <Plus size={16} /> Add Status Update
            </button>
            {canDelete && onDelete && (
-             <button type="button" onClick={handleDeleteShipment} className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center gap-2 transition-all shadow-lg shadow-red-100">
+             <button type="button" onClick={handleDeleteShipment} className="px-6 py-3 md:py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center gap-2 transition-all shadow-lg shadow-red-100 min-h-[44px] md:min-h-0">
                <Trash2 size={16} /> Delete Shipment
              </button>
            )}
@@ -984,15 +1041,15 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 <span className="text-xs font-bold text-slate-900">{String(shipment.company)} Entity</span>
                 {canEdit && (editAll ? (
                   <>
-                    <button type="button" onClick={handleSaveAll} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase tracking-widest">
+                    <button type="button" onClick={handleSaveAll} className="flex items-center gap-1.5 px-3 py-2.5 md:py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase tracking-widest min-h-[44px] md:min-h-0">
                       <Save size={12} /> Save
                     </button>
-                    <button type="button" onClick={handleCancelAll} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-black uppercase tracking-widest">
+                    <button type="button" onClick={handleCancelAll} className="flex items-center gap-1.5 px-3 py-2.5 md:py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-black uppercase tracking-widest min-h-[44px] md:min-h-0">
                       <X size={12} /> Cancel
                     </button>
                   </>
                 ) : (
-                  <button type="button" onClick={() => setEditAll(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-widest">
+                  <button type="button" onClick={() => setEditAll(true)} className="flex items-center gap-1.5 px-3 py-2.5 md:py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-widest min-h-[44px] md:min-h-0">
                     <Edit3 size={12} /> Edit
                   </button>
                 ))}
@@ -1064,7 +1121,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 )}
               </div>
               {!isExport && (
-              <table className="w-full">
+              <div className="w-full overflow-x-auto">
+              <table className="w-full min-w-[760px]">
                 <thead>
                   <tr className="text-left text-[9px] font-black uppercase text-slate-400 border-b pb-4">
                     <th className="pb-4">Item / Description</th>
@@ -1094,7 +1152,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                       </td>
                       <td className="py-2">
                         {editAll ? (
-                          <input className="w-full px-2 py-1.5 rounded border border-slate-200 bg-slate-50 text-[10px] font-mono" value={item.hsnCode} onChange={e => updateInvoiceItem(idx, 'hsnCode', e.target.value)} />
+                          <input
+                            className="w-full px-2 py-1.5 rounded border border-slate-200 bg-slate-50 text-[10px] font-mono"
+                            value={item.hsnCode}
+                            onChange={e => updateInvoiceItem(idx, 'hsnCode', e.target.value)}
+                            inputMode="numeric"
+                            maxLength={8}
+                            placeholder="8-digit HSN"
+                          />
                         ) : (
                           <span className="text-[10px] font-mono text-slate-400">{String(item.hsnCode)}</span>
                         )}
@@ -1127,6 +1192,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   );})}
                 </tbody>
               </table>
+              </div>
               )}
               {!isExport && (
                 <div className="flex flex-wrap justify-end gap-8 py-2 text-sm">
@@ -1299,7 +1365,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                 </div>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">FOB Value (INR)</label>
-                  <p className="text-sm font-bold text-slate-800">{formatINR(shipment.fobValueINR ?? (shipment.amount * (shipment.exchangeRate || 1)))}</p>
+                  <p className="text-sm font-bold text-slate-800">
+                    {formatINR(
+                      editAll
+                        ? ((Number(invoiceEditData.amountFC) || Number(shipment.amount) || 0) * (exportDocData.exchangeRate || 1))
+                        : (shipment.fobValueINR ?? (shipment.amount * (shipment.exchangeRate || 1)))
+                    )}
+                  </p>
                 </div>
                 <div>
                   <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">DBK</label>
@@ -1395,7 +1467,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                       </div>
                     </>
                   )}
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      <div>
                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Port of Loading</label>
                        {editAll ? (
@@ -1433,7 +1505,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   </div>
                </div>
                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">BL / AWB Number</label>
                       {editAll ? (
@@ -1507,7 +1579,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </div>
 
                {/* DBK, RODTEP, Scrip No. (original BOE layout) */}
-               <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8 pb-8 border-b border-slate-50">
+               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 mb-8 pb-8 border-b border-slate-50">
                    <div>
                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">DBK</label>
                        {editAll ? (
@@ -1566,7 +1638,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                    </div>
                </div>
                
-               <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
                   <div>
                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Basic Customs Duty (BCD)</label>
                      {editAll ? <input type="number" className="w-full px-2 py-1 border rounded font-bold" value={dutiesData.dutyBCD} onChange={e => setDutiesData({...dutiesData, dutyBCD: parseFloat(e.target.value)})} /> 
@@ -1598,7 +1670,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   </div>
                </div>
 
-               <div className="mt-6 pt-6 border-t border-slate-50 grid grid-cols-2 md:grid-cols-4 gap-6">
+               <div className="mt-6 pt-6 border-t border-slate-50 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
                   <div className="md:col-span-3"></div>
                   <div className="bg-emerald-50 p-2 rounded-lg border border-emerald-100">
                      <label className="block text-[9px] font-black text-emerald-600 uppercase tracking-widest mb-1">IGST Payable</label>
@@ -1612,7 +1684,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
           {/* Payment Ledger */}
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
-             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+             <div className="p-6 border-b border-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
                <div className="flex items-center gap-2">
                    <h2 className="text-xs font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><CreditCard size={16} /> Payment Ledger</h2>
                    {shipment.paymentDueDate && (
@@ -1632,7 +1704,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     if (paymentAdviceInputRef.current) paymentAdviceInputRef.current.value = '';
                     setShowPaymentModal(true);
                   }}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+                  className="flex items-center gap-2 px-4 py-3 md:py-2 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 min-h-[44px] md:min-h-0"
                >
                  <Plus size={14} /> Add Payment
                </button>
@@ -1660,7 +1732,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                </div>
              </div>
              )}
-             <div className="px-6 py-4 grid grid-cols-2 gap-4 border-b border-slate-100 bg-slate-50/30">
+             <div className="px-6 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4 border-b border-slate-100 bg-slate-50/30">
                <div><p className="text-[9px] font-black uppercase text-slate-400">Total ({shipment.currency})</p><p className="text-sm font-black text-slate-800">{formatCurrency(paymentSummary.totalFC, shipment.currency)}</p></div>
                <div><p className="text-[9px] font-black uppercase text-amber-600">Pending</p><p className="text-sm font-black text-amber-700">{formatCurrency(paymentSummary.pendingFC, shipment.currency)}</p></div>
              </div>
@@ -1686,7 +1758,8 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
              )}
              <div className="p-6">
                {(shipment.payments || []).length > 0 ? (
-                 <table className="w-full">
+                 <div className="w-full overflow-x-auto">
+                 <table className="w-full min-w-[760px]">
                     <thead>
                        <tr className="text-left text-[9px] font-black uppercase text-slate-400 border-b pb-2">
                           <th className="pb-3 pl-2">Date</th>
@@ -1734,6 +1807,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                        ))}
                     </tbody>
                  </table>
+                 </div>
                ) : (
                  <p className="text-center text-slate-400 italic text-sm py-4">No payments recorded yet.</p>
                )}
@@ -2224,7 +2298,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                     )}
                  </div>
                  )}
-                 <div className="grid grid-cols-2 gap-4">
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                    <div>
                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-2">Currency</label>
                       <p className="w-full px-4 py-2 rounded-xl border font-bold bg-slate-50 text-slate-800">{shipment.currency}</p>
@@ -2279,7 +2353,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      </p>
                    )}
                  </div>
-                 <button onClick={handleAddPayment} className="w-full py-3 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-700 mt-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled={exceedsInvoice || exceedsLCRemaining || (isExport && !(Number(newPayment.amount) > 0)) || !paymentAdviceFile}>
+                 <button onClick={handleAddPayment} className="w-full py-3 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-700 mt-2 disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] md:min-h-0" disabled={exceedsInvoice || exceedsLCRemaining || (isExport && !(Number(newPayment.amount) > 0)) || !paymentAdviceFile}>
                     Save Transaction
                  </button>
               </div>
@@ -2294,3 +2368,4 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 };
 
 export default ShipmentDetails;
+

@@ -16,8 +16,15 @@ function createRouter() {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const query = req.query || {};
-      const olderThanDays = body.olderThanDays ?? query.olderThanDays;
-      const options = olderThanDays != null ? { olderThanDays: Math.max(1, parseInt(olderThanDays, 10)) } : {};
+      const olderThanDaysRaw = body.olderThanDays ?? query.olderThanDays;
+      let options = {};
+      if (olderThanDaysRaw != null) {
+        const parsed = parseInt(String(olderThanDaysRaw), 10);
+        if (Number.isNaN(parsed)) {
+          return res.status(400).json({ success: false, error: 'olderThanDays must be a valid integer.' });
+        }
+        options = { olderThanDays: Math.max(1, parsed) };
+      }
       const result = await exportAndArchive(db, options);
       res.json({ success: true, count: result.count, filePath: result.filePath });
     } catch (e) {

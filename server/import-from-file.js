@@ -13,7 +13,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const XLSX = require('xlsx');
+const XlsxPopulate = require('xlsx-populate');
 const db = require('./db');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -36,13 +36,71 @@ function listExcelFiles(dir) {
     .map((f) => path.join(dir, f));
 }
 
-function sheetToRows(filePath) {
-  const buf = fs.readFileSync(filePath);
-  const wb = XLSX.read(buf, { type: 'buffer' });
-  const first = wb.SheetNames[0];
-  if (!first) return [];
-  const ws = wb.Sheets[first];
-  return XLSX.utils.sheet_to_json(ws);
+function cellValueToString(value) {
+  if (value == null) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map((p) => p?.text || '').join('').trim();
+    if (typeof value.text === 'string') return value.text.trim();
+    if (typeof value.hyperlink === 'string') return String(value.text || value.hyperlink).trim();
+    if (value.result != null) return cellValueToString(value.result);
+  }
+  return String(value).trim();
+}
+
+function cellValueToPlain(value) {
+  if (value == null) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map((p) => p?.text || '').join('');
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.hyperlink === 'string') return value.text || value.hyperlink;
+    if (value.result != null) return cellValueToPlain(value.result);
+    if (typeof value.formula === 'string') return value.formula;
+  }
+  return String(value);
+}
+
+function uniqueHeaders(rawHeaders) {
+  const seen = new Map();
+  return rawHeaders.map((raw, index) => {
+    const base = (raw || `Column ${index + 1}`).trim() || `Column ${index + 1}`;
+    const count = (seen.get(base) || 0) + 1;
+    seen.set(base, count);
+    return count === 1 ? base : `${base}_${count}`;
+  });
+}
+
+async function sheetToRows(filePath) {
+  const wb = await XlsxPopulate.fromFileAsync(filePath);
+  const ws = wb.sheet(0);
+  if (!ws) return [];
+  const used = ws.usedRange();
+  if (!used) return [];
+  const maxCols = used.endCell().columnNumber();
+  const maxRows = used.endCell().rowNumber();
+  if (maxCols <= 0 || maxRows <= 0) return [];
+  const rawHeaders = [];
+  for (let col = 1; col <= maxCols; col += 1) {
+    rawHeaders.push(cellValueToString(ws.cell(1, col).value()));
+  }
+  const headers = uniqueHeaders(rawHeaders);
+
+  const rows = [];
+  for (let rowIndex = 2; rowIndex <= maxRows; rowIndex += 1) {
+    const out = {};
+    let hasAny = false;
+    for (let col = 1; col <= headers.length; col += 1) {
+      const value = cellValueToPlain(ws.cell(rowIndex, col).value());
+      if (value !== '' && value != null) hasAny = true;
+      out[headers[col - 1]] = value;
+    }
+    if (hasAny) rows.push(out);
+  }
+  return rows;
 }
 
 function inferType(filePath) {
@@ -204,7 +262,7 @@ function importMaterials(rows) {
   return filtered.length;
 }
 
-function main() {
+async function main() {
   const { folder, singleFile } = getFolderOrFile();
   if (singleFile) console.log('Import file:', singleFile);
   else console.log('Import folder:', folder);
@@ -234,7 +292,7 @@ function main() {
       console.log('Skip (unknown type):', path.basename(filePath));
       continue;
     }
-    const raw = sheetToRows(filePath);
+    const raw = await sheetToRows(filePath);
     if (raw.length === 0) {
       console.log('Skip (no rows):', path.basename(filePath));
       continue;
@@ -261,4 +319,7 @@ function main() {
   console.log('Done. Total: suppliers', totalSuppliers, ', buyers', totalBuyers, ', materials', totalMaterials);
 }
 
-main();
+main().catch((err) => {
+  console.error('Import failed:', err && err.message ? err.message : err);
+  process.exit(1);
+});

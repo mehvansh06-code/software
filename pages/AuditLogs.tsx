@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ClipboardList, RefreshCw, Filter, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { api } from '../api';
 
@@ -158,6 +158,8 @@ export default function AuditLogs() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [limit, setLimit] = useState(200);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [archiveDays, setArchiveDays] = useState(10);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportMessage, setExportMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -185,6 +187,24 @@ export default function AuditLogs() {
   useEffect(() => {
     loadLogs();
   }, [loadLogs]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [userId, action, targetId, from, to, limit]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [logs.length]);
+
+  const totalRows = logs.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedLogs = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return logs.slice(start, start + pageSize);
+  }, [logs, safePage, pageSize]);
+  const startRow = totalRows === 0 ? 0 : ((safePage - 1) * pageSize + 1);
+  const endRow = Math.min(totalRows, safePage * pageSize);
 
   const handleExportAndArchive = async () => {
     setExportMessage(null);
@@ -219,11 +239,11 @@ export default function AuditLogs() {
             <p className="text-slate-500 text-sm">Who did what and when</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
           <button
             type="button"
             onClick={() => setShowFilters((s) => !s)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors min-h-[44px]"
           >
             <Filter size={18} />
             Filters
@@ -233,7 +253,7 @@ export default function AuditLogs() {
             type="button"
             onClick={loadLogs}
             disabled={loading}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 text-white hover:bg-slate-700 disabled:opacity-50 transition-colors"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 text-white hover:bg-slate-700 disabled:opacity-50 transition-colors min-h-[44px]"
           >
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
             Refresh
@@ -366,8 +386,40 @@ export default function AuditLogs() {
         ) : logs.length === 0 ? (
           <div className="p-12 text-center text-slate-500">No audit log entries found.</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left table-fixed">
+          <div>
+            <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs font-semibold text-slate-600">
+                Showing {startRow}-{endRow} of {totalRows} logs
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs font-semibold text-slate-500">Rows</label>
+                <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value) || 50)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700">
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
+                <button type="button" onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1} className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 bg-white disabled:opacity-40">Prev</button>
+                <span className="text-xs font-bold text-slate-600 min-w-[64px] text-center">{safePage} / {totalPages}</span>
+                <button type="button" onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages} className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 bg-white disabled:opacity-40">Next</button>
+              </div>
+            </div>
+          <div className="md:hidden p-3 space-y-3">
+            {pagedLogs.map((entry) => (
+              <article key={entry.id} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-200 text-slate-800 text-[10px] font-bold">
+                    {getActionLabel(entry.action)}
+                  </span>
+                  <p className="text-[10px] text-slate-500 whitespace-nowrap">{formatDate(entry.timestamp)}</p>
+                </div>
+                <p className="text-sm text-slate-900 break-words">{getNarration(entry)}</p>
+                <p className="text-[11px] text-slate-600">{entry.userName || entry.userId || '—'}</p>
+              </article>
+            ))}
+          </div>
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-left table-fixed min-w-[900px]">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80">
                   <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider w-[11rem]">Time</th>
@@ -377,7 +429,7 @@ export default function AuditLogs() {
                 </tr>
               </thead>
               <tbody>
-                {logs.map((entry) => (
+                {pagedLogs.map((entry) => (
                   <tr key={entry.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                     <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap align-top">{formatDate(entry.timestamp)}</td>
                     <td className="px-4 py-3 text-sm text-slate-900 min-w-0 break-words overflow-hidden align-top" title={getNarration(entry)}>
@@ -393,6 +445,7 @@ export default function AuditLogs() {
                 ))}
               </tbody>
             </table>
+          </div>
           </div>
         )}
       </div>

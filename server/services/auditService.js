@@ -54,6 +54,23 @@ const ACTION_LABELS = {
   LC_CREATED: 'LC created',
   LC_UPDATED: 'LC updated',
   LC_DELETED: 'LC deleted',
+  LOGIN_SUCCESS: 'Login success',
+  LOGIN_BLOCKED_ACTIVE_SESSION: 'Login blocked (active session)',
+  SESSION_IDLE_TIMEOUT: 'Session timed out (idle)',
+  LOGOUT: 'Logout',
+  SESSION_UNLOCKED_BY_ADMIN: 'Session unlocked by admin',
+  MATERIAL_CREATED: 'Material created',
+  MATERIAL_UPDATED: 'Material updated',
+  MATERIAL_DELETED: 'Material deleted',
+  MATERIALS_IMPORTED: 'Materials imported',
+  DOMESTIC_BUYER_CREATED: 'Domestic buyer created',
+  DOMESTIC_BUYER_UPDATED: 'Domestic buyer updated',
+  DOMESTIC_BUYER_DELETED: 'Domestic buyer deleted',
+  DOMESTIC_BUYERS_IMPORTED: 'Domestic buyers imported',
+  INDENT_PRODUCT_CREATED: 'Indent product created',
+  INDENT_PRODUCT_UPDATED: 'Indent product updated',
+  INDENT_PRODUCT_DELETED: 'Indent product deleted',
+  INDENT_PRODUCTS_IMPORTED: 'Indent products imported',
 };
 
 function getActionLabel(action) {
