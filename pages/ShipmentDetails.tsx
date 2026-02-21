@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType, ShipmentLicenceImportLine, ShipmentLicenceExportLine } from '../types';
+import { Shipment, ShipmentStatus, User, UserRole, Licence, Supplier, Buyer, ShipmentHistory, PaymentLog, LicenceType, LetterOfCredit, IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST, ShipmentItem, STANDARDISED_UNITS, ProductType, ShipmentLicenceImportLine, ShipmentLicenceExportLine, ShipmentInstallment } from '../types';
 import { SHIPMENT_STATUS_ORDER_IMPORT, SHIPMENT_STATUS_ORDER_EXPORT, getShipmentStatusLabel, formatINR, formatDate, formatCurrency } from '../constants';
 import { 
   ArrowLeft, 
@@ -82,6 +82,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   const [logisticsData, setLogisticsData] = useState({
     blNumber: '',
     blDate: '',
+    shipmentMode: 'SEA' as 'SEA' | 'AIR' | 'ROAD' | 'RAIL',
     containerNumber: '',
     shippingLine: '',
     trackingUrl: '',
@@ -146,6 +147,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   });
   const [paymentAdviceFile, setPaymentAdviceFile] = useState<File | null>(null);
   const paymentAdviceInputRef = React.useRef<HTMLInputElement>(null);
+  const [installments, setInstallments] = useState<ShipmentInstallment[]>([]);
+  const [installmentsLoading, setInstallmentsLoading] = useState(false);
+  const [installmentForm, setInstallmentForm] = useState<{ dueDate: string; plannedAmountFC: string }>({
+    dueDate: '',
+    plannedAmountFC: '',
+  });
+  const [editingInstallmentId, setEditingInstallmentId] = useState<string | null>(null);
 
   const [documentsFolderPath, setDocumentsFolderPath] = useState<string | null>(shipment?.documentsFolderPath ?? null);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -184,6 +192,23 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     }).catch(() => setFolderFiles([])).finally(() => setLoadingDocFiles(false));
   }, [shipment?.id]);
 
+  const refetchInstallments = useCallback(async () => {
+    if (!shipment?.id) {
+      setInstallments([]);
+      return;
+    }
+    setInstallmentsLoading(true);
+    try {
+      const resp = await api.shipments.getInstallments(shipment.id);
+      const list = Array.isArray(resp?.items) ? resp.items : [];
+      setInstallments(list as ShipmentInstallment[]);
+    } catch (_) {
+      setInstallments([]);
+    } finally {
+      setInstallmentsLoading(false);
+    }
+  }, [shipment?.id]);
+
   const parseNum = (s: string): number | undefined => {
     if (!s || typeof s !== 'string') return undefined;
     const val = parseFloat(s.replace(/,/g, ''));
@@ -201,7 +226,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       await api.shipments.uploadFiles(shipment.id, formData, payload.docType);
       const update: any = { ...shipment, version: shipment.version };
       // BOE = import only; SB = export only. Each document contains only data under its own header.
-      // Bill of Lading details (container, BL no/date, shipping line) and Invoice details are separate sections — not applied from BOE/SB.
+      // {billDocLabel} Details (container, BL no/date, shipping line) and Invoice details are separate sections — not applied from BOE/SB.
       if (reviewed.portCode !== undefined) update.portCode = reviewed.portCode || null;
 
       if (payload.docType === 'BOE') {
@@ -284,6 +309,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   }, [shipment?.id]);
 
   useEffect(() => {
+    void refetchInstallments();
+  }, [refetchInstallments]);
+
+  useEffect(() => {
     if (!shipment) return;
     // Don't overwrite form state while user is editing invoice/details — prevents reverting invoice date etc. after save
     if (editAll) return;
@@ -301,6 +330,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setLogisticsData({
       blNumber: shipment.blNumber || '',
       blDate: shipment.blDate || '',
+      shipmentMode: (shipment.shipmentMode || 'SEA') as 'SEA' | 'AIR' | 'ROAD' | 'RAIL',
       containerNumber: shipment.containerNumber || '',
       shippingLine: shipment.shippingLine || '',
       trackingUrl: shipment.trackingUrl || '',
@@ -358,6 +388,9 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
   }, [shipment, editAll, licences]);
 
   const isExport = !!(shipment?.buyerId);
+  const currentShipmentMode = (logisticsData.shipmentMode || shipment?.shipmentMode || 'SEA') as 'SEA' | 'AIR' | 'ROAD' | 'RAIL';
+  const isAirShipment = currentShipmentMode === 'AIR';
+  const billDocLabel = isAirShipment ? 'Airway Bill' : 'Bill of Lading';
   const partnerName = shipment
     ? (isExport
       ? (buyers.find(b => b.id === shipment.buyerId)?.name || 'Unknown Buyer')
@@ -386,10 +419,64 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       if (p.currency === 'INR') return p.amount / (shipment.exchangeRate || 1);
       return 0;
     };
-    const receivedFC = (shipment.payments || []).filter(p => p.received === true).reduce((sum, p) => sum + toFC(p), 0);
-    const pendingFC = Math.max(0, (totalFC ?? 0) - receivedFC);
-    return { totalFC: totalFC ?? 0, receivedFC, pendingFC };
+    const settledFC = (shipment.payments || [])
+      .filter((p) => (isExport ? p.received === true : true))
+      .reduce((sum, p) => sum + toFC(p), 0);
+    const pendingFC = Math.max(0, (totalFC ?? 0) - settledFC);
+    return { totalFC: totalFC ?? 0, receivedFC: settledFC, pendingFC };
   }, [shipment, isExport]);
+
+  const installmentKind = isExport ? 'INCOMING' : 'OUTGOING';
+  const installmentRows = useMemo(() => {
+    const list = (installments || [])
+      .filter((it) => it.kind === installmentKind)
+      .slice()
+      .sort((a, b) => {
+        const da = String(a.dueDate || '');
+        const db = String(b.dueDate || '');
+        if (da < db) return -1;
+        if (da > db) return 1;
+        const sa = Number(a.sortOrder || 0);
+        const sb = Number(b.sortOrder || 0);
+        return sa - sb;
+      });
+    let runningApplied = Math.max(0, isExport ? paymentSummary.receivedFC : (shipment?.payments || []).reduce((sum, p) => {
+      if (!shipment) return sum;
+      if (p.currency === shipment.currency) return sum + (Number(p.amount) || 0);
+      if (p.currency === 'INR') return sum + ((Number(p.amount) || 0) / (shipment.exchangeRate || 1));
+      return sum;
+    }, 0));
+    return list.map((it) => {
+      const planned = Math.max(0, Number(it.plannedAmountFC) || 0);
+      const applied = Math.min(runningApplied, planned);
+      runningApplied = Math.max(0, runningApplied - applied);
+      const pending = Math.max(0, planned - applied);
+      return { ...it, planned, applied, pending };
+    });
+  }, [installments, installmentKind, isExport, paymentSummary.receivedFC, shipment]);
+
+  const installmentTotals = useMemo(() => {
+    const invoiceTotal = Number(paymentSummary.totalFC || 0);
+    const plannedTotal = installmentRows.reduce((s, r) => s + r.planned, 0);
+    const paidOrReceived = isExport
+      ? Number(paymentSummary.receivedFC || 0)
+      : (shipment?.payments || []).reduce((sum, p) => {
+          if (!shipment) return sum;
+          if (p.currency === shipment.currency) return sum + (Number(p.amount) || 0);
+          if (p.currency === 'INR') return sum + ((Number(p.amount) || 0) / (shipment.exchangeRate || 1));
+          return sum;
+        }, 0);
+    const pendingFromInstallments = installmentRows.reduce((s, r) => s + r.pending, 0);
+    const residualPlanned = Math.max(0, invoiceTotal - plannedTotal);
+    const residualPending = Math.max(0, residualPlanned - Math.max(0, paidOrReceived - plannedTotal));
+    return {
+      invoiceTotal,
+      plannedTotal,
+      residualPlanned,
+      paidOrReceived,
+      pendingTotal: Math.max(0, pendingFromInstallments + residualPending),
+    };
+  }, [paymentSummary.totalFC, paymentSummary.receivedFC, installmentRows, isExport, shipment]);
 
   const { documentCheckerRows, otherFiles } = useMemo(() => {
     const invRef = (shipment?.invoiceNumber || '')
@@ -427,9 +514,13 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     const hasProformaDoc =
       !!(shipment as any)?.documents?.PI ||
       folderFiles.some((f) => /^PI_/i.test((f || '').replace(/\.[^/.]+$/, '').trim()));
-    const staticList = isExport
+    const baseList = isExport
       ? EXPORT_DOCUMENT_CHECKLIST
       : IMPORT_DOCUMENT_CHECKLIST.filter((doc) => doc.id !== 'PI' || hasProformaDoc);
+    const staticList = baseList.filter((doc) => {
+      if (isAirShipment) return doc.id !== 'BL';
+      return doc.id !== 'AWB';
+    });
     const matchedNames = new Set<string>();
     staticList.forEach((doc) => {
       const prefix = (doc as { prefix?: string }).prefix || doc.id + '_';
@@ -454,7 +545,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     });
     const other = folderFiles.filter((f) => !matchedNames.has(f));
     return { documentCheckerRows: rows, otherFiles: other };
-  }, [shipment?.invoiceNumber, shipment?.payments, (shipment as any)?.lodgement, isExport, folderFiles]);
+  }, [shipment?.invoiceNumber, shipment?.payments, (shipment as any)?.lodgement, isExport, folderFiles, isAirShipment]);
 
   const allShipmentDetailsFilled = useMemo(() => {
     if (!shipment) return false;
@@ -773,6 +864,79 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     setEditDuties(false);
   };
 
+  const handleEditInstallment = (row: ShipmentInstallment) => {
+    setEditingInstallmentId(row.id);
+    setInstallmentForm({
+      dueDate: row.dueDate || '',
+      plannedAmountFC: String(Number(row.plannedAmountFC || 0)),
+    });
+  };
+
+  const resetInstallmentForm = () => {
+    setEditingInstallmentId(null);
+    setInstallmentForm({ dueDate: '', plannedAmountFC: '' });
+  };
+
+  const handleSaveInstallment = async () => {
+    if (!shipment) return;
+    const amount = Number(installmentForm.plannedAmountFC);
+    const plannedExcludingEditing = installmentRows
+      .filter((r) => r.id !== editingInstallmentId)
+      .reduce((sum, r) => sum + (Number(r.planned) || 0), 0);
+    const maxAllowed = Math.max(0, Number(paymentSummary.totalFC || 0) - plannedExcludingEditing);
+    if (!installmentForm.dueDate || !Number.isFinite(amount) || amount <= 0) {
+      setToastVariant('error');
+      setToastMessage('Installment due date and amount are required.');
+      setTimeout(() => setToastMessage(null), 4000);
+      return;
+    }
+    if (amount > maxAllowed + 0.0001) {
+      setToastVariant('error');
+      setToastMessage(`Amount cannot exceed remaining invoice value (${formatCurrency(maxAllowed, shipment.currency)}).`);
+      setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
+    try {
+      const payload = {
+        kind: installmentKind as 'OUTGOING' | 'INCOMING',
+        dueDate: installmentForm.dueDate,
+        plannedAmountFC: amount,
+        currency: shipment.currency,
+      };
+      if (editingInstallmentId) {
+        await api.shipments.updateInstallment(shipment.id, editingInstallmentId, payload);
+      } else {
+        await api.shipments.createInstallment(shipment.id, payload);
+      }
+      await refetchInstallments();
+      resetInstallmentForm();
+      setToastVariant('success');
+      setToastMessage('Installment plan saved.');
+      setTimeout(() => setToastMessage(null), 2500);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save installment.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
+  };
+
+  const handleDeleteInstallment = async (installmentId: string) => {
+    if (!shipment) return;
+    if (!window.confirm('Delete this installment row?')) return;
+    try {
+      await api.shipments.deleteInstallment(shipment.id, installmentId);
+      await refetchInstallments();
+      if (editingInstallmentId === installmentId) resetInstallmentForm();
+      setToastVariant('success');
+      setToastMessage('Installment deleted.');
+      setTimeout(() => setToastMessage(null), 2500);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to delete installment.');
+      setTimeout(() => setToastMessage(null), 5000);
+    }
+  };
+
   const handleAddPayment = async () => {
     if (!newPayment.amount || !newPayment.date) return;
     if (!paymentAdviceFile) {
@@ -857,7 +1021,14 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       ...(isExport && (newPayment.bankCharges != null && newPayment.bankCharges !== 0) ? { bankCharges: Number(newPayment.bankCharges) } : {})
     };
     const updated = { ...shipment, payments: [...(shipment.payments || []), payment] };
-    await onUpdate(updated);
+    try {
+      await onUpdate(updated);
+    } catch (e: any) {
+      setToastVariant('error');
+      setToastMessage(e?.message || 'Failed to save payment.');
+      setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
     if (shipment.isUnderLC && (newPayment.mode === 'LC' || newPayment.mode === 'Letter of Credit') && onRefreshData) {
       await onRefreshData();
     }
@@ -1030,7 +1201,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
               <AlertCircle size={22} className="text-amber-600 shrink-0" />
               <div>
                 <p className="text-xs font-black text-amber-800 uppercase tracking-wide">Reminder</p>
-                <p className="text-sm font-medium text-amber-800">Bill of Lading is filled. File lodgement with bank when documents are lodged.</p>
+                <p className="text-sm font-medium text-amber-800">{billDocLabel} is filled. File lodgement with bank when documents are lodged.</p>
               </div>
             </div>
           )}
@@ -1241,16 +1412,29 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
             </div>
           </div>
 
-          {/* Export: Bill of Lading details — BL number, date, container, seals, ports, expected shipment date */}
+          {/* Export: {billDocLabel} Details — BL number, date, container, seals, ports, expected shipment date */}
           {isExport && (
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
-               <h2 className="text-xs font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><FileText size={16} /> Bill of Lading Details</h2>
+               <h2 className="text-xs font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><FileText size={16} /> {billDocLabel} Details</h2>
             </div>
             <div className="p-8">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Bill of Lading No.</label>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipment Mode</label>
+                  {editAll ? (
+                    <select className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.shipmentMode} onChange={e => setLogisticsData({ ...logisticsData, shipmentMode: e.target.value as 'SEA' | 'AIR' | 'ROAD' | 'RAIL' })}>
+                      <option value="SEA">SEA</option>
+                      <option value="AIR">AIR</option>
+                      <option value="ROAD">ROAD</option>
+                      <option value="RAIL">RAIL</option>
+                    </select>
+                  ) : (
+                    <p className="text-sm font-bold text-slate-800">{logisticsData.shipmentMode || 'SEA'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{billDocLabel} No.</label>
                   {editAll ? (
                     <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.blNumber} onChange={e => setLogisticsData({...logisticsData, blNumber: e.target.value})} placeholder="e.g. BL123" />
                   ) : (
@@ -1258,7 +1442,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                   )}
                 </div>
                 <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">BL Date</label>
+                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{isAirShipment ? 'AWB Date' : 'BL Date'}</label>
                   {editAll ? (
                     <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold" value={logisticsData.blDate} onChange={e => setLogisticsData({...logisticsData, blDate: e.target.value})} />
                   ) : (
@@ -1448,6 +1632,19 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
             <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
                <div className="space-y-4">
                   <div>
+                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipment Mode</label>
+                    {editAll ? (
+                      <select className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.shipmentMode} onChange={e => setLogisticsData({ ...logisticsData, shipmentMode: e.target.value as 'SEA' | 'AIR' | 'ROAD' | 'RAIL' })}>
+                        <option value="SEA">SEA</option>
+                        <option value="AIR">AIR</option>
+                        <option value="ROAD">ROAD</option>
+                        <option value="RAIL">RAIL</option>
+                      </select>
+                    ) : (
+                      <p className="text-sm font-bold text-slate-800">{logisticsData.shipmentMode || 'SEA'}</p>
+                    )}
+                  </div>
+                  <div>
                     <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Shipping Line / Carrier</label>
                     {editAll ? (
                       <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.shippingLine} onChange={e => setLogisticsData({...logisticsData, shippingLine: e.target.value})} placeholder="e.g. MAERSK" />
@@ -1523,7 +1720,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">BL / AWB Number</label>
+                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{billDocLabel} Number</label>
                       {editAll ? (
                         <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.blNumber} onChange={e => setLogisticsData({...logisticsData, blNumber: e.target.value})} />
                       ) : (
@@ -1531,7 +1728,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                       )}
                     </div>
                     <div>
-                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">BL Date</label>
+                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{isAirShipment ? 'AWB Date' : 'BL Date'}</label>
                       {editAll ? (
                         <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.blDate} onChange={e => setLogisticsData({...logisticsData, blDate: e.target.value})} />
                       ) : (
@@ -1697,6 +1894,109 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
             </div>
           </div>
           )}
+
+          {/* Installment Plan */}
+          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between gap-3">
+              <h2 className="text-xs font-black uppercase text-slate-400 tracking-widest">Installment Plan</h2>
+              <span className="text-[10px] font-bold text-slate-500">
+                Mode: {installmentKind === 'OUTGOING' ? 'Supplier Payment' : 'Customer Receipt'}
+              </span>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[9px] font-black uppercase text-slate-400">Invoice</p>
+                  <p className="font-black text-slate-800">{formatCurrency(installmentTotals.invoiceTotal, shipment.currency)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[9px] font-black uppercase text-slate-400">Planned</p>
+                  <p className="font-black text-slate-800">{formatCurrency(installmentTotals.plannedTotal, shipment.currency)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[9px] font-black uppercase text-slate-400">Residual</p>
+                  <p className="font-black text-amber-700">{formatCurrency(installmentTotals.residualPlanned, shipment.currency)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[9px] font-black uppercase text-slate-400">{isExport ? 'Received' : 'Paid'}</p>
+                  <p className="font-black text-emerald-700">{formatCurrency(installmentTotals.paidOrReceived, shipment.currency)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[9px] font-black uppercase text-slate-400">Pending</p>
+                  <p className="font-black text-indigo-700">{formatCurrency(installmentTotals.pendingTotal, shipment.currency)}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <input
+                  type="date"
+                  value={installmentForm.dueDate}
+                  onChange={(e) => setInstallmentForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                  className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder={`Amount (${shipment.currency})`}
+                  value={installmentForm.plannedAmountFC}
+                  onChange={(e) => setInstallmentForm((prev) => ({ ...prev, plannedAmountFC: e.target.value }))}
+                  className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold"
+                />
+                <div className="md:col-span-2 flex gap-2">
+                  <button type="button" onClick={handleSaveInstallment} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest min-h-[44px]">
+                    {editingInstallmentId ? 'Update Row' : 'Add Row'}
+                  </button>
+                  {editingInstallmentId && (
+                    <button type="button" onClick={resetInstallmentForm} className="px-4 py-2 rounded-xl bg-slate-200 text-slate-700 text-[10px] font-black uppercase tracking-widest min-h-[44px]">
+                      Cancel Edit
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="w-full overflow-x-auto">
+                <table className="w-full min-w-[520px] text-xs table-fixed">
+                  <colgroup>
+                    <col className="w-[160px]" />
+                    <col className="w-[180px]" />
+                    <col className="w-[130px]" />
+                  </colgroup>
+                  <thead>
+                    <tr className="text-left text-[9px] font-black uppercase text-slate-400 border-b">
+                      <th className="py-2 pr-3">Date</th>
+                      <th className="py-2 pr-3 text-right">Amount</th>
+                      <th className="py-2 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {installmentRows.map((row) => (
+                      <tr key={row.id}>
+                        <td className="py-2 pr-3 font-bold text-slate-700">{formatDate(row.dueDate)}</td>
+                        <td className="py-2 pr-3 text-right font-bold text-slate-800">{formatCurrency(row.planned, shipment.currency)}</td>
+                        <td className="py-2">
+                          <div className="flex justify-end gap-2">
+                            <button type="button" onClick={() => handleEditInstallment(row)} className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-[10px] font-black uppercase">Edit</button>
+                            <button type="button" onClick={() => handleDeleteInstallment(row.id)} className="px-2 py-1 rounded-lg bg-red-50 text-red-600 text-[10px] font-black uppercase">Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!installmentsLoading && installmentRows.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="py-6 text-center text-slate-400 italic">No installment rows yet. Add rows to enable installment-based cashflow.</td>
+                      </tr>
+                    )}
+                    {installmentsLoading && (
+                      <tr>
+                        <td colSpan={3} className="py-6 text-center text-slate-400 italic">Loading installment plan...</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
 
           {/* Payment Ledger */}
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
@@ -1947,6 +2247,7 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                      <ShipmentUpload
                        shipmentId={shipment.id}
                        isExport={isExport}
+                       shipmentMode={(logisticsData.shipmentMode || shipment.shipmentMode || 'SEA') as 'SEA' | 'AIR' | 'ROAD' | 'RAIL'}
                        onUploadSuccess={refetchFolderFiles}
                        onShipmentNotFound={async () => {
                          try {
@@ -2384,4 +2685,6 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 };
 
 export default ShipmentDetails;
+
+
 

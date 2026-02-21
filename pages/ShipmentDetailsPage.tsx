@@ -146,6 +146,7 @@ const ShipmentDetailsPage: React.FC = () => {
             <ShipmentUpload
               shipmentId={shipment.id}
               isExport={!!shipment.buyerId}
+              shipmentMode={(shipment.shipmentMode || 'SEA') as 'SEA' | 'AIR' | 'ROAD' | 'RAIL'}
               onUploadSuccess={handleUploadSuccess}
             />
 

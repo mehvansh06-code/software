@@ -180,6 +180,11 @@ async function generateBankPaymentDocBuffer(data) {
     const u = empty(it.unit) || 'KGS';
     const qtyAndUnit = it.quantity_and_unit || (qty && u ? `${qty} ${u}` : empty(data.quantity));
     const amt = formatItemAmount(it.amount);
+    const rowInvNo = empty(it.invoice_no) || invNo;
+    const rowInvDate = empty(it.invoice_date) || invDate;
+    const rowShipmentDate = empty(it.shipment_date) || shipDate;
+    const rowTerm = empty(it.term) || termVal;
+    const rowMode = empty(it.mode_shipment) || modeShipmentVal;
     return {
       description: desc,
       goods_desc: desc,
@@ -190,13 +195,13 @@ async function generateBankPaymentDocBuffer(data) {
       amount: amt,
       invoice_amount: invoiceAmount,
       invoice_value: invoiceAmount,
-      invoice_no: invNo,
-      invoice_date: invDate,
-      term: termVal,
+      invoice_no: rowInvNo,
+      invoice_date: rowInvDate,
+      term: rowTerm,
       currency: currCode,
       beneficiary_country: beneficiaryCountry,
-      mode_shipment: modeShipmentVal,
-      shipment_date: shipDate,
+      mode_shipment: rowMode,
+      shipment_date: rowShipmentDate,
     };
   });
 
@@ -209,9 +214,9 @@ async function generateBankPaymentDocBuffer(data) {
   const quantityVal = items.length > 1
     ? tableItems.map((it) => it.quantity_and_unit).filter(Boolean).join(', ')
     : empty(data.quantity);
-  const purposeVal = items.length > 1
+  const purposeVal = empty(data.purpose) || (items.length > 1
     ? 'PAYMENT FOR PURCHASE OF ' + (goodsDesc || '').toUpperCase()
-    : empty(data.purpose);
+    : '');
 
   const context = {
     company_choice: companyLabel,
@@ -353,8 +358,9 @@ async function generateBankPaymentDocBuffer(data) {
    * Uses [^}<]* after { so a run containing full { tag } is NOT treated as "open" (avoids corrupting valid tags).
    */
   function mergePlaceholdersInParagraph(paraContent) {
-    const runWithOpen = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\{[^}<]*<\/w:t>\s*<\/w:r>/;
-    const runWithClose = /<w:r[^>]*>[\s\S]*?<w:t[^>]*>[^<]*\}[^<]*<\/w:t>\s*<\/w:r>/;
+    // Match within a single run only (do not cross into next <w:r>), otherwise adjacent tags can be merged incorrectly.
+    const runWithOpen = /<w:r[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:t[^>]*>[^<]*\{[^}<]*<\/w:t>\s*<\/w:r>/;
+    const runWithClose = /<w:r[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:t[^>]*>[^<]*\}[^<]*<\/w:t>\s*<\/w:r>/;
     let out = '';
     let i = 0;
     while (i < paraContent.length) {
@@ -380,11 +386,15 @@ async function generateBankPaymentDocBuffer(data) {
       const fullTag = (textOpen + ' ' + textMiddle + ' ' + textClose).replace(/\s+/g, ' ').trim();
       const tagMatch = fullTag.match(/\{\s*([^}]+)\}/);
       const tagName = tagMatch ? tagMatch[1].trim() : '';
-      if (!tagName || tagName.startsWith('#') || tagName.startsWith('/')) {
+      if (!tagName) {
         out += openMatch[0] + middle + closeMatch[0];
       } else {
+        // Normalize normal placeholders and loop tags (#items, /items) into single-run tags.
+        const normalizedTag = tagName.startsWith('#') || tagName.startsWith('/')
+          ? tagName.replace(/\s+/g, '')
+          : normalizeTemplateTagName(tagName);
         const rPr = getRunRPr(openMatch[0]);
-        const safe = sanitizeTagName(tagName);
+        const safe = sanitizeTagName(normalizedTag || tagName);
         out += '<w:r>' + rPr + '<w:t>{' + escapeXml(safe) + '}</w:t></w:r>';
       }
       i += openMatch.index + openMatch[0].length + closeMatch.index + closeMatch[0].length;
@@ -474,7 +484,8 @@ async function generateBankPaymentDocBuffer(data) {
       (renderErr.properties && renderErr.properties.id === 'multi_error') ||
       /Multi error|TemplateError/i.test(String(renderErr.message || ''))
     );
-    if (isMultiOrTemplate && tableItems.length > 1) {
+    const isMultiAllocationRun = Array.isArray(data.allocations) && data.allocations.length > 1;
+    if (isMultiOrTemplate && tableItems.length > 1 && !isMultiAllocationRun) {
       // Fallback: collapse multiple product lines into one row and retry
       const merged = {
         description: tableItems.map((it) => it.description).filter(Boolean).join(', ') || empty(data.goods_desc),

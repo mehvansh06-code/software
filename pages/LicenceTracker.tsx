@@ -35,6 +35,32 @@ function normalizeHsnCode(v: string): string {
   return String(v || '').replace(/\D/g, '').slice(0, 8);
 }
 
+function addYearsIso(isoDate: string, years: number): string {
+  if (!isoDate) return '';
+  const d = new Date(isoDate);
+  if (Number.isNaN(d.getTime())) return '';
+  const next = new Date(d);
+  next.setFullYear(next.getFullYear() + years);
+  return next.toISOString().slice(0, 10);
+}
+
+function getExportDateForLicenceWindow(sh: Shipment): string | null {
+  return sh.beDate || (sh as any).sbDate || sh.blDate || sh.invoiceDate || sh.expectedShipmentDate || sh.createdAt || null;
+}
+
+function isWithinEpcgExportWindow(sh: Shipment, lic: Licence): boolean {
+  if (lic.type !== LicenceType.EPCG) return true;
+  const exportDateRaw = getExportDateForLicenceWindow(sh);
+  if (!exportDateRaw) return false;
+  const exportDate = new Date(exportDateRaw);
+  const installDate = lic.machineryInstallationDate ? new Date(`${lic.machineryInstallationDate}T00:00:00`) : null;
+  const validityDate = lic.expiryDate ? new Date(`${lic.expiryDate}T23:59:59.999`) : null;
+  if (Number.isNaN(exportDate.getTime())) return false;
+  if (!installDate || Number.isNaN(installDate.getTime())) return false;
+  if (!validityDate || Number.isNaN(validityDate.getTime())) return false;
+  return exportDate.getTime() >= installDate.getTime() && exportDate.getTime() <= validityDate.getTime();
+}
+
 function isPaymentRealized(sh: Shipment): boolean {
   const toFC = (p: { amount: number; currency: string }) =>
     p.currency === sh.currency ? p.amount : (p.currency === 'INR' ? p.amount / (sh.exchangeRate || 1) : 0);
@@ -104,7 +130,6 @@ function getPerProductUtilization(licence: Licence, allShipments: Shipment[]): A
     const limitQty = prod.quantityLimit || 0;
     const limitUSD = prod.amountUSDLimit || 0;
     const limitINR = prod.amountINR || 0;
-    const factor = (prod.uomConversionFactor != null && prod.uomConversionFactor > 0) ? prod.uomConversionFactor : 1;
     let utilizedQty = 0;
     let utilizedUSD = 0;
     let utilizedINR = 0;
@@ -120,7 +145,7 @@ function getPerProductUtilization(licence: Licence, allShipments: Shipment[]): A
         for (const a of allocs) {
           utilizedUSD += a.allocatedAmountUSD || 0;
           utilizedINR += a.allocatedAmountINR || 0;
-          utilizedQty += (a.allocatedQuantity || 0) / factor;
+          utilizedQty += (a.allocatedQuantity || 0);
         }
       } else if (Array.isArray(s.licenceImportLines) && s.licenceImportLines.length > 0) {
         const linesForProduct = s.licenceImportLines.filter((line: { productId?: string; productName?: string }) =>
@@ -129,7 +154,7 @@ function getPerProductUtilization(licence: Licence, allShipments: Shipment[]): A
         );
         for (const ln of linesForProduct) {
           const line = ln as { quantity?: number; amountUSD?: number; valueINR?: number };
-          utilizedQty += (line.quantity || 0) / factor;
+          utilizedQty += (line.quantity || 0);
           utilizedUSD += line.amountUSD || 0;
           utilizedINR += line.valueINR || 0;
         }
@@ -162,6 +187,9 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   const navigate = useNavigate();
   const { hasPermission } = usePermissions(user);
   const canDeleteLicence = hasPermission('licences.delete');
+  const canViewLicenceDocs = hasPermission('documents.view');
+  const canUploadLicenceDocs = hasPermission('documents.upload');
+  const canDeleteLicenceDocs = hasPermission('documents.delete');
   const [selectedLicence, setSelectedLicence] = useState<Licence | null>(null);
   const selectedLicenceResolved = licenceIdFromUrl ? (licences.find(l => l.id === licenceIdFromUrl) ?? null) : selectedLicence;
   const [showAddLicence, setShowAddLicence] = useState(false);
@@ -173,6 +201,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     type: LicenceType.ADVANCE,
     company: 'GFPL',
     issueDate: '',
+    machineryInstallationDate: '',
     importValidityDate: '',
     expiryDate: '',
     dutySaved: 0,
@@ -191,6 +220,10 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [licenceAuditMap, setLicenceAuditMap] = useState<Record<string, { user: string; action: string; date: string }>>({});
+  const [shipmentDocFiles, setShipmentDocFiles] = useState<Record<string, string[]>>({});
+  const [licenceFiles, setLicenceFiles] = useState<string[]>([]);
+  const [uploadingLicenceDocType, setUploadingLicenceDocType] = useState<'LICENCE_COPY' | 'BOND' | 'MIC' | null>(null);
+  const [licenceDocError, setLicenceDocError] = useState<string | null>(null);
 
   useEffect(() => {
     if (showAddLicence) {
@@ -222,15 +255,27 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   const advanceLicences = licences.filter(l => l.type === LicenceType.ADVANCE);
 
   const getFulfilledForDisplay = (licenceId: string) => {
-    if (!countOnlyRealizedExports) return getFulfilledForLicence(licenceId, shipments);
-    const realizedExports = shipments.filter((s) => !!s.buyerId && isPaymentRealized(s));
-    return getFulfilledForLicence(licenceId, realizedExports);
+    const lic = licences.find((l) => String(l.id) === String(licenceId));
+    let base = shipments;
+    if (countOnlyRealizedExports) {
+      base = base.filter((s) => !!s.buyerId && isPaymentRealized(s));
+    }
+    if (lic?.type === LicenceType.EPCG) {
+      base = base.filter((s) => isWithinEpcgExportWindow(s, lic));
+    }
+    return getFulfilledForLicence(licenceId, base);
   };
 
   const getFulfilledUSDForDisplay = (licenceId: string) => {
-    if (!countOnlyRealizedExports) return getFulfilledUSDForLicence(licenceId, shipments);
-    const realizedExports = shipments.filter((s) => !!s.buyerId && isPaymentRealized(s));
-    return getFulfilledUSDForLicence(licenceId, realizedExports);
+    const lic = licences.find((l) => String(l.id) === String(licenceId));
+    let base = shipments;
+    if (countOnlyRealizedExports) {
+      base = base.filter((s) => !!s.buyerId && isPaymentRealized(s));
+    }
+    if (lic?.type === LicenceType.EPCG) {
+      base = base.filter((s) => isWithinEpcgExportWindow(s, lic));
+    }
+    return getFulfilledUSDForLicence(licenceId, base);
   };
 
   const stats = {
@@ -305,6 +350,16 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
           }
         }
       }
+
+      if (lic.type === LicenceType.EPCG && !lic.machineryInstallationDate) {
+        out.push({
+          id: `epcg-install-missing-${lic.id}`,
+          licenceId: lic.id,
+          level: 'high',
+          title: `Machinery installation date missing for ${lic.number}`,
+          message: 'Set installation date. EPCG exports are valid only after machinery installation.',
+        });
+      }
     }
     return out;
   }, [licences, shipments]);
@@ -322,6 +377,128 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     setImportShipments(linked.filter(s => !!s.supplierId));
     setExportShipments(linked.filter(s => !!s.buyerId));
   }, [licenceIdFromUrl, selectedLicenceResolved?.id, shipments]);
+
+  useEffect(() => {
+    let mounted = true;
+    const shipmentIds = Array.from(new Set([...importShipments, ...exportShipments].map((s) => String(s.id)).filter(Boolean)));
+    if (shipmentIds.length === 0) {
+      setShipmentDocFiles({});
+      return;
+    }
+    const run = async () => {
+      const pairs = await Promise.all(shipmentIds.map(async (id) => {
+        try {
+          const res = await api.shipments.getDocumentsFolderFiles(id);
+          const files = Array.isArray(res?.files)
+            ? res.files.map((f: any) => (typeof f === 'string' ? f : f?.name)).filter(Boolean)
+            : [];
+          return [id, files as string[]] as const;
+        } catch (_) {
+          return [id, [] as string[]] as const;
+        }
+      }));
+      if (!mounted) return;
+      const map: Record<string, string[]> = {};
+      pairs.forEach(([id, files]) => { map[id] = files; });
+      setShipmentDocFiles(map);
+    };
+    void run();
+    return () => { mounted = false; };
+  }, [importShipments, exportShipments]);
+
+  useEffect(() => {
+    let mounted = true;
+    const licenceId = selectedLicenceResolved?.id;
+    if (!licenceId) {
+      setLicenceFiles([]);
+      setLicenceDocError(null);
+      return;
+    }
+    const run = async () => {
+      try {
+        const res = await api.licences.getDocumentsFolderFiles(licenceId);
+        const files = Array.isArray(res?.files)
+          ? res.files.map((f: any) => (typeof f === 'string' ? f : f?.name)).filter(Boolean)
+          : [];
+        if (!mounted) return;
+        setLicenceFiles(files as string[]);
+      } catch (_) {
+        if (!mounted) return;
+        setLicenceFiles([]);
+      }
+    };
+    void run();
+    return () => { mounted = false; };
+  }, [selectedLicenceResolved?.id]);
+
+  const hasShipmentDoc = (shipmentId: string, doc: 'BOE' | 'SB' | 'EBRC') => {
+    const files = shipmentDocFiles[String(shipmentId)] || [];
+    const strip = (v: string) => String(v || '').replace(/\.[^/.]+$/, '').toUpperCase();
+    const names = files.map(strip);
+    if (doc === 'BOE') return names.some((n) => /^BOE(_|$)/.test(n) || /^BEO(_|$)/.test(n) || n.includes('BILL_OF_ENTRY'));
+    if (doc === 'SB') return names.some((n) => /^SB(_|$)/.test(n) || n.includes('SHIPPING_BILL'));
+    return names.some((n) => /^EBRC(_|$)/.test(n) || /^E[-_]?BRC(_|$)/.test(n) || n.includes('E_BRC') || n.includes('EBRC'));
+  };
+
+  const getLicenceDocFiles = (docType: 'LICENCE_COPY' | 'BOND' | 'MIC') => {
+    const prefix = docType === 'LICENCE_COPY' ? 'LICENCE_COPY_' : docType === 'BOND' ? 'BOND_' : 'MIC_';
+    return (licenceFiles || []).filter((f) => String(f).toUpperCase().startsWith(prefix));
+  };
+
+  const refreshLicenceFiles = async () => {
+    const licenceId = selectedLicenceResolved?.id;
+    if (!licenceId) return;
+    const res = await api.licences.getDocumentsFolderFiles(licenceId);
+    const files = Array.isArray(res?.files)
+      ? res.files.map((f: any) => (typeof f === 'string' ? f : f?.name)).filter(Boolean)
+      : [];
+    setLicenceFiles(files as string[]);
+  };
+
+  const handleUploadLicenceDoc = async (docType: 'LICENCE_COPY' | 'BOND' | 'MIC', file: File | null) => {
+    if (!file) return;
+    if (!selectedLicenceResolved?.id) return;
+    setLicenceDocError(null);
+    setUploadingLicenceDocType(docType);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const out = await api.licences.uploadFile(selectedLicenceResolved.id, fd, docType);
+      if (!out.success) throw new Error(out.error || 'Upload failed');
+      await refreshLicenceFiles();
+    } catch (e: any) {
+      setLicenceDocError(String(e?.message || 'Failed to upload document.'));
+    } finally {
+      setUploadingLicenceDocType(null);
+    }
+  };
+
+  const handleDownloadLicenceDoc = async (filename: string) => {
+    if (!selectedLicenceResolved?.id) return;
+    try {
+      const blob = await api.licences.downloadFile(selectedLicenceResolved.id, filename);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e: any) {
+      setLicenceDocError(String(e?.message || 'Failed to download document.'));
+    }
+  };
+
+  const handleDeleteLicenceDoc = async (filename: string) => {
+    if (!selectedLicenceResolved?.id) return;
+    if (!window.confirm(`Delete "${filename}"?`)) return;
+    setLicenceDocError(null);
+    try {
+      await api.licences.deleteFile(selectedLicenceResolved.id, filename);
+      await refreshLicenceFiles();
+    } catch (e: any) {
+      setLicenceDocError(String(e?.message || 'Failed to delete document.'));
+    }
+  };
 
   const handleManage = (licence: Licence) => {
     navigate(`/licences/${licence.id}`);
@@ -472,6 +649,50 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
       return `Total import utilization ${formatINR(totalImport)} exceeds licence limit ${formatINR(importLimit)}.`;
     }
 
+    // Strict compliance rule:
+    // Import shipments can be linked/allocated only if BL Date is on or before import validity date.
+    if (lic.importValidityDate) {
+      const validityEnd = new Date(`${lic.importValidityDate}T23:59:59.999`);
+      if (!Number.isNaN(validityEnd.getTime())) {
+        for (const s of importShipments) {
+          const blDateRaw = s.blDate;
+          if (!blDateRaw) continue;
+          const shipmentDate = new Date(blDateRaw);
+          if (Number.isNaN(shipmentDate.getTime())) continue;
+          if (shipmentDate.getTime() > validityEnd.getTime()) {
+            return `Import shipment ${s.invoiceNumber || s.id} has BL Date ${formatDate(blDateRaw)} which is after import validity ${formatDate(lic.importValidityDate)}.`;
+          }
+        }
+      }
+    }
+
+    if (lic.type === LicenceType.EPCG) {
+      if (!lic.machineryInstallationDate) {
+        return 'Machinery installation date is required for EPCG licence.';
+      }
+      const installationDate = new Date(`${lic.machineryInstallationDate}T00:00:00`);
+      const validityEnd = new Date(`${lic.expiryDate}T23:59:59.999`);
+      if (Number.isNaN(installationDate.getTime()) || Number.isNaN(validityEnd.getTime())) {
+        return 'Invalid EPCG date setup. Check machinery installation date and export validity date.';
+      }
+      for (const s of exportShipments) {
+        const exportDateRaw = getExportDateForLicenceWindow(s);
+        if (!exportDateRaw) {
+          return `Export shipment ${s.invoiceNumber || s.id} has no export date (Shipping Bill/BL/Invoice date).`;
+        }
+        const exportDate = new Date(exportDateRaw);
+        if (Number.isNaN(exportDate.getTime())) {
+          return `Export shipment ${s.invoiceNumber || s.id} has invalid export date.`;
+        }
+        if (exportDate.getTime() < installationDate.getTime()) {
+          return `Export shipment ${s.invoiceNumber || s.id} date ${formatDate(exportDateRaw)} is before machinery installation date ${formatDate(lic.machineryInstallationDate)}.`;
+        }
+        if (exportDate.getTime() > validityEnd.getTime()) {
+          return `Export shipment ${s.invoiceNumber || s.id} date ${formatDate(exportDateRaw)} is after export validity date ${formatDate(lic.expiryDate)}.`;
+        }
+      }
+    }
+
     for (const p of (lic.importProducts || [])) {
       if (p.hsnCode && !/^\d{8}$/.test(normalizeHsnCode(p.hsnCode))) return `Import product HSN must be exactly 8 digits (${p.materialName || p.materialId}).`;
     }
@@ -503,6 +724,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
         await onUpdateShipment({ ...sh, licenceExportLines: [line] });
       }
       const totalFulfilled = exportShipments.reduce((sum, s) => {
+        if (lic.type === LicenceType.EPCG && !isWithinEpcgExportWindow(s, lic)) return sum;
         const def = getExportLineDefaults(s);
         return sum + (def.valueINR || 0);
       }, 0);
@@ -533,6 +755,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   }, 0);
   const isOverImportLimit = selectedLicenceResolved != null && totalImportUtilization > (selectedLicenceResolved.dutySaved || selectedLicenceResolved.amountImportINR || 0);
   const fulfilledFromExports = selectedLicenceResolved != null ? exportShipments.reduce((s, x) => {
+    if (selectedLicenceResolved.type === LicenceType.EPCG && !isWithinEpcgExportWindow(x, selectedLicenceResolved)) return s;
     if (countOnlyRealizedExports && !isPaymentRealized(x)) return s;
     if (Array.isArray(x.licenceAllocations) && x.licenceAllocations.length > 0) {
       return s + x.licenceAllocations.filter((a: any) => String(a.licenceId) === licenceIdForManage).reduce((s2: number, a: any) => s2 + (a.allocatedAmountINR || 0), 0);
@@ -840,7 +1063,15 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                     <select
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 font-bold bg-white text-sm"
                       value={editLicenceForm.type ?? LicenceType.ADVANCE}
-                      onChange={e => setEditLicenceForm(prev => ({ ...prev, type: e.target.value as LicenceType }))}
+                      onChange={e => setEditLicenceForm(prev => {
+                        const nextType = e.target.value as LicenceType;
+                        const baseIssueDate = String(prev.issueDate ?? selectedLicenceResolved?.issueDate ?? '');
+                        const patch: Partial<Licence> = { ...prev, type: nextType };
+                        if (nextType === LicenceType.EPCG) {
+                          patch.expiryDate = addYearsIso(baseIssueDate, 6);
+                        }
+                        return patch;
+                      })}
                     >
                       <option value={LicenceType.ADVANCE}>Advance Licence</option>
                       <option value={LicenceType.EPCG}>EPCG</option>
@@ -886,26 +1117,50 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                       type="date"
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 font-bold text-sm"
                       value={editLicenceForm.issueDate ?? ''}
-                      onChange={e => setEditLicenceForm(prev => ({ ...prev, issueDate: e.target.value }))}
+                      onChange={e => setEditLicenceForm(prev => {
+                        const nextIssueDate = e.target.value;
+                        const nextType = (prev.type ?? selectedLicenceResolved?.type ?? LicenceType.ADVANCE);
+                        const patch: Partial<Licence> = { ...prev, issueDate: nextIssueDate };
+                        if (nextType === LicenceType.EPCG) {
+                          patch.expiryDate = addYearsIso(nextIssueDate, 6);
+                        }
+                        return patch;
+                      })}
                     />
                   </div>
+                  {(editLicenceForm.type ?? selectedLicenceResolved?.type) === LicenceType.EPCG ? (
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Machinery installation date</label>
+                      <input
+                        type="date"
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 font-bold text-sm"
+                        value={editLicenceForm.machineryInstallationDate ?? ''}
+                        onChange={e => setEditLicenceForm(prev => ({ ...prev, machineryInstallationDate: e.target.value }))}
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Import Validity Date</label>
+                      <input
+                        type="date"
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 font-bold text-sm"
+                        value={editLicenceForm.importValidityDate ?? ''}
+                        onChange={e => setEditLicenceForm(prev => ({ ...prev, importValidityDate: e.target.value }))}
+                      />
+                    </div>
+                  )}
                   <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Import Validity Date</label>
-                    <input
-                      type="date"
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 font-bold text-sm"
-                      value={editLicenceForm.importValidityDate ?? ''}
-                      onChange={e => setEditLicenceForm(prev => ({ ...prev, importValidityDate: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Obligation due by</label>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Export validity date</label>
                     <input
                       type="date"
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 font-bold text-sm"
                       value={editLicenceForm.expiryDate ?? ''}
                       onChange={e => setEditLicenceForm(prev => ({ ...prev, expiryDate: e.target.value }))}
+                      disabled={(editLicenceForm.type ?? selectedLicenceResolved?.type) === LicenceType.EPCG}
                     />
+                    {(editLicenceForm.type ?? selectedLicenceResolved?.type) === LicenceType.EPCG && (
+                      <p className="text-[10px] text-slate-500 mt-1">Auto-set to 6 years from Opening Date.</p>
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -940,14 +1195,25 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                     type="button"
                     onClick={async () => {
                       if (!selectedLicenceResolved?.id || !editLicenceForm.number?.trim()) { alert('Licence number is required.'); return; }
+                      const nextType = editLicenceForm.type ?? selectedLicenceResolved.type;
+                      const nextIssueDate = editLicenceForm.issueDate ?? selectedLicenceResolved.issueDate;
+                      const nextExpiryDate = nextType === LicenceType.EPCG
+                        ? addYearsIso(String(nextIssueDate || ''), 6)
+                        : (editLicenceForm.expiryDate ?? selectedLicenceResolved.expiryDate);
+                      if (!nextIssueDate || !nextExpiryDate) { alert('Opening date and export validity date are required.'); return; }
+                      if (nextType === LicenceType.EPCG && !(editLicenceForm.machineryInstallationDate ?? selectedLicenceResolved.machineryInstallationDate)) {
+                        alert('Machinery installation date is required for EPCG licence.');
+                        return;
+                      }
                       const updated: Licence = {
                         ...selectedLicenceResolved,
-                        type: editLicenceForm.type ?? selectedLicenceResolved.type,
+                        type: nextType,
                         number: editLicenceForm.number,
                         company: (editLicenceForm.company as 'GFPL' | 'GTEX') ?? selectedLicenceResolved.company,
-                        issueDate: editLicenceForm.issueDate ?? selectedLicenceResolved.issueDate,
+                        issueDate: nextIssueDate,
+                        machineryInstallationDate: editLicenceForm.machineryInstallationDate ?? selectedLicenceResolved.machineryInstallationDate,
                         importValidityDate: editLicenceForm.importValidityDate ?? selectedLicenceResolved.importValidityDate,
-                        expiryDate: editLicenceForm.expiryDate ?? selectedLicenceResolved.expiryDate,
+                        expiryDate: nextExpiryDate,
                         dutySaved: Number(editLicenceForm.dutySaved) ?? selectedLicenceResolved.dutySaved,
                         eoRequired: Number(editLicenceForm.eoRequired) ?? selectedLicenceResolved.eoRequired,
                         eoFulfilled: selectedLicenceResolved.eoFulfilled,
@@ -986,6 +1252,88 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                 </div>
               </div>
             )}
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-4">
+              <h3 className="text-xs font-black uppercase text-slate-900 mb-3">Licence Documents</h3>
+              {!canViewLicenceDocs ? (
+                <p className="text-xs text-slate-500">You do not have permission to view licence documents.</p>
+              ) : (
+                <div className="space-y-3">
+                  {licenceDocError && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{licenceDocError}</div>
+                  )}
+
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-black uppercase text-slate-700">License Copy</p>
+                      {canUploadLicenceDocs && (
+                        <label className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-bold cursor-pointer">
+                          {uploadingLicenceDocType === 'LICENCE_COPY' ? 'Uploading...' : 'Upload'}
+                          <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0] || null; void handleUploadLicenceDoc('LICENCE_COPY', f); e.currentTarget.value = ''; }} disabled={uploadingLicenceDocType !== null} />
+                        </label>
+                      )}
+                    </div>
+                    <div className="mt-2">
+                      {getLicenceDocFiles('LICENCE_COPY').length > 0 ? getLicenceDocFiles('LICENCE_COPY').map((f) => (
+                        <div key={f} className="flex items-center justify-between gap-2 py-1.5">
+                          <button type="button" onClick={() => void handleDownloadLicenceDoc(f)} className="text-xs font-semibold text-indigo-700 hover:underline truncate">{f}</button>
+                          {canDeleteLicenceDocs && (
+                            <button type="button" onClick={() => void handleDeleteLicenceDoc(f)} className="text-[10px] font-bold text-red-600 hover:text-red-700 uppercase">Delete</button>
+                          )}
+                        </div>
+                      )) : <p className="text-xs text-slate-500">No file uploaded.</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-black uppercase text-slate-700">Bond</p>
+                      {canUploadLicenceDocs && (
+                        <label className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-bold cursor-pointer">
+                          {uploadingLicenceDocType === 'BOND' ? 'Uploading...' : 'Upload'}
+                          <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0] || null; void handleUploadLicenceDoc('BOND', f); e.currentTarget.value = ''; }} disabled={uploadingLicenceDocType !== null} />
+                        </label>
+                      )}
+                    </div>
+                    <div className="mt-2">
+                      {getLicenceDocFiles('BOND').length > 0 ? getLicenceDocFiles('BOND').map((f) => (
+                        <div key={f} className="flex items-center justify-between gap-2 py-1.5">
+                          <button type="button" onClick={() => void handleDownloadLicenceDoc(f)} className="text-xs font-semibold text-indigo-700 hover:underline truncate">{f}</button>
+                          {canDeleteLicenceDocs && (
+                            <button type="button" onClick={() => void handleDeleteLicenceDoc(f)} className="text-[10px] font-bold text-red-600 hover:text-red-700 uppercase">Delete</button>
+                          )}
+                        </div>
+                      )) : <p className="text-xs text-slate-500">No file uploaded.</p>}
+                    </div>
+                  </div>
+
+                  {selectedLicenceResolved.type === LicenceType.EPCG && (
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-black uppercase text-slate-700">Machinery Installation Certificate</p>
+                        {canUploadLicenceDocs && (
+                          <label className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-bold cursor-pointer">
+                            {uploadingLicenceDocType === 'MIC' ? 'Uploading...' : 'Upload'}
+                            <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0] || null; void handleUploadLicenceDoc('MIC', f); e.currentTarget.value = ''; }} disabled={uploadingLicenceDocType !== null} />
+                          </label>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1">Multiple files allowed.</p>
+                      <div className="mt-2">
+                        {getLicenceDocFiles('MIC').length > 0 ? getLicenceDocFiles('MIC').map((f) => (
+                          <div key={f} className="flex items-center justify-between gap-2 py-1.5">
+                            <button type="button" onClick={() => void handleDownloadLicenceDoc(f)} className="text-xs font-semibold text-indigo-700 hover:underline truncate">{f}</button>
+                            {canDeleteLicenceDocs && (
+                              <button type="button" onClick={() => void handleDeleteLicenceDoc(f)} className="text-[10px] font-bold text-red-600 hover:text-red-700 uppercase">Delete</button>
+                            )}
+                          </div>
+                        )) : <p className="text-xs text-slate-500">No file uploaded.</p>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               <div className="bg-amber-50 p-6 rounded-2xl border border-amber-100">
@@ -1079,22 +1427,28 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                     const exRate = sh.exchangeRate || 1;
                     return (
                       <div key={sh.id} className="bg-slate-50 rounded-2xl border border-slate-100 overflow-hidden">
-                        <div className="px-4 py-3 border-b border-slate-200 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white/50">
+                        <div className="px-4 py-3 border-b border-slate-200 grid grid-cols-2 md:grid-cols-5 gap-4 bg-white/50">
                           <div>
                             <span className="text-[9px] font-black uppercase text-slate-400 block">Invoice</span>
                             <span className="text-sm font-bold text-slate-900">{sh.invoiceNumber || '—'}</span>
                           </div>
                           <div>
                             <span className="text-[9px] font-black uppercase text-slate-400 block">Bill of Entry No.</span>
-                            <span className="text-sm font-bold text-slate-900">{sh.boeNumber || '—'}</span>
+                            <span className="text-sm font-bold text-slate-900">{sh.beNumber || (sh as any).boeNumber || '—'}</span>
                           </div>
                           <div>
                             <span className="text-[9px] font-black uppercase text-slate-400 block">Bill of Entry Date</span>
-                            <span className="text-sm font-bold text-slate-900">{formatDate(sh.boeDate)}</span>
+                            <span className="text-sm font-bold text-slate-900">{formatDate(sh.beDate || (sh as any).boeDate)}</span>
                           </div>
                           <div>
                             <span className="text-[9px] font-black uppercase text-slate-400 block">Exchange rate</span>
                             <span className="text-sm font-bold text-slate-900">{exRate}</span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] font-black uppercase text-slate-400 block">Bill of Entry File</span>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase ${hasShipmentDoc(sh.id, 'BOE') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                              {hasShipmentDoc(sh.id, 'BOE') ? 'Available' : 'Missing'}
+                            </span>
                           </div>
                         </div>
                         <div className="p-4">
@@ -1164,6 +1518,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                       <thead>
                         <tr className="bg-slate-50 text-left text-[9px] font-black text-slate-500 uppercase">
                           <th className="p-3">Invoice / Shipment</th>
+                          <th className="p-3">Documents</th>
                           <th className="p-3 text-right">Quantity</th>
                           <th className="p-3">UOM</th>
                           <th className="p-3 text-right">Value (INR)</th>
@@ -1173,9 +1528,21 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                       <tbody className="divide-y divide-slate-100">
                         {exportShipments.map(sh => {
                           const def = getExportLineDefaults(sh);
+                          const hasSb = hasShipmentDoc(sh.id, 'SB');
+                          const hasEbrc = hasShipmentDoc(sh.id, 'EBRC');
                           return (
                             <tr key={sh.id}>
                               <td className="p-3 font-bold text-slate-800">{sh.invoiceNumber || sh.id}</td>
+                              <td className="p-3">
+                                <div className="flex flex-wrap gap-1.5">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase ${hasSb ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                                    SB: {hasSb ? 'Available' : 'Missing'}
+                                  </span>
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase ${hasEbrc ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                                    e-BRC: {hasEbrc ? 'Available' : 'Missing'}
+                                  </span>
+                                </div>
+                              </td>
                               <td className="p-3 text-right">
                                 <input type="number" step="any" min="0" className="w-24 text-right px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold" value={def.quantity ?? ''} onChange={e => updateExportLine(sh.id, 'quantity', e.target.value)} />
                               </td>
@@ -1365,8 +1732,19 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
               className="p-8 overflow-y-auto space-y-8"
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (!newLicence.issueDate || !newLicence.expiryDate || !newLicence.number || !newLicence.company) {
-                  alert('Please fill Licence number, Opening date, and Export validity date.');
+                if (!newLicence.issueDate || !newLicence.number || !newLicence.company) {
+                  alert('Please fill Licence number and Opening date.');
+                  return;
+                }
+                if (newLicence.type === LicenceType.EPCG && !newLicence.machineryInstallationDate) {
+                  alert('Please fill Machinery installation date for EPCG licence.');
+                  return;
+                }
+                const computedExpiryDate = newLicence.type === LicenceType.EPCG
+                  ? addYearsIso(String(newLicence.issueDate || ''), 6)
+                  : String(newLicence.expiryDate || '');
+                if (!computedExpiryDate) {
+                  alert('Please fill Export validity date.');
                   return;
                 }
                 for (const row of newImportProducts) {
@@ -1391,8 +1769,9 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                   number: newLicence.number!,
                   type: newLicence.type ?? LicenceType.ADVANCE,
                   issueDate: newLicence.issueDate,
+                  machineryInstallationDate: newLicence.machineryInstallationDate || undefined,
                   importValidityDate: newLicence.importValidityDate || undefined,
-                  expiryDate: newLicence.expiryDate,
+                  expiryDate: computedExpiryDate,
                   dutySaved,
                   eoRequired,
                   eoFulfilled: 0,
@@ -1405,7 +1784,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                 };
                 await onAddItem(licence);
                 setShowAddLicence(false);
-                setNewLicence({ type: LicenceType.ADVANCE, company: 'GFPL', issueDate: '', importValidityDate: '', expiryDate: '', dutySaved: 0, eoRequired: 0, eoFulfilled: 0, status: 'ACTIVE', number: '', amountImportUSD: 0, amountImportINR: 0 });
+                setNewLicence({ type: LicenceType.ADVANCE, company: 'GFPL', issueDate: '', machineryInstallationDate: '', importValidityDate: '', expiryDate: '', dutySaved: 0, eoRequired: 0, eoFulfilled: 0, status: 'ACTIVE', number: '', amountImportUSD: 0, amountImportINR: 0 });
                 setNewImportProducts([]);
                 setNewExportProducts([]);
               }}
@@ -1420,7 +1799,18 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                   </div>
                   <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Licence Type</label>
-                    <select className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold bg-white" value={newLicence.type ?? LicenceType.ADVANCE} onChange={e => setNewLicence(prev => ({ ...prev, type: e.target.value as LicenceType }))}>
+                    <select
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold bg-white"
+                      value={newLicence.type ?? LicenceType.ADVANCE}
+                      onChange={e => setNewLicence(prev => {
+                        const nextType = e.target.value as LicenceType;
+                        const patch: Partial<Licence> = { ...prev, type: nextType };
+                        if (nextType === LicenceType.EPCG) {
+                          patch.expiryDate = addYearsIso(String(prev.issueDate || ''), 6);
+                        }
+                        return patch;
+                      })}
+                    >
                       <option value={LicenceType.ADVANCE}>Advance Licence</option>
                       <option value={LicenceType.EPCG}>EPCG</option>
                     </select>
@@ -1435,15 +1825,45 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Licence opening date</label>
-                    <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.issueDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, issueDate: e.target.value }))} required />
+                    <input
+                      type="date"
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+                      value={newLicence.issueDate ?? ''}
+                      onChange={e => setNewLicence(prev => {
+                        const nextIssueDate = e.target.value;
+                        const patch: Partial<Licence> = { ...prev, issueDate: nextIssueDate };
+                        if ((prev.type ?? LicenceType.ADVANCE) === LicenceType.EPCG) {
+                          patch.expiryDate = addYearsIso(nextIssueDate, 6);
+                        }
+                        return patch;
+                      })}
+                      required
+                    />
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Import validity (optional)</label>
-                    <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.importValidityDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, importValidityDate: e.target.value }))} />
-                  </div>
+                  {newLicence.type === LicenceType.EPCG ? (
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Machinery installation date</label>
+                      <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.machineryInstallationDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, machineryInstallationDate: e.target.value }))} required />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Import validity (optional)</label>
+                      <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.importValidityDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, importValidityDate: e.target.value }))} />
+                    </div>
+                  )}
                   <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Export validity date</label>
-                    <input type="date" className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold" value={newLicence.expiryDate ?? ''} onChange={e => setNewLicence(prev => ({ ...prev, expiryDate: e.target.value }))} required />
+                    <input
+                      type="date"
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+                      value={newLicence.expiryDate ?? ''}
+                      onChange={e => setNewLicence(prev => ({ ...prev, expiryDate: e.target.value }))}
+                      required
+                      disabled={newLicence.type === LicenceType.EPCG}
+                    />
+                    {newLicence.type === LicenceType.EPCG && (
+                      <p className="text-[10px] text-slate-500 mt-1">Auto-set to 6 years from Licence opening date.</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1462,7 +1882,6 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                         <th className="p-3">HSN</th>
                         <th className="p-3">Amount (USD)</th>
                         <th className="p-3">Amount (INR)</th>
-                        <th className="p-3">UOM factor</th>
                         <th className="p-3 w-12"></th>
                       </tr>
                     </thead>
@@ -1485,7 +1904,6 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                           <td className="p-2"><input type="text" className="w-full px-2 py-2 rounded-lg border font-bold text-sm" value={row.hsnCode || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, hsnCode: normalizeHsnCode(e.target.value) } : r))} placeholder="8-digit HSN" maxLength={8} inputMode="numeric" /></td>
                           <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountUSDLimit || ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountUSDLimit: parseFloat(e.target.value) || 0 } : r))} /></td>
                           <td className="p-2"><input type="number" step="any" min="0" className="w-full px-2 py-2 rounded-lg border font-bold" value={row.amountINR ?? ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, amountINR: parseFloat(e.target.value) || 0 } : r))} /></td>
-                          <td className="p-2"><input type="number" step="any" min="0" className="w-16 px-2 py-2 rounded-lg border font-bold text-xs" value={row.uomConversionFactor ?? ''} onChange={e => setNewImportProducts(prev => prev.map((r, i) => i === idx ? { ...r, uomConversionFactor: parseFloat(e.target.value) || undefined } : r))} placeholder="e.g. 2" title="Shipment units per 1 licence unit (e.g. 2 KGS = 1 SQM)" /></td>
                           <td className="p-2"><button type="button" onClick={() => setNewImportProducts(prev => prev.filter((_, i) => i !== idx))} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button></td>
                         </tr>
                       ))}
@@ -1496,7 +1914,7 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                         <td className="p-3" colSpan={2}></td>
                         <td className="p-3">{formatCurrency(newImportProducts.reduce((s, r) => s + (r.amountUSDLimit || 0), 0), 'USD')}</td>
                         <td className="p-3">{formatINR(newImportProducts.reduce((s, r) => s + (r.amountINR || 0), 0))}</td>
-                        <td className="p-3" colSpan={2}></td>
+                        <td className="p-3"></td>
                       </tr>
                     </tfoot>
                   </table>

@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { Upload, Loader2, FileUp, RefreshCw } from 'lucide-react';
 import { api } from '../api';
 import { IMPORT_DOCUMENT_CHECKLIST, EXPORT_DOCUMENT_CHECKLIST } from '../types';
@@ -14,12 +14,14 @@ export interface ShipmentUploadProps {
   onShipmentNotFound?: () => Promise<boolean>;
   /** When document type is BOE or SB, call this with extracted OCR data so parent can show review modal; parent then uploads file and updates shipment on confirm. */
   onOcrDataExtracted?: (payload: { file: File; data: any; docType: 'BOE' | 'SB' }) => void;
+  /** Shipment mode to default BL/AWB selection. AIR => AWB, others => BL. */
+  shipmentMode?: 'SEA' | 'AIR' | 'ROAD' | 'RAIL';
 }
 
 /**
  * Simple file uploader for a shipment: POSTs to /api/shipments/:id/files using FormData.
  */
-export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isExport = false, onUploadSuccess, onShipmentNotFound, onOcrDataExtracted }) => {
+export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isExport = false, onUploadSuccess, onShipmentNotFound, onOcrDataExtracted, shipmentMode = 'SEA' }) => {
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showSyncPrompt, setShowSyncPrompt] = useState(false);
@@ -33,6 +35,26 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isEx
     const list = checklist.map((doc) => ({ value: doc.id, label: doc.label }));
     return [{ value: '', label: 'Select document type' }, ...list, { value: 'Other', label: 'Other' }];
   }, [isExport]);
+
+  const expectedTransportDocType = useMemo(() => (shipmentMode === 'AIR' ? 'AWB' : 'BL'), [shipmentMode]);
+
+  useEffect(() => {
+    // Keep non-transport explicit picks intact; only auto-default when blank or already BL/AWB.
+    if (documentType === '' || documentType === 'BL' || documentType === 'AWB') {
+      setDocumentType(expectedTransportDocType);
+    }
+  }, [shipmentMode, expectedTransportDocType]);
+
+  const transportMismatchWarning = useMemo(() => {
+    if (documentType !== 'BL' && documentType !== 'AWB') return null;
+    if (documentType === 'BL' && shipmentMode === 'AIR') {
+      return 'Selected document type (BL) does not match shipment mode (AIR). You can still upload.';
+    }
+    if (documentType === 'AWB' && shipmentMode !== 'AIR') {
+      return `Selected document type (AWB) does not match shipment mode (${shipmentMode}). You can still upload.`;
+    }
+    return null;
+  }, [documentType, shipmentMode]);
 
   const inferDocumentTypeFromFileName = (name: string): string | null => {
     const checklist = isExport ? EXPORT_DOCUMENT_CHECKLIST : IMPORT_DOCUMENT_CHECKLIST;
@@ -209,6 +231,7 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isEx
               <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
             ))}
           </select>
+          <p className="mt-1 text-[11px] text-slate-500">Expected by mode: {expectedTransportDocType}</p>
         </div>
         <div className="flex-1 min-w-[180px]">
           <label className="block text-sm font-medium text-gray-700 mb-1">Choose file</label>
@@ -234,6 +257,11 @@ export const ShipmentUpload: React.FC<ShipmentUploadProps> = ({ shipmentId, isEx
           Upload
         </button>
       </form>
+      {transportMismatchWarning && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {transportMismatchWarning}
+        </div>
+      )}
       {toast && (
         <div className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800">
           <FileUp className="h-4 w-4 text-green-600 flex-shrink-0" />

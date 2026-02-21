@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { LetterOfCredit, LCStatus, Supplier, User } from '../types';
 import { CreditCard, Calendar, Landmark, AlertCircle, Plus, Search, Filter, CheckCircle, X, Trash2, Settings } from 'lucide-react';
 import { formatCurrency, formatDate, COMPANIES } from '../constants';
@@ -22,6 +22,13 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
   const [manageLc, setManageLc] = useState<LetterOfCredit | null>(null);
   const { hasPermission } = usePermissions(user);
   const canDeleteLC = hasPermission('lc.delete');
+  const canViewDocuments = hasPermission('documents.view');
+  const canUploadDocuments = hasPermission('documents.upload');
+  const canDeleteDocuments = hasPermission('documents.delete');
+  const [lcDocFiles, setLcDocFiles] = useState<string[]>([]);
+  const [loadingLcDocs, setLoadingLcDocs] = useState(false);
+  const [uploadingLcDocType, setUploadingLcDocType] = useState<'LC_COPY' | 'AMENDMENTS' | null>(null);
+  const [lcDocError, setLcDocError] = useState<string | null>(null);
 
   const getSupplierName = (id: string) => suppliers.find(s => s.id === id)?.name || 'Unknown';
 
@@ -93,6 +100,77 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
     setEditData(lc);
     setShowModal(true);
   };
+
+  const refreshLcFiles = async (lcId: string) => {
+    if (!lcId) {
+      setLcDocFiles([]);
+      return;
+    }
+    setLoadingLcDocs(true);
+    setLcDocError(null);
+    try {
+      const out = await api.lcs.getDocumentsFolderFiles(lcId);
+      const files = Array.isArray(out?.files)
+        ? out.files.map((f: any) => (typeof f === 'string' ? f : (f?.name || ''))).filter(Boolean)
+        : [];
+      setLcDocFiles(files);
+    } catch (e: any) {
+      setLcDocFiles([]);
+      setLcDocError(String(e?.message || 'Failed to load LC documents.'));
+    } finally {
+      setLoadingLcDocs(false);
+    }
+  };
+
+  const handleUploadLcDoc = async (docType: 'LC_COPY' | 'AMENDMENTS', file: File | null) => {
+    if (!manageLc?.id || !file) return;
+    setUploadingLcDocType(docType);
+    setLcDocError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const out = await api.lcs.uploadFile(manageLc.id, fd, docType);
+      if (!out.success) throw new Error(out.error || 'Upload failed.');
+      await refreshLcFiles(manageLc.id);
+    } catch (e: any) {
+      setLcDocError(String(e?.message || 'Failed to upload document.'));
+    } finally {
+      setUploadingLcDocType(null);
+    }
+  };
+
+  const handleDownloadLcDoc = async (filename: string) => {
+    if (!manageLc?.id || !filename) return;
+    setLcDocError(null);
+    try {
+      const blob = await api.lcs.downloadFile(manageLc.id, filename);
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e: any) {
+      setLcDocError(String(e?.message || 'Failed to open document.'));
+    }
+  };
+
+  const handleDeleteLcDoc = async (filename: string) => {
+    if (!manageLc?.id || !filename) return;
+    if (!window.confirm(`Delete file "${filename}"?`)) return;
+    setLcDocError(null);
+    try {
+      await api.lcs.deleteFile(manageLc.id, filename);
+      await refreshLcFiles(manageLc.id);
+    } catch (e: any) {
+      setLcDocError(String(e?.message || 'Failed to delete document.'));
+    }
+  };
+
+  useEffect(() => {
+    if (manageLc?.id && canViewDocuments) {
+      void refreshLcFiles(manageLc.id);
+      return;
+    }
+    setLcDocFiles([]);
+  }, [manageLc?.id, canViewDocuments]);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -393,6 +471,86 @@ const LCTracker: React.FC<LCTrackerProps> = ({ lcs, suppliers, user, onUpdateIte
                   </div>
                 ) : (
                   <p className="text-sm text-slate-400 italic py-4">No payments recorded against this LC yet.</p>
+                )}
+              </div>
+              <div>
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">LC Documents</h3>
+                {!canViewDocuments ? (
+                  <p className="text-xs text-slate-500">You do not have permission to view LC documents.</p>
+                ) : (
+                  <>
+                    {lcDocError && <p className="text-xs text-red-600 mb-3">{lcDocError}</p>}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/50">
+                        <div className="flex items-center justify-between mb-3 gap-2">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">LC Copy</p>
+                          {canUploadDocuments && (
+                            <label className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase border ${uploadingLcDocType === 'LC_COPY' ? 'bg-slate-100 text-slate-400 border-slate-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200 cursor-pointer hover:bg-indigo-100'}`}>
+                              {uploadingLcDocType === 'LC_COPY' ? 'Uploading...' : 'Upload'}
+                              <input
+                                type="file"
+                                className="hidden"
+                                disabled={uploadingLcDocType !== null}
+                                onChange={(e) => { const f = e.target.files?.[0] || null; void handleUploadLcDoc('LC_COPY', f); e.currentTarget.value = ''; }}
+                              />
+                            </label>
+                          )}
+                        </div>
+                        {loadingLcDocs ? (
+                          <p className="text-xs text-slate-500">Loading...</p>
+                        ) : (
+                          (() => {
+                            const list = lcDocFiles.filter((f) => String(f).toUpperCase().startsWith('LC_COPY_'));
+                            if (!list.length) return <p className="text-xs text-slate-500">No file uploaded.</p>;
+                            return (
+                              <ul className="space-y-2">
+                                {list.map((name) => (
+                                  <li key={name} className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                                    <button type="button" onClick={() => void handleDownloadLcDoc(name)} className="text-xs text-indigo-700 font-semibold truncate text-left hover:underline" title={name}>{name}</button>
+                                    {canDeleteDocuments && <button type="button" onClick={() => void handleDeleteLcDoc(name)} className="text-[10px] font-black uppercase text-red-600 hover:text-red-700">Delete</button>}
+                                  </li>
+                                ))}
+                              </ul>
+                            );
+                          })()
+                        )}
+                      </div>
+                      <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/50">
+                        <div className="flex items-center justify-between mb-3 gap-2">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Amendments</p>
+                          {canUploadDocuments && (
+                            <label className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase border ${uploadingLcDocType === 'AMENDMENTS' ? 'bg-slate-100 text-slate-400 border-slate-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200 cursor-pointer hover:bg-indigo-100'}`}>
+                              {uploadingLcDocType === 'AMENDMENTS' ? 'Uploading...' : 'Upload'}
+                              <input
+                                type="file"
+                                className="hidden"
+                                disabled={uploadingLcDocType !== null}
+                                onChange={(e) => { const f = e.target.files?.[0] || null; void handleUploadLcDoc('AMENDMENTS', f); e.currentTarget.value = ''; }}
+                              />
+                            </label>
+                          )}
+                        </div>
+                        {loadingLcDocs ? (
+                          <p className="text-xs text-slate-500">Loading...</p>
+                        ) : (
+                          (() => {
+                            const list = lcDocFiles.filter((f) => String(f).toUpperCase().startsWith('AMENDMENTS_'));
+                            if (!list.length) return <p className="text-xs text-slate-500">No file uploaded.</p>;
+                            return (
+                              <ul className="space-y-2">
+                                {list.map((name) => (
+                                  <li key={name} className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                                    <button type="button" onClick={() => void handleDownloadLcDoc(name)} className="text-xs text-indigo-700 font-semibold truncate text-left hover:underline" title={name}>{name}</button>
+                                    {canDeleteDocuments && <button type="button" onClick={() => void handleDeleteLcDoc(name)} className="text-[10px] font-black uppercase text-red-600 hover:text-red-700">Delete</button>}
+                                  </li>
+                                ))}
+                              </ul>
+                            );
+                          })()
+                        )}
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
             </div>

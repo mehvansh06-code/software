@@ -57,7 +57,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
     exportLicenceType: '' as '' | LicenceType, // Export: manual licence type when linking
     lcAmount: undefined as number | undefined,
     hasCOO: false, // Certificate of Origin (if any) — only then add to document ledger
-    consigneeId: '' as string, // Export: selected consignee (from buyer.consignees)
+    shipmentMode: 'SEA' as 'SEA' | 'AIR' | 'ROAD' | 'RAIL',
   });
 
   const restoreDraft = useCallback((draft: any) => {
@@ -262,6 +262,7 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
         invoiceValueINR: (isExport ? parseFloat(formData.amountFC) || 0 : totalAmount) * exchRate,
         portOfLoading: formData.portOfLoading,
         portOfDischarge: formData.portOfDischarge,
+        shipmentMode: formData.shipmentMode || 'SEA',
       };
 
       await onSubmit(newShipment);
@@ -598,12 +599,32 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Shipment Date</label>
                        <input type="date" required className="w-full px-4 py-3 rounded-xl border font-bold" value={formData.expectedShipmentDate} onChange={e => handleChange('expectedShipmentDate', e.target.value)} />
                     </div>
+                    <div>
+                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Shipment Mode</label>
+                       <select className="w-full px-4 py-3 rounded-xl border font-bold bg-slate-50" value={formData.shipmentMode || 'SEA'} onChange={e => handleChange('shipmentMode', e.target.value)}>
+                         <option value="SEA">SEA</option>
+                         <option value="AIR">AIR</option>
+                         <option value="ROAD">ROAD</option>
+                         <option value="RAIL">RAIL</option>
+                       </select>
+                    </div>
                   </>
                 ) : (
-                  <div>
-                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Invoice Date</label>
-                     <input type="date" required className="w-full px-4 py-3 rounded-xl border font-bold" value={formData.invoiceDate} onChange={e => handleChange('invoiceDate', e.target.value)} />
-                  </div>
+                  <>
+                    <div>
+                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Invoice Date</label>
+                       <input type="date" required className="w-full px-4 py-3 rounded-xl border font-bold" value={formData.invoiceDate} onChange={e => handleChange('invoiceDate', e.target.value)} />
+                    </div>
+                    <div>
+                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Shipment Mode</label>
+                       <select className="w-full px-4 py-3 rounded-xl border font-bold bg-slate-50" value={formData.shipmentMode || 'SEA'} onChange={e => handleChange('shipmentMode', e.target.value)}>
+                         <option value="SEA">SEA</option>
+                         <option value="AIR">AIR</option>
+                         <option value="ROAD">ROAD</option>
+                         <option value="RAIL">RAIL</option>
+                       </select>
+                    </div>
+                  </>
                 )}
             </div>
 
@@ -704,4 +725,6 @@ const NewShipment: React.FC<NewShipmentProps> = ({ suppliers = [], buyers = [], 
 };
 
 export default NewShipment;
+
+
 

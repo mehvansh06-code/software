@@ -104,6 +104,7 @@ db.exec(`
     beNumber TEXT,
     beDate TEXT,
     shippingLine TEXT,
+    shipmentMode TEXT,
     portCode TEXT,
     portOfLoading TEXT,
     portOfDischarge TEXT,
@@ -127,6 +128,7 @@ db.exec(`
     number TEXT UNIQUE,
     type TEXT,
     issueDate TEXT,
+    machineryInstallationDate TEXT,
     importValidityDate TEXT,
     expiryDate TEXT,
     dutySaved REAL,
@@ -159,6 +161,20 @@ db.exec(`
     createdAt TEXT NOT NULL,
     lastActivityAt TEXT NOT NULL,
     expiresAt TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS shipment_installments (
+    id TEXT PRIMARY KEY,
+    shipmentId TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    dueDate TEXT NOT NULL,
+    plannedAmountFC REAL NOT NULL,
+    currency TEXT NOT NULL,
+    notes TEXT,
+    sortOrder INTEGER DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    FOREIGN KEY(shipmentId) REFERENCES shipments(id) ON DELETE CASCADE
   );
 `);
 
@@ -195,7 +211,9 @@ runMigration('ALTER TABLE shipments ADD COLUMN shipperSealNumber TEXT', 'shipmen
 runMigration('ALTER TABLE shipments ADD COLUMN lineSealNumber TEXT', 'shipments.lineSealNumber');
 runMigration('ALTER TABLE shipments ADD COLUMN sbNo TEXT', 'shipments.sbNo');
 runMigration('ALTER TABLE shipments ADD COLUMN sbDate TEXT', 'shipments.sbDate');
+runMigration('ALTER TABLE shipments ADD COLUMN shipmentMode TEXT', 'shipments.shipmentMode');
 runMigration('ALTER TABLE licences ADD COLUMN importValidityDate TEXT', 'licences.importValidityDate');
+runMigration('ALTER TABLE licences ADD COLUMN machineryInstallationDate TEXT', 'licences.machineryInstallationDate');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_lc_reference ON shipments(lcReferenceNumber) WHERE lcReferenceNumber IS NOT NULL', 'idx_shipments_lc_reference');
 runMigration('ALTER TABLE buyers ADD COLUMN consignees_json TEXT', 'buyers.consignees_json');
 runMigration('ALTER TABLE shipments ADD COLUMN version INTEGER DEFAULT 1', 'shipments.version');
@@ -286,6 +304,10 @@ runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_invoiceDate ON shipments(
 runMigration('CREATE INDEX IF NOT EXISTS idx_lc_transactions_lcId_date ON lc_transactions(lcId, date)', 'idx_lc_transactions_lcId_date');
 runMigration('CREATE INDEX IF NOT EXISTS idx_lc_transactions_shipmentId ON lc_transactions(shipmentId)', 'idx_lc_transactions_shipmentId');
 runMigration('CREATE INDEX IF NOT EXISTS idx_user_sessions_expiresAt ON user_sessions(expiresAt)', 'idx_user_sessions_expiresAt');
+runMigration('CREATE TABLE IF NOT EXISTS shipment_installments (id TEXT PRIMARY KEY, shipmentId TEXT NOT NULL, kind TEXT NOT NULL, dueDate TEXT NOT NULL, plannedAmountFC REAL NOT NULL, currency TEXT NOT NULL, notes TEXT, sortOrder INTEGER DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, FOREIGN KEY(shipmentId) REFERENCES shipments(id) ON DELETE CASCADE)', 'shipment_installments');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_installments_shipment ON shipment_installments(shipmentId)', 'idx_shipment_installments_shipment');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_installments_dueDate ON shipment_installments(dueDate)', 'idx_shipment_installments_dueDate');
+runMigration('CREATE INDEX IF NOT EXISTS idx_shipment_installments_kind_dueDate ON shipment_installments(kind, dueDate)', 'idx_shipment_installments_kind_dueDate');
 
 // Sales Indent domain: domestic buyers (India) and indent product master
 runMigration(`
@@ -348,6 +370,16 @@ runMigration(`
 `, 'documents');
 runMigration('CREATE INDEX IF NOT EXISTS idx_documents_invoiceNumber ON documents(invoiceNumber)', 'idx_documents_invoice');
 runMigration('CREATE INDEX IF NOT EXISTS idx_documents_shipmentId ON documents(shipmentId)', 'idx_documents_shipment');
+runMigration(`
+  CREATE TABLE IF NOT EXISTS bank_payment_postings (
+    id TEXT PRIMARY KEY,
+    batchId TEXT NOT NULL UNIQUE,
+    payload_json TEXT,
+    createdBy TEXT,
+    createdAt TEXT NOT NULL
+  )
+`, 'bank_payment_postings');
+runMigration('CREATE INDEX IF NOT EXISTS idx_bank_payment_postings_createdAt ON bank_payment_postings(createdAt)', 'idx_bank_payment_postings_createdAt');
 
 // Removed: migrateJsonToNormalized() — no longer syncing items_json/history_json into normalized tables on startup.
 // Items and history are written only to shipment_items and shipment_history; items_json is no longer used.
@@ -394,6 +426,7 @@ function getShipmentValues(s, folderPath) {
     beNumber: s.beNumber || null,
     beDate: s.beDate || null,
     shippingLine: s.shippingLine || null,
+    shipmentMode: s.shipmentMode || 'SEA',
     portCode: s.portCode || null,
     portOfLoading: s.portOfLoading || null,
     portOfDischarge: s.portOfDischarge || null,
@@ -440,7 +473,7 @@ const SHIPMENT_INSERT_SQL = `
     id, supplierId, buyerId, productId, invoiceNumber, company, amount, currency, exchangeRate, rate, quantity,
     status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
     isUnderLC, lcNumber, lcAmount, lcDate, linkedLcId, isUnderLicence, linkedLicenceId, epcgLicenceId, advLicenceId,
-    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine,
+    licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine, shipmentMode,
     portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, dutyPenalty, dutyFine, gst, trackingUrl,
     incoTerm, paymentDueDate, paymentTerm, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
@@ -449,7 +482,7 @@ const SHIPMENT_INSERT_SQL = `
     :id, :supplierId, :buyerId, :productId, :invoiceNumber, :company, :amount, :currency, :exchangeRate, :rate, :quantity,
     :status, :expectedShipmentDate, :createdAt, :fobValueFC, :fobValueINR, :invoiceValueINR,
     :isUnderLC, :lcNumber, :lcAmount, :lcDate, :linkedLcId, :isUnderLicence, :linkedLicenceId, :epcgLicenceId, :advLicenceId,
-    :licenceObligationAmount, :licenceObligationQuantity, :containerNumber, :blNumber, :blDate, :beNumber, :beDate, :shippingLine,
+    :licenceObligationAmount, :licenceObligationQuantity, :containerNumber, :blNumber, :blDate, :beNumber, :beDate, :shippingLine, :shipmentMode,
     :portCode, :portOfLoading, :portOfDischarge, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :dutyPenalty, :dutyFine, :gst, :trackingUrl,
     :incoTerm, :paymentDueDate, :paymentTerm, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
     :documents_json, :history_json, :payments_json, :items_json, :documentsFolderPath, :remarks, :consigneeId, :lcSettled,

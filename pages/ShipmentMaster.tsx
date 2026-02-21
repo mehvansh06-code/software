@@ -23,6 +23,7 @@ interface ShipmentMasterProps {
 }
 
 type SortKey = 'date_new' | 'date_old' | 'value_high' | 'value_low';
+type SearchScope = 'all' | 'invoice' | 'bl_awb' | 'boe_sb' | 'container' | 'product';
 
 /** Shipment date used for range filter: invoice date when set, else created date. */
 function getShipmentDate(sh: Shipment): Date {
@@ -78,6 +79,7 @@ const EXPORT_COLUMN_DEFS: { key: string; label: string; defaultSelected: boolean
   { key: 'portOfLoading', label: 'Port of Loading', defaultSelected: true },
   { key: 'portOfDischarge', label: 'Port of Discharge', defaultSelected: true },
   { key: 'shippingLine', label: 'Shipping Line', defaultSelected: true },
+  { key: 'shipmentMode', label: 'Shipment Mode', defaultSelected: true },
   { key: 'paymentDueDate', label: 'Payment Due Date', defaultSelected: true },
   { key: 'paymentTerm', label: 'Payment Term', defaultSelected: true },
   { key: 'freightCharges', label: 'Freight Charges', defaultSelected: true },
@@ -121,6 +123,7 @@ function getExportColumnLabel(key: string, label: string, isExport: boolean): st
 
 const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, buyers, licences = [], lcs = [], user, isExport = false, onAddShipment, onUpdateShipment, onDeleteShipment }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchScope, setSearchScope] = useState<SearchScope>('all');
   const [companyFilter, setCompanyFilter] = useState('ALL');
   const [partnerFilter, setPartnerFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
@@ -175,12 +178,29 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
 
     if (deferredSearchTerm) {
       const term = deferredSearchTerm.toLowerCase().trim();
-      result = result.filter(sh =>
-        sh.invoiceNumber?.toLowerCase().includes(term) ||
-        sh.blNumber?.toLowerCase().includes(term) ||
-        sh.beNumber?.toLowerCase().includes(term) ||
-        sh.containerNumber?.toLowerCase().includes(term)
-      );
+      result = result.filter((sh) => {
+        const invoice = String(sh.invoiceNumber || '').toLowerCase();
+        const blAwb = String(sh.blNumber || '').toLowerCase();
+        const boeSb = String(sh.beNumber || '').toLowerCase();
+        const container = String(sh.containerNumber || '').toLowerCase();
+        const productText = Array.isArray(sh.items) && sh.items.length > 0
+          ? sh.items.map((i) => String(i.productName || i.description || '')).join(' ').toLowerCase()
+          : String((sh as any).productName || '').toLowerCase();
+
+        if (searchScope === 'invoice') return invoice.includes(term);
+        if (searchScope === 'bl_awb') return blAwb.includes(term);
+        if (searchScope === 'boe_sb') return boeSb.includes(term);
+        if (searchScope === 'container') return container.includes(term);
+        if (searchScope === 'product') return productText.includes(term);
+
+        return (
+          invoice.includes(term) ||
+          blAwb.includes(term) ||
+          boeSb.includes(term) ||
+          container.includes(term) ||
+          productText.includes(term)
+        );
+      });
     }
 
     if (companyFilter !== 'ALL') {
@@ -202,11 +222,11 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
     });
 
     return result;
-  }, [shipments, deferredSearchTerm, companyFilter, partnerFilter, sortOrder, isExport, dateFrom, dateTo]);
+  }, [shipments, deferredSearchTerm, searchScope, companyFilter, partnerFilter, sortOrder, isExport, dateFrom, dateTo]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [deferredSearchTerm, companyFilter, partnerFilter, sortOrder, dateFrom, dateTo, isExport, shipments.length]);
+  }, [deferredSearchTerm, searchScope, companyFilter, partnerFilter, sortOrder, dateFrom, dateTo, isExport, shipments.length]);
 
   const totalRows = filteredAndSorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
@@ -335,6 +355,7 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       portOfLoading: sh.portOfLoading ?? '',
       portOfDischarge: sh.portOfDischarge ?? '',
       shippingLine: sh.shippingLine ?? '',
+      shipmentMode: (sh as any).shipmentMode ?? 'SEA',
       trackingUrl: sh.trackingUrl ?? '',
       assessedValue: sh.assessedValue ?? 0,
       dutyBCD: sh.dutyBCD ?? 0,
@@ -580,16 +601,41 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
       )}
 
       <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-3">
-        <div className="w-full relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-          <input 
-            type="text" 
-            placeholder={isExport ? 'Search Invoice, BL, Shipping Bill or Container...' : 'Search Invoice, BL, Bill of Entry or Container...'} 
-            className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 text-sm font-medium"
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-          />
+        <div className="grid grid-cols-1 md:grid-cols-[220px,1fr] gap-2 items-start">
+          <select
+            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700"
+            value={searchScope}
+            onChange={(e) => setSearchScope(e.target.value as SearchScope)}
+            title="Choose where to search"
+          >
+            <option value="all">All Fields</option>
+            <option value="invoice">Invoice No</option>
+            <option value="bl_awb">BL / AWB No</option>
+            <option value="boe_sb">BOE / Shipping Bill No</option>
+            <option value="container">Container No</option>
+            <option value="product">Product Name</option>
+          </select>
+          <div className="w-full relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input
+              type="text"
+              placeholder={
+                searchScope === 'invoice' ? 'Search Invoice No...' :
+                searchScope === 'bl_awb' ? 'Search BL / AWB No...' :
+                searchScope === 'boe_sb' ? 'Search BOE / Shipping Bill No...' :
+                searchScope === 'container' ? 'Search Container No...' :
+                searchScope === 'product' ? 'Search Product Name...' :
+                'Search Invoice, BL/AWB, BOE/Shipping Bill, Container, Product...'
+              }
+              className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 text-sm font-medium"
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+            />
+          </div>
         </div>
+        <p className="text-[11px] text-slate-500">
+          Tip: Choose Invoice No for exact invoice-only results.
+        </p>
         <div className="grid grid-cols-1 lg:grid-cols-[auto,1fr,1fr,1fr] gap-2 items-end">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600">

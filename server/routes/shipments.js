@@ -28,6 +28,29 @@ function safeParseJson(str, fallback) {
   }
 }
 
+function amountToCurrency(amount, fromCurrency, toCurrency, exchangeRate) {
+  const val = Number(amount) || 0;
+  const from = String(fromCurrency || '').toUpperCase();
+  const to = String(toCurrency || '').toUpperCase();
+  const fx = Number(exchangeRate) || 1;
+  if (!val) return 0;
+  if (from === to) return val;
+  if (from === 'INR' && to !== 'INR') return val / fx;
+  if (to === 'INR' && from !== 'INR') return val * fx;
+  return val;
+}
+
+function computePaidOrReceivedFC(payments, shipmentCurrency, exchangeRate, isOutgoing) {
+  const list = Array.isArray(payments) ? payments : [];
+  return list
+    .filter((p) => (isOutgoing ? true : p && p.received === true))
+    .reduce((sum, p) => sum + amountToCurrency(p?.amount, p?.currency || shipmentCurrency, shipmentCurrency, exchangeRate), 0);
+}
+
+function randomId(prefix) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 11)}`;
+}
+
 /** Store currency and quantities in cents/paise (integer) for precision */
 function toCents(x) {
   if (x == null || x === undefined || x === '') return null;
@@ -628,6 +651,192 @@ function createRouter(broadcast) {
     }
   });
 
+  router.get('/:id/installments', hasPermission('shipments.view'), (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+      const shipmentId = idCheck.value;
+      const sh = db.prepare('SELECT id FROM shipments WHERE id = ?').get(shipmentId);
+      if (!sh) return res.status(404).json({ success: false, error: 'Shipment not found' });
+      const rows = db.prepare(
+        `SELECT id, shipmentId, kind, dueDate, plannedAmountFC, currency, notes, sortOrder, createdAt, updatedAt
+         FROM shipment_installments
+         WHERE shipmentId = ?
+         ORDER BY dueDate ASC, sortOrder ASC, createdAt ASC`
+      ).all(shipmentId);
+      res.json({ success: true, items: rows || [] });
+    } catch (e) {
+      console.error('GET /api/shipments/:id/installments error:', e);
+      res.status(500).json({ success: false, error: 'Failed to load installments' });
+    }
+  });
+
+  router.post('/:id/installments', hasPermission('shipments.edit'), (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+      const shipmentId = idCheck.value;
+      const sh = db.prepare('SELECT id, supplierId, buyerId, currency, amount, fobValueFC FROM shipments WHERE id = ?').get(shipmentId);
+      if (!sh) return res.status(404).json({ success: false, error: 'Shipment not found' });
+
+      const kind = String(req.body?.kind || '').toUpperCase();
+      if (kind !== 'OUTGOING' && kind !== 'INCOMING') return res.status(400).json({ success: false, error: 'Invalid installment kind' });
+      const expectedKind = sh.supplierId ? 'OUTGOING' : 'INCOMING';
+      if (kind !== expectedKind) return res.status(400).json({ success: false, error: `This shipment supports only ${expectedKind} installments.` });
+
+      const dueDate = String(req.body?.dueDate || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return res.status(400).json({ success: false, error: 'Due date is required (YYYY-MM-DD).' });
+
+      const plannedAmountFC = Number(req.body?.plannedAmountFC);
+      if (!Number.isFinite(plannedAmountFC) || plannedAmountFC <= 0) {
+        return res.status(400).json({ success: false, error: 'Planned amount must be greater than zero.' });
+      }
+      const currency = String(req.body?.currency || '').toUpperCase().trim();
+      const shipmentCurrency = String(sh.currency || 'USD').toUpperCase();
+      if (!currency || currency !== shipmentCurrency) {
+        return res.status(400).json({ success: false, error: `Currency must match shipment currency (${shipmentCurrency}).` });
+      }
+      const sortOrder = Math.max(0, Number.parseInt(String(req.body?.sortOrder ?? 0), 10) || 0);
+      const notes = req.body?.notes != null ? String(req.body.notes).trim().slice(0, 500) : null;
+
+      const existingRows = db.prepare(
+        `SELECT id, dueDate, plannedAmountFC, sortOrder
+         FROM shipment_installments
+         WHERE shipmentId = ? AND kind = ?`
+      ).all(shipmentId, kind);
+      const duplicate = existingRows.find((r) =>
+        String(r.dueDate) === dueDate &&
+        Number(r.sortOrder || 0) === sortOrder &&
+        Math.abs((Number(r.plannedAmountFC) || 0) - plannedAmountFC) <= 0.0001
+      );
+      if (duplicate) return res.status(400).json({ success: false, error: 'Duplicate installment row already exists.' });
+
+      const invoiceTotalFC = Number(kind === 'OUTGOING'
+        ? fromCents(sh.amount)
+        : (sh.fobValueFC != null ? fromCents(sh.fobValueFC) : fromCents(sh.amount))) || 0;
+      const plannedTotal = existingRows.reduce((s, r) => s + (Number(r.plannedAmountFC) || 0), 0) + plannedAmountFC;
+      if (plannedTotal > invoiceTotalFC + 0.0001) {
+        return res.status(400).json({
+          success: false,
+          error: `Installment total exceeds invoice amount by ${(plannedTotal - invoiceTotalFC).toFixed(2)} ${shipmentCurrency}.`,
+        });
+      }
+
+      const now = new Date().toISOString();
+      const id = randomId('inst');
+      db.prepare(
+        `INSERT INTO shipment_installments (id, shipmentId, kind, dueDate, plannedAmountFC, currency, notes, sortOrder, createdAt, updatedAt)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`
+      ).run(id, shipmentId, kind, dueDate, plannedAmountFC, shipmentCurrency, notes, sortOrder, now, now);
+      const created = db.prepare('SELECT * FROM shipment_installments WHERE id = ?').get(id);
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'SHIPMENT_INSTALLMENT_CREATED', shipmentId, { installmentId: id, kind, dueDate, plannedAmountFC, currency: shipmentCurrency });
+      broadcast();
+      res.json({ success: true, item: created });
+    } catch (e) {
+      console.error('POST /api/shipments/:id/installments error:', e);
+      res.status(500).json({ success: false, error: 'Failed to create installment' });
+    }
+  });
+
+  router.put('/:id/installments/:installmentId', hasPermission('shipments.edit'), (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+      const shipmentId = idCheck.value;
+      const installmentId = String(req.params?.installmentId || '').trim();
+      if (!installmentId) return res.status(400).json({ success: false, error: 'Installment ID is required.' });
+
+      const sh = db.prepare('SELECT id, supplierId, buyerId, currency, amount, fobValueFC FROM shipments WHERE id = ?').get(shipmentId);
+      if (!sh) return res.status(404).json({ success: false, error: 'Shipment not found' });
+
+      const existing = db.prepare('SELECT * FROM shipment_installments WHERE id = ? AND shipmentId = ?').get(installmentId, shipmentId);
+      if (!existing) return res.status(404).json({ success: false, error: 'Installment not found' });
+
+      const kind = String(req.body?.kind || existing.kind || '').toUpperCase();
+      if (kind !== 'OUTGOING' && kind !== 'INCOMING') return res.status(400).json({ success: false, error: 'Invalid installment kind' });
+      const expectedKind = sh.supplierId ? 'OUTGOING' : 'INCOMING';
+      if (kind !== expectedKind) return res.status(400).json({ success: false, error: `This shipment supports only ${expectedKind} installments.` });
+
+      const dueDate = String(req.body?.dueDate || existing.dueDate || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return res.status(400).json({ success: false, error: 'Due date is required (YYYY-MM-DD).' });
+
+      const plannedAmountFC = req.body?.plannedAmountFC != null ? Number(req.body.plannedAmountFC) : Number(existing.plannedAmountFC);
+      if (!Number.isFinite(plannedAmountFC) || plannedAmountFC <= 0) {
+        return res.status(400).json({ success: false, error: 'Planned amount must be greater than zero.' });
+      }
+      const shipmentCurrency = String(sh.currency || 'USD').toUpperCase();
+      const currency = String(req.body?.currency || existing.currency || '').toUpperCase().trim();
+      if (!currency || currency !== shipmentCurrency) {
+        return res.status(400).json({ success: false, error: `Currency must match shipment currency (${shipmentCurrency}).` });
+      }
+      const sortOrder = req.body?.sortOrder != null
+        ? Math.max(0, Number.parseInt(String(req.body.sortOrder), 10) || 0)
+        : Math.max(0, Number.parseInt(String(existing.sortOrder ?? 0), 10) || 0);
+      const notes = req.body?.notes != null
+        ? String(req.body.notes).trim().slice(0, 500)
+        : (existing.notes != null ? String(existing.notes) : null);
+
+      const existingRows = db.prepare(
+        `SELECT id, dueDate, plannedAmountFC, sortOrder
+         FROM shipment_installments
+         WHERE shipmentId = ? AND kind = ? AND id <> ?`
+      ).all(shipmentId, kind, installmentId);
+      const duplicate = existingRows.find((r) =>
+        String(r.dueDate) === dueDate &&
+        Number(r.sortOrder || 0) === sortOrder &&
+        Math.abs((Number(r.plannedAmountFC) || 0) - plannedAmountFC) <= 0.0001
+      );
+      if (duplicate) return res.status(400).json({ success: false, error: 'Duplicate installment row already exists.' });
+
+      const invoiceTotalFC = Number(kind === 'OUTGOING'
+        ? fromCents(sh.amount)
+        : (sh.fobValueFC != null ? fromCents(sh.fobValueFC) : fromCents(sh.amount))) || 0;
+      const plannedTotal = existingRows.reduce((s, r) => s + (Number(r.plannedAmountFC) || 0), 0) + plannedAmountFC;
+      if (plannedTotal > invoiceTotalFC + 0.0001) {
+        return res.status(400).json({
+          success: false,
+          error: `Installment total exceeds invoice amount by ${(plannedTotal - invoiceTotalFC).toFixed(2)} ${shipmentCurrency}.`,
+        });
+      }
+
+      const now = new Date().toISOString();
+      db.prepare(
+        `UPDATE shipment_installments
+         SET kind = ?, dueDate = ?, plannedAmountFC = ?, currency = ?, notes = ?, sortOrder = ?, updatedAt = ?
+         WHERE id = ? AND shipmentId = ?`
+      ).run(kind, dueDate, plannedAmountFC, shipmentCurrency, notes, sortOrder, now, installmentId, shipmentId);
+      const updated = db.prepare('SELECT * FROM shipment_installments WHERE id = ?').get(installmentId);
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'SHIPMENT_INSTALLMENT_UPDATED', shipmentId, { installmentId, kind, dueDate, plannedAmountFC, currency: shipmentCurrency });
+      broadcast();
+      res.json({ success: true, item: updated });
+    } catch (e) {
+      console.error('PUT /api/shipments/:id/installments/:installmentId error:', e);
+      res.status(500).json({ success: false, error: 'Failed to update installment' });
+    }
+  });
+
+  router.delete('/:id/installments/:installmentId', hasPermission('shipments.edit'), (req, res) => {
+    try {
+      const idCheck = validateId(req.params && req.params.id, 'Shipment ID');
+      if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+      const shipmentId = idCheck.value;
+      const installmentId = String(req.params?.installmentId || '').trim();
+      if (!installmentId) return res.status(400).json({ success: false, error: 'Installment ID is required.' });
+      const row = db.prepare('SELECT id FROM shipment_installments WHERE id = ? AND shipmentId = ?').get(installmentId, shipmentId);
+      if (!row) return res.status(404).json({ success: false, error: 'Installment not found' });
+      db.prepare('DELETE FROM shipment_installments WHERE id = ? AND shipmentId = ?').run(installmentId, shipmentId);
+      const userId = req.user && req.user.id;
+      auditLog(db, userId, 'SHIPMENT_INSTALLMENT_DELETED', shipmentId, { installmentId });
+      broadcast();
+      res.json({ success: true });
+    } catch (e) {
+      console.error('DELETE /api/shipments/:id/installments/:installmentId error:', e);
+      res.status(500).json({ success: false, error: 'Failed to delete installment' });
+    }
+  });
+
   router.get('/:id/documents-folder', hasPermission('documents.view'), (req, res) => {
     const send = (pathVal, exists) => { if (!res.headersSent) res.status(200).json({ path: pathVal ?? null, exists: !!exists }); };
     try {
@@ -1104,6 +1313,8 @@ function createRouter(broadcast) {
         const rate = Number(r.rate) || Number(r.ratePerUnit) || 0;
         const amount = Number(r.amount) || Number(r.Amount) || (quantity * rate) || 0;
         const exchangeRate = Number(r.exchangeRate) || Number(r.exchange_rate) || 1;
+        const shipmentModeRaw = String(r.shipmentMode || r.shipment_mode || r.modeShipment || r.mode_of_shipment || 'SEA').toUpperCase();
+        const shipmentMode = ['SEA', 'AIR', 'ROAD', 'RAIL'].includes(shipmentModeRaw) ? shipmentModeRaw : 'SEA';
         const invoiceValueINR = Math.round((amount * exchangeRate) * 100) / 100;
         const id = r.id && /^[a-zA-Z0-9_-]+$/.test(r.id) ? r.id : 'sh_' + Math.random().toString(36).slice(2, 11);
         const invoiceNumber = r.invoiceNumber || r.InvoiceNo || r.invoice_number || id;
@@ -1136,6 +1347,7 @@ function createRouter(broadcast) {
           expectedShipmentDate,
           createdAt: now,
           invoiceDate,
+          shipmentMode,
           fobValueFC: amount,
           fobValueINR: invoiceValueINR,
           invoiceValueINR,
@@ -1192,7 +1404,7 @@ function createRouter(broadcast) {
     const updateStmt = db.prepare(`
       UPDATE shipments SET
         status=?, containerNumber=?, blNumber=?, blDate=?, beNumber=?, beDate=?,
-        shippingLine=?, portCode=?, portOfLoading=?, portOfDischarge=?,
+        shippingLine=?, shipmentMode=?, portCode=?, portOfLoading=?, portOfDischarge=?,
         assessedValue=?, dutyBCD=?, dutySWS=?, dutyINT=?, dutyPenalty=?, dutyFine=?, gst=?, trackingUrl=?,
         documents_json=?, history_json=?, payments_json=?, items_json=?,
         isUnderLicence=?, linkedLicenceId=?, epcgLicenceId=?, advLicenceId=?, licenceObligationAmount=?, licenceObligationQuantity=?,
@@ -1216,9 +1428,23 @@ function createRouter(broadcast) {
           setShipmentHistory(id, s.history || []);
         } else {
           const version = s.version;
-          const existingRow = db.prepare('SELECT exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, documents_json, history_json, payments_json, licence_allocations_json, licenceExportLines_json, licenceImportLines_json FROM shipments WHERE id = ?').get(id);
+          const existingRow = db.prepare('SELECT supplierId, buyerId, currency, amount, fobValueFC, exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, shipmentMode, documents_json, history_json, payments_json, licence_allocations_json, licenceExportLines_json, licenceImportLines_json FROM shipments WHERE id = ?').get(id);
           const existing = existingRow;
           const existingPayments = safeParseJson(existingRow?.payments_json, []);
+          const shipmentCurrency = String(s.currency || existingRow?.currency || 'USD').toUpperCase();
+          const shipmentExchangeRate = Number(s.exchangeRate != null ? s.exchangeRate : existingRow?.exchangeRate) || 1;
+          const isOutgoing = !!(s.supplierId != null ? s.supplierId : existingRow?.supplierId);
+          const effectiveAmount = Number(s.amount != null ? s.amount : fromCents(existingRow?.amount));
+          const effectiveFobValueFC = Number(s.fobValueFC != null ? s.fobValueFC : fromCents(existingRow?.fobValueFC));
+          const totalDueFC = Math.max(0, isOutgoing ? effectiveAmount : (Number.isFinite(effectiveFobValueFC) && effectiveFobValueFC > 0 ? effectiveFobValueFC : effectiveAmount));
+          const candidatePayments = s.payments !== undefined ? (s.payments || []) : existingPayments;
+          const paidOrReceivedFC = computePaidOrReceivedFC(candidatePayments, shipmentCurrency, shipmentExchangeRate, isOutgoing);
+          if (paidOrReceivedFC > totalDueFC + 0.0001) {
+            const overBy = paidOrReceivedFC - totalDueFC;
+            const err = new Error(`Payment exceeds pending by ${overBy.toFixed(2)} ${shipmentCurrency}.`);
+            err.statusCode = 400;
+            throw err;
+          }
           const existingPaymentIds = new Set((existingPayments || []).map(p => p.id));
           const allowedFileStatus = ['pending', 'clearing', 'ok'].includes(s.fileStatus) ? s.fileStatus : (existing?.fileStatus ?? null);
           const consigneeIdVal = s.consigneeId !== undefined ? s.consigneeId : (existing?.consigneeId ?? null);
@@ -1245,7 +1471,7 @@ function createRouter(broadcast) {
             : (existingRow?.licence_allocations_json ?? null);
           const result = updateStmt.run(
             s.status, sNorm.containerNumber, sNorm.blNumber, sNorm.blDate, sNorm.beNumber, sNorm.beDate,
-            sNorm.shippingLine, sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
+            sNorm.shippingLine, (s.shipmentMode !== undefined ? (sNorm.shipmentMode || 'SEA') : (existing?.shipmentMode || 'SEA')), sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
             sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, (sNorm.dutyPenalty != null ? sNorm.dutyPenalty : null), (sNorm.dutyFine != null ? sNorm.dutyFine : null), sNorm.gst, sNorm.trackingUrl,
             documentsJson, historyJson, paymentsJson, null,
             sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.epcgLicenceId || null, sNorm.advLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,

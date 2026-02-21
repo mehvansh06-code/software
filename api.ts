@@ -158,6 +158,11 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
   const idMatch = endpoint.split('/')[1];
   const method = (options.method || 'GET').toUpperCase();
 
+  if (endpoint.includes('/installments')) {
+    if (method === 'GET') return { success: true, items: [] };
+    return { success: true };
+  }
+
   if (endpoint === 'payments/outgoing' || endpoint === 'payments/incoming') {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -174,17 +179,36 @@ function handleSimulatedRequest(endpoint: string, options: RequestInit) {
       .map((s: any) => {
         const due = new Date(`${s.paymentDueDate}T00:00:00`);
         const daysUntil = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        const totalDue = Number(isOutgoing ? (s.amount || 0) : ((s.fobValueFC != null ? s.fobValueFC : s.amount) || 0));
+        const payments = Array.isArray(s.payments) ? s.payments : [];
+        const receivedOrPaid = payments
+          .filter((p: any) => isOutgoing ? true : p?.received === true)
+          .reduce((sum: number, p: any) => {
+            const amt = Number(p?.amount || 0);
+            const pCur = String(p?.currency || s.currency || 'USD').toUpperCase();
+            const sCur = String(s.currency || 'USD').toUpperCase();
+            const fx = Number(s.exchangeRate || 1) || 1;
+            if (pCur === sCur) return sum + amt;
+            if (pCur === 'INR' && sCur !== 'INR') return sum + (amt / fx);
+            if (sCur === 'INR' && pCur !== 'INR') return sum + (amt * fx);
+            return sum + amt;
+          }, 0);
+        const pending = Math.max(0, totalDue - receivedOrPaid);
         return {
+          rowType: 'RESIDUAL',
+          installmentId: null,
           shipmentId: s.id,
           entityName: isOutgoing ? 'Supplier' : 'Customer',
           invoiceNumber: s.invoiceNumber || 'NA',
-          amount: Number(s.amount || 0),
+          amount: Number(pending || 0),
           currency: s.currency || 'USD',
           dueDate: s.paymentDueDate,
           daysUntil,
           status: daysUntil === 0 ? 'Due today' : `Due in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`,
           direction: isOutgoing ? 'outgoing' : 'incoming',
-          amountInr: Number(s.invoiceValueINR || 0),
+          amountInr: Number((Number(s.invoiceValueINR || 0) * (pending > 0 && totalDue > 0 ? (pending / totalDue) : 0)).toFixed(2)),
+          pendingAmount: Number(pending || 0),
+          ...(isOutgoing ? { paidAmount: Number(receivedOrPaid || 0) } : { receivedAmount: Number(receivedOrPaid || 0) }),
         };
       });
     const totalInr = items.reduce((sum: number, item: any) => sum + (Number(item.amountInr) || 0), 0);
@@ -441,18 +465,126 @@ export const api = {
         }
       });
     },
+    getInstallments: (id: string): Promise<{ success: boolean; items: any[] }> => {
+      if (!id || String(id) === 'undefined') return Promise.resolve({ success: true, items: [] });
+      return fetchApi(`shipments/${id}/installments`);
+    },
+    createInstallment: (id: string, data: { kind: 'OUTGOING' | 'INCOMING'; dueDate: string; plannedAmountFC: number; currency: string; notes?: string; sortOrder?: number }): Promise<{ success: boolean; item?: any; error?: string }> => {
+      if (!id || String(id) === 'undefined') return Promise.reject(new Error('Invalid shipment ID'));
+      return fetchApi(`shipments/${id}/installments`, { method: 'POST', body: JSON.stringify(data) });
+    },
+    updateInstallment: (id: string, installmentId: string, data: { kind?: 'OUTGOING' | 'INCOMING'; dueDate?: string; plannedAmountFC?: number; currency?: string; notes?: string; sortOrder?: number }): Promise<{ success: boolean; item?: any; error?: string }> => {
+      if (!id || !installmentId) return Promise.reject(new Error('Invalid shipment/installment ID'));
+      return fetchApi(`shipments/${id}/installments/${installmentId}`, { method: 'PUT', body: JSON.stringify(data) });
+    },
+    deleteInstallment: (id: string, installmentId: string): Promise<{ success: boolean; error?: string }> => {
+      if (!id || !installmentId) return Promise.reject(new Error('Invalid shipment/installment ID'));
+      return fetchApi(`shipments/${id}/installments/${installmentId}`, { method: 'DELETE' });
+    },
   },
   licences: {
     list: () => fetchApi('licences'),
     create: (data: any) => fetchApi('licences', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`licences/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => fetchApi(`licences/${id}`, { method: 'DELETE' }),
+    getDocumentsFolderFiles: (id: string): Promise<{ files: Array<{ name: string } | string> }> => {
+      if (!id || String(id) === 'undefined') return Promise.resolve({ files: [] });
+      return fetchApi(`licences/${id}/documents-folder-files`).catch(() => ({ files: [] }));
+    },
+    uploadFile: (id: string, formData: FormData, documentType?: 'LICENCE_COPY' | 'BOND' | 'MIC'): Promise<{ success: boolean; filename?: string; error?: string }> => {
+      if (!id || String(id) === 'undefined') return Promise.reject(new Error('Invalid licence ID'));
+      const qs = documentType ? `?documentType=${encodeURIComponent(documentType)}` : '';
+      const url = `${API_BASE}/licences/${id}/files${qs}`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { method: 'POST', headers, body: formData }).then(async (r) => {
+        let data: any;
+        try {
+          data = await r.json();
+        } catch {
+          data = { error: 'Invalid response' };
+        }
+        if (r.ok) return { success: true, filename: data.filename };
+        return { success: false, error: data.error || 'Upload failed' };
+      });
+    },
+    downloadFile: (id: string, filename: string): Promise<Blob> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/licences/${id}/files/${encodeURIComponent(filename)}`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { headers }).then((r) => {
+        if (!r.ok) throw new Error(r.status === 404 ? 'File not found' : 'Download failed');
+        return r.blob();
+      });
+    },
+    deleteFile: (id: string, filename: string): Promise<void> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/licences/${id}/files/${encodeURIComponent(filename)}`;
+      return fetch(url, { method: 'DELETE', headers: getAuthHeaders() }).then((r) => {
+        if (!r.ok) {
+          return r.json().then((j: any) => Promise.reject(new Error(j?.error || 'Delete failed')));
+        }
+      });
+    },
   },
   lcs: {
     list: () => fetchApi('lcs'),
     create: (data: any) => fetchApi('lcs', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`lcs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => fetchApi(`lcs/${id}`, { method: 'DELETE' }),
+    getDocumentsFolderFiles: (id: string): Promise<{ files: Array<{ name: string } | string> }> => {
+      if (!id || String(id) === 'undefined') return Promise.resolve({ files: [] });
+      return fetchApi(`lcs/${id}/documents-folder-files`).catch(() => ({ files: [] }));
+    },
+    uploadFile: (id: string, formData: FormData, documentType?: 'LC_COPY' | 'AMENDMENTS'): Promise<{ success: boolean; filename?: string; error?: string }> => {
+      if (!id || String(id) === 'undefined') return Promise.reject(new Error('Invalid LC ID'));
+      const qs = documentType ? `?documentType=${encodeURIComponent(documentType)}` : '';
+      const url = `${API_BASE}/lcs/${id}/files${qs}`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { method: 'POST', headers, body: formData }).then(async (r) => {
+        let data: any;
+        try {
+          data = await r.json();
+        } catch {
+          data = { error: 'Invalid response' };
+        }
+        if (r.ok) return { success: true, filename: data.filename };
+        return { success: false, error: data.error || 'Upload failed' };
+      });
+    },
+    downloadFile: (id: string, filename: string): Promise<Blob> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/lcs/${id}/files/${encodeURIComponent(filename)}`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { headers }).then((r) => {
+        if (!r.ok) throw new Error(r.status === 404 ? 'File not found' : 'Download failed');
+        return r.blob();
+      });
+    },
+    deleteFile: (id: string, filename: string): Promise<void> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/lcs/${id}/files/${encodeURIComponent(filename)}`;
+      return fetch(url, { method: 'DELETE', headers: getAuthHeaders() }).then((r) => {
+        if (!r.ok) {
+          return r.json().then((j: any) => Promise.reject(new Error(j?.error || 'Delete failed')));
+        }
+      });
+    },
     transactions: (): Promise<any[]> => fetchApi('lc-transactions'),
   },
   payments: {
@@ -509,6 +641,9 @@ export const api = {
         if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j?.error || 'Generate failed')));
         return r.blob();
       });
+    },
+    postAllocations: (payload: any): Promise<{ success: boolean; alreadyPosted?: boolean; batchId?: string; postedCount?: number; totalAmount?: number }> => {
+      return fetchApi('bank-payment-docs/post-allocations', { method: 'POST', body: JSON.stringify(payload) });
     },
   },
   /** OCR: extract or upload-and-scan. Long timeout (2 min) so large PDFs/images can finish; do not set Content-Type (FormData sets boundary). */

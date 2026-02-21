@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { Supplier, Shipment, User } from '../types';
+﻿import React, { useState, useMemo, useCallback } from 'react';
+import { Supplier, Shipment, User, BankPaymentAllocationRow } from '../types';
 import { FileText, Landmark, Truck, Banknote, Loader2, Plus, Trash2, Info } from 'lucide-react';
 import { api } from '../api';
 import { useAutoSavedDraft } from '../hooks/useAutoSavedDraft';
@@ -15,6 +15,24 @@ export interface ProductLine {
 
 function newProductLine(id: string): ProductLine {
   return { id, description: '', hsnCode: '', quantity: '', unit: 'KGS', amount: '' };
+}
+
+interface AllocationRowState extends BankPaymentAllocationRow {
+  id: string;
+  amountInput: string;
+  documentChecklist: Record<string, boolean>;
+  invoiceAmount: number;
+  alreadyPaid: number;
+  pendingAmount: number;
+  goodsDesc: string;
+  hsnCodeText: string;
+  quantityText: string;
+  invoiceDateText: string;
+  shipmentDateText: string;
+  portLoadingText: string;
+  portDischargeText: string;
+  termText: string;
+  modeShipmentText: string;
 }
 
 const COMPANY_OPTIONS: { value: string; label: string }[] = [
@@ -89,6 +107,79 @@ function normalizeHsnCode(v: string): string {
   return String(v || '').replace(/\D/g, '').slice(0, 8);
 }
 
+function parseAmount(v: unknown): number {
+  const n = Number.parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function toShipmentCurrency(amount: number, fromCurrency: string, toCurrency: string, exchangeRate: number): number {
+  const val = Number(amount) || 0;
+  const from = String(fromCurrency || '').toUpperCase();
+  const to = String(toCurrency || '').toUpperCase();
+  const fx = Number(exchangeRate) || 1;
+  if (!val) return 0;
+  if (from === to) return val;
+  if (from === 'INR' && to !== 'INR') return val / fx;
+  if (to === 'INR' && from !== 'INR') return val * fx;
+  return val;
+}
+
+function getDocOptionsForMode(mode: 'Advance' | 'Balance', hasProforma: boolean): string[] {
+  const base = mode === 'Advance' ? [...ADVANCE_DOCS, 'BANK ADVISE'] : [...BALANCE_DOCS];
+  if (!hasProforma) return base;
+  const copy = [...base];
+  const invoiceIdx = copy.indexOf('INVOICE');
+  if (invoiceIdx >= 0 && !copy.includes('PROFORMA INVOICE')) copy.splice(invoiceIdx, 0, 'PROFORMA INVOICE');
+  if (invoiceIdx < 0 && !copy.includes('PROFORMA INVOICE')) copy.unshift('PROFORMA INVOICE');
+  return copy;
+}
+
+function defaultDocSelected(mode: 'Advance' | 'Balance', doc: string): boolean {
+  if (mode === 'Advance') {
+    return doc !== 'BANK ADVISE';
+  }
+  return !['BANK ADVISE', 'AIRWAY BILL', 'INSURANCE COPY'].includes(doc);
+}
+
+function buildDocChecklist(mode: 'Advance' | 'Balance', hasProforma: boolean, existing?: Record<string, boolean> | null): Record<string, boolean> {
+  const options = getDocOptionsForMode(mode, hasProforma);
+  const out: Record<string, boolean> = {};
+  options.forEach((doc) => {
+    if (existing && Object.prototype.hasOwnProperty.call(existing, doc)) {
+      out[doc] = !!existing[doc];
+    } else {
+      out[doc] = defaultDocSelected(mode, doc);
+    }
+  });
+  return out;
+}
+
+function createAllocationRow(id: string, currencyCode: string, allocationType: 'Advance' | 'Balance' = 'Balance'): AllocationRowState {
+  return {
+    id,
+    shipmentId: '',
+    invoiceNo: '',
+    allocationType,
+    amount: 0,
+    amountInput: '',
+    documentChecklist: buildDocChecklist(allocationType, false, null),
+    currency: String(currencyCode || 'USD').toUpperCase(),
+    pendingAmountSnapshot: 0,
+    invoiceAmount: 0,
+    alreadyPaid: 0,
+    pendingAmount: 0,
+    goodsDesc: '',
+    hsnCodeText: '',
+    quantityText: '',
+    invoiceDateText: '',
+    shipmentDateText: '',
+    portLoadingText: '',
+    portDischargeText: '',
+    termText: '',
+    modeShipmentText: '',
+  };
+}
+
 interface BankPaymentDocGeneratorProps {
   suppliers: Supplier[];
   shipments: Shipment[];
@@ -101,16 +192,8 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
 }) => {
   const [companyChoice, setCompanyChoice] = useState('');
   const [supplierId, setSupplierId] = useState('');
-  const [shipmentId, setShipmentId] = useState('');
+  const [packetShipmentId, setPacketShipmentId] = useState('');
   const [payMode, setPayMode] = useState<'Advance' | 'Balance'>('Advance');
-  const [includeBankAdvise, setIncludeBankAdvise] = useState(false);
-  const [balanceChecklist, setBalanceChecklist] = useState<Record<string, boolean>>(() => {
-    const o: Record<string, boolean> = {};
-    BALANCE_DOCS.forEach((d) => {
-      o[d] = !['BANK ADVISE', 'AIRWAY BILL', 'INSURANCE COPY'].includes(d);
-    });
-    return o;
-  });
 
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
@@ -136,9 +219,11 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
   const [term, setTerm] = useState('');
   const [modeShipment, setModeShipment] = useState('SEA');
   const [productLines, setProductLines] = useState<ProductLine[]>(() => [newProductLine('1')]);
+  const [allocationRows, setAllocationRows] = useState<AllocationRowState[]>(() => [createAllocationRow('1', 'USD', 'Advance')]);
 
   const [generating, setGenerating] = useState(false);
   const nextIdRef = React.useRef(2);
+  const nextAllocIdRef = React.useRef(2);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [shipmentFiles, setShipmentFiles] = useState<string[]>([]);
@@ -158,12 +243,9 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     if (!draft || typeof draft !== 'object') return;
     if (typeof draft.companyChoice === 'string') setCompanyChoice(draft.companyChoice);
     if (typeof draft.supplierId === 'string') setSupplierId(draft.supplierId);
-    if (typeof draft.shipmentId === 'string') setShipmentId(draft.shipmentId);
+    if (typeof draft.packetShipmentId === 'string') setPacketShipmentId(draft.packetShipmentId);
+    if (typeof draft.shipmentId === 'string' && !draft.packetShipmentId) setPacketShipmentId(draft.shipmentId);
     if (draft.payMode === 'Advance' || draft.payMode === 'Balance') setPayMode(draft.payMode);
-    if (typeof draft.includeBankAdvise === 'boolean') setIncludeBankAdvise(draft.includeBankAdvise);
-    if (draft.balanceChecklist && typeof draft.balanceChecklist === 'object') {
-      setBalanceChecklist((prev) => ({ ...prev, ...draft.balanceChecklist }));
-    }
     if (typeof draft.amount === 'string') setAmount(draft.amount);
     if (typeof draft.currency === 'string') setCurrency(draft.currency);
     if (typeof draft.invoiceValueDiff === 'string') setInvoiceValueDiff(draft.invoiceValueDiff);
@@ -187,6 +269,35 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     if (typeof draft.portDischarge === 'string') setPortDischarge(draft.portDischarge);
     if (typeof draft.term === 'string') setTerm(draft.term);
     if (typeof draft.modeShipment === 'string') setModeShipment(draft.modeShipment);
+    if (Array.isArray(draft.allocationRows) && draft.allocationRows.length > 0) {
+      const rows = draft.allocationRows.map((r: any, idx: number) => {
+        const id = String(r?.id || `restored-${idx + 1}`);
+        const amountNum = parseAmount(r?.amountInput ?? r?.amount);
+        return {
+          ...createAllocationRow(id, String(r?.currency || draft.currency || 'USD')),
+          ...r,
+          id,
+          amount: amountNum,
+          amountInput: String(r?.amountInput ?? (amountNum > 0 ? amountNum : '')),
+          documentChecklist: buildDocChecklist(
+            (r?.allocationType === 'Advance' ? 'Advance' : 'Balance'),
+            false,
+            (r?.documentChecklist && typeof r.documentChecklist === 'object') ? r.documentChecklist : null
+          ),
+          currency: String(r?.currency || draft.currency || 'USD').toUpperCase(),
+          pendingAmountSnapshot: parseAmount(r?.pendingAmountSnapshot),
+          invoiceAmount: parseAmount(r?.invoiceAmount),
+          alreadyPaid: parseAmount(r?.alreadyPaid),
+          pendingAmount: parseAmount(r?.pendingAmount),
+        } as AllocationRowState;
+      });
+      setAllocationRows(rows);
+      const numericIds = rows
+        .map((row) => parseInt(String(row.id || ''), 10))
+        .filter((id) => Number.isFinite(id));
+      const nextId = numericIds.length > 0 ? Math.max(...numericIds) + 1 : rows.length + 1;
+      nextAllocIdRef.current = Math.max(2, nextId);
+    }
     if (Array.isArray(draft.productLines) && draft.productLines.length > 0) {
       setProductLines(draft.productLines);
       const numericIds = draft.productLines
@@ -202,10 +313,8 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     data: {
       companyChoice,
       supplierId,
-      shipmentId,
+      packetShipmentId,
       payMode,
-      includeBankAdvise,
-      balanceChecklist,
       amount,
       currency,
       invoiceValueDiff,
@@ -229,6 +338,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       portDischarge,
       term,
       modeShipment,
+      allocationRows,
       productLines,
     },
     onRestore: restoreDraft,
@@ -262,8 +372,8 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
   );
 
   const selectedShipment = useMemo(
-    () => importShipments.find((s) => s.id === shipmentId),
-    [importShipments, shipmentId]
+    () => importShipments.find((s) => s.id === packetShipmentId),
+    [importShipments, packetShipmentId]
   );
 
   const clearSupplierFields = useCallback(() => {
@@ -349,15 +459,118 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     [suppliers, supplierId, fillFromSupplier]
   );
 
+  const deriveAllocationFromShipment = useCallback((sh: Shipment, rowId: string, allocationType: 'Balance' | 'Advance', currentAmountInput = ''): AllocationRowState => {
+    const invoiceAmount = Number(sh.amount) || 0;
+    const paid = (sh.payments || []).reduce((sum, p) => {
+      const amt = Number(p?.amount) || 0;
+      return sum + toShipmentCurrency(amt, p?.currency || sh.currency, sh.currency, sh.exchangeRate || 1);
+    }, 0);
+    const pending = Math.max(0, invoiceAmount - paid);
+    const itemRows = Array.isArray(sh.items) ? sh.items : [];
+    const goodsDesc = itemRows
+      .map((i) => String(i.productName || i.description || '').trim())
+      .filter(Boolean)
+      .join(', ');
+    const hsnCodeText = Array.from(
+      new Set(
+        itemRows
+          .map((i) => normalizeHsnCode(String(i.hsnCode || '').trim()))
+          .filter((code) => /^\d{8}$/.test(code))
+      )
+    ).join(', ');
+    const quantityText = itemRows.length > 0
+      ? itemRows.map((i) => `${String(i.quantity ?? '').trim()} ${String(i.unit || 'KGS').trim()}`).join(', ')
+      : '';
+
+    const amountInput = String(currentAmountInput || '').trim();
+    const parsedAmount = parseAmount(amountInput);
+    return {
+      ...createAllocationRow(rowId, sh.currency || currency),
+      shipmentId: sh.id,
+      invoiceNo: sh.invoiceNumber || '',
+      allocationType,
+      amount: parsedAmount,
+      amountInput,
+      currency: String(sh.currency || currency || 'USD').toUpperCase(),
+      pendingAmountSnapshot: Number(pending.toFixed(2)),
+      invoiceAmount: Number(invoiceAmount.toFixed(2)),
+      alreadyPaid: Number(paid.toFixed(2)),
+      pendingAmount: Number(pending.toFixed(2)),
+      goodsDesc: goodsDesc || '',
+      hsnCodeText: hsnCodeText || '',
+      quantityText: quantityText || '',
+      invoiceDateText: sh.invoiceDate ? formatDateForDoc(sh.invoiceDate) : '',
+      shipmentDateText: sh.expectedShipmentDate ? formatDateForDoc(sh.expectedShipmentDate) : '',
+      portLoadingText: sh.portOfLoading || '',
+      portDischargeText: sh.portOfDischarge || '',
+      termText: sh.incoTerm || '',
+      modeShipmentText: sh.shipmentMode || '',
+    };
+  }, [currency]);
+
+  const addAllocationRow = useCallback(() => {
+    const id = String(nextAllocIdRef.current++);
+    setAllocationRows((prev) => [...prev, createAllocationRow(id, currency, payMode)]);
+  }, [currency, payMode]);
+
+  const removeAllocationRow = useCallback((id: string) => {
+    setAllocationRows((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((row) => row.id !== id);
+    });
+  }, []);
+
+  const updateAllocationAmount = useCallback((id: string, value: string) => {
+    const parsed = parseAmount(value);
+    setAllocationRows((prev) => prev.map((row) => row.id === id ? { ...row, amountInput: value, amount: parsed } : row));
+  }, []);
+
+  const toggleAllocationDoc = useCallback((id: string, doc: string) => {
+    setAllocationRows((prev) => prev.map((row) => {
+      if (row.id !== id) return row;
+      const nextChecklist = { ...(row.documentChecklist || {}) };
+      nextChecklist[doc] = !nextChecklist[doc];
+      return { ...row, documentChecklist: nextChecklist };
+    }));
+  }, []);
+
+  const updateAllocationShipment = useCallback((id: string, shipmentId: string) => {
+    const shipment = shipmentsForSelect.find((s) => s.id === shipmentId);
+    setAllocationRows((prev) => prev.map((row) => {
+      if (row.id !== id) return row;
+      if (!shipment) return { ...createAllocationRow(id, currency, payMode), allocationType: payMode };
+      const next = deriveAllocationFromShipment(shipment, id, payMode, row.amountInput);
+      const hasProforma = !!((shipment as any)?.documents?.PI);
+      return {
+        ...next,
+        documentChecklist: buildDocChecklist(payMode, hasProforma, row.documentChecklist),
+      };
+    }));
+  }, [currency, deriveAllocationFromShipment, shipmentsForSelect, payMode]);
+
   React.useEffect(() => {
     if (selectedSupplier) fillFromSupplier(selectedSupplier);
     else clearSupplierFields();
   }, [selectedSupplier, fillFromSupplier, clearSupplierFields]);
 
   React.useEffect(() => {
-    if (selectedShipment) fillFromShipment(selectedShipment);
-    else clearShipmentFields();
-  }, [selectedShipment, fillFromShipment, clearShipmentFields]);
+    setAllocationRows((prev) => prev.map((row) => {
+      const sh = row.shipmentId ? importShipments.find((s) => s.id === row.shipmentId) : null;
+      const hasProforma = !!((sh as any)?.documents?.PI);
+      return {
+        ...row,
+        allocationType: payMode,
+        documentChecklist: buildDocChecklist(payMode, hasProforma, row.documentChecklist),
+      };
+    }));
+  }, [payMode, importShipments]);
+
+  React.useEffect(() => {
+    const firstSelected = allocationRows.find((row) => !!row.shipmentId)?.shipmentId || '';
+    if (!packetShipmentId || !importShipments.some((s) => s.id === packetShipmentId)) {
+      if (firstSelected) setPacketShipmentId(firstSelected);
+    }
+  }, [allocationRows, importShipments, packetShipmentId]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -480,42 +693,71 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     );
   }, []);
 
-  const buildDocumentList = (): string[] => {
-    const hasProforma = !!(selectedShipment as any)?.documents?.PI;
-    const withOptionalProforma = (base: string[]) => {
-      if (!hasProforma) return [...base];
-      const copy = [...base];
-      const invoiceIdx = copy.indexOf('INVOICE');
-      if (invoiceIdx >= 0) copy.splice(invoiceIdx, 0, 'PROFORMA INVOICE');
-      else copy.unshift('PROFORMA INVOICE');
-      return copy;
-    };
-    if (payMode === 'Advance') {
-      const list = withOptionalProforma(ADVANCE_DOCS);
-      if (includeBankAdvise) list.push('BANK ADVISE');
-      return list;
-    }
-    return withOptionalProforma(BALANCE_DOCS).filter((d) => d === 'PROFORMA INVOICE' || balanceChecklist[d]);
+  const buildDocumentListString = (rows: AllocationRowState[]): string => {
+    const lines: string[] = [];
+    rows.forEach((row, rowIndex) => {
+      const selectedDocs = Object.entries(row.documentChecklist || {})
+        .filter(([, checked]) => !!checked)
+        .map(([doc]) => doc);
+      lines.push(`Shipment ${rowIndex + 1} - Invoice ${row.invoiceNo || 'NA'}:`);
+      if (selectedDocs.length === 0) {
+        lines.push('1.       (No document selected)');
+      } else {
+        selectedDocs.forEach((doc, i) => lines.push(`${i + 1}.       ${doc}`));
+      }
+      lines.push('');
+    });
+    return lines.join('\n').trim() + '\n';
   };
 
   const validate = (): string | null => {
     const companyLabel = companyChoice === 'GFPL' ? 'Gujarat Flotex Pvt Ltd' : companyChoice === 'GTEX' ? 'GTEX Fabrics' : '';
     if (!companyChoice || !companyLabel) return 'Please select Importer (Company).';
     if (!supplierId || !selectedSupplier) return 'Please select a Supplier.';
-    const amtNum = parseFloat(amount);
-    if (Number.isNaN(amtNum) || amtNum <= 0) return 'Remittance amount must be greater than 0.';
-    const totalFromItems = productLines.reduce(
-      (sum, row) => sum + (parseFloat(row.amount) || 0),
-      0
-    );
-    const totalInvoiceValue =
-      parseInvoiceValue(invoiceValueDiff) ?? (totalFromItems > 0 ? totalFromItems : null) ?? (selectedShipment?.amount ?? null);
-    if (totalInvoiceValue != null && totalInvoiceValue >= 0 && amtNum > totalInvoiceValue) {
-      return 'Remittance amount cannot be more than total invoice value.';
+    const amtNum = parseAmount(amount);
+    if (!(amtNum > 0)) return 'Remittance amount must be greater than 0.';
+
+    const validRows = allocationRows.filter((row) => !!row.shipmentId);
+    if (validRows.length === 0) return 'Add at least one allocation row and select shipment/invoice.';
+
+    const allocationTypes = Array.from(new Set(validRows.map((row) => row.allocationType)));
+    if (allocationTypes.length > 1) {
+      return 'You cannot mix Advance and Balance in one remittance. Use only one mode.';
     }
-    if (!invoiceNo.trim()) return 'Invoice Number is required.';
-    if (!invoiceDate.trim()) return 'Invoice Date is required.';
-    if (!shipmentDate.trim()) return 'Shipment Date is required.';
+    if (allocationTypes.length === 1 && allocationTypes[0] !== payMode) {
+      return `All rows must be ${payMode}.`;
+    }
+
+    const totalAllocated = validRows.reduce((sum, row) => sum + parseAmount(row.amountInput), 0);
+    if (Math.abs(totalAllocated - amtNum) > 0.01) {
+      return `Allocation total (${totalAllocated.toFixed(2)}) must match remittance amount (${amtNum.toFixed(2)}).`;
+    }
+
+    const perShipmentTotals = new Map<string, number>();
+    for (let i = 0; i < validRows.length; i++) {
+      const row = validRows[i];
+      const sh = shipmentsForSelect.find((s) => s.id === row.shipmentId);
+      if (!sh) return `Allocation row ${i + 1}: Shipment not found.`;
+      if (String(sh.supplierId || '') !== String(supplierId)) return `Allocation row ${i + 1}: Shipment belongs to a different supplier.`;
+      if (String(sh.company || '') !== String(companyChoice || '')) return `Allocation row ${i + 1}: Shipment belongs to a different company.`;
+      if (String(sh.currency || '').toUpperCase() !== String(currency || '').toUpperCase()) {
+        return `Allocation row ${i + 1}: Currency mismatch. Shipment currency is ${sh.currency || 'NA'}.`;
+      }
+      const rowAmt = parseAmount(row.amountInput);
+      if (!(rowAmt > 0)) return `Allocation row ${i + 1}: Amount must be greater than 0.`;
+      if (rowAmt > row.pendingAmount + 0.0001) {
+        return `Allocation row ${i + 1}: Amount cannot exceed pending amount (${row.pendingAmount.toFixed(2)} ${row.currency}).`;
+      }
+      const running = (perShipmentTotals.get(row.shipmentId) || 0) + rowAmt;
+      if (running > row.pendingAmount + 0.0001) {
+        return `Allocation rows for invoice ${row.invoiceNo || sh.invoiceNumber} exceed pending amount (${row.pendingAmount.toFixed(2)} ${row.currency}).`;
+      }
+      perShipmentTotals.set(row.shipmentId, running);
+      if (!row.invoiceNo.trim()) return `Allocation row ${i + 1}: Invoice number missing.`;
+      const selectedDocsCount = Object.values(row.documentChecklist || {}).filter(Boolean).length;
+      if (selectedDocsCount === 0) return `Allocation row ${i + 1}: Select at least one document for this shipment.`;
+    }
+
     if (!beneficiaryName.trim()) return 'Supplier Name is required.';
     if (!beneficiaryAddress.trim()) return 'Supplier Address is required.';
     if (!beneficiaryCountry.trim()) return 'Supplier Country is required.';
@@ -527,16 +769,6 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
     if (!portDischarge.trim()) return 'Port of Discharge is required.';
     if (!term) return 'Please select IncoTerm.';
     if (!modeShipment) return 'Please select Shipment Mode.';
-    if (productLines.length === 0) return 'At least one product line is required.';
-    for (let i = 0; i < productLines.length; i++) {
-      const row = productLines[i];
-      if (!row.description.trim()) return `Product line ${i + 1}: Goods description is required.`;
-      if (!/^\d{8}$/.test(normalizeHsnCode(row.hsnCode.trim()))) return `Product line ${i + 1}: HSN code must be exactly 8 digits.`;
-      if (!row.quantity.trim()) return `Product line ${i + 1}: Quantity is required.`;
-      if (!row.unit) return `Product line ${i + 1}: Unit is required.`;
-      const amt = parseFloat(row.amount);
-      if (productLines.length > 1 && (Number.isNaN(amt) || amt < 0)) return `Product line ${i + 1}: Amount must be a number ≥ 0.`;
-    }
     return null;
   };
 
@@ -548,42 +780,60 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       setError(err);
       return;
     }
-    const companyLabel = companyChoice === 'GFPL' ? 'Gujarat Flotex Pvt Ltd' : 'GTEX Fabrics';
-    const docList = buildDocumentList();
-    const documentListStr = docList.map((item, i) => `${i + 1}.       ${item}`).join('\n') + '\n';
-    const amtNum = parseFloat(amount);
-    const preTotalFromItems = productLines.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
-    const invoiceAmountNum =
-      parseInvoiceValue(invoiceValueDiff) ??
-      (preTotalFromItems > 0 ? preTotalFromItems : null) ??
-      (selectedShipment?.amount ?? null) ??
-      amtNum;
 
-    const items = productLines.map((row) => {
-      const qtyNum = parseFloat(row.quantity);
-      const amt = row.amount.trim() ? parseFloat(row.amount) : null;
+    const companyLabel = companyChoice === 'GFPL' ? 'Gujarat Flotex Pvt Ltd' : 'GTEX Fabrics';
+    const selectedRows = allocationRows.filter((row) => !!row.shipmentId);
+    const documentListStr = buildDocumentListString(selectedRows);
+    const invoiceAmountNum = parseInvoiceValue(invoiceValueDiff) ?? selectedRows.reduce((sum, row) => sum + (row.invoiceAmount || 0), 0);
+    const invoiceAmountVal = Number(invoiceAmountNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const invoiceNoJoined = selectedRows.map((row) => row.invoiceNo).filter(Boolean).join(', ');
+    const invoiceDateJoined = selectedRows.map((row) => row.invoiceDateText).filter(Boolean).join(', ');
+    const shipmentDateJoined = selectedRows.map((row) => row.shipmentDateText).filter(Boolean).join(', ');
+    const goodsDescFromRows = selectedRows.map((row) => row.goodsDesc).filter(Boolean).join(', ');
+    const hsnFromRows = selectedRows.map((row) => row.hsnCodeText).filter(Boolean).join(', ');
+    const qtyFromRows = selectedRows.map((row) => row.quantityText).filter(Boolean).join(', ');
+    const goodsDescFromManual = productLines.map((row) => row.description.trim()).filter(Boolean).join(', ');
+    const hsnFromManual = productLines.map((row) => normalizeHsnCode(row.hsnCode || '')).filter((v) => /^\d{8}$/.test(v)).join(', ');
+    const qtyFromManual = productLines.map((row) => `${row.quantity} ${row.unit}`.trim()).filter(Boolean).join(', ');
+    const goodsDescStr = goodsDescFromRows || goodsDescFromManual || 'GOODS';
+    const hsnStr = hsnFromRows || hsnFromManual || '00000000';
+    const quantityStr = qtyFromRows || qtyFromManual || '1 LOT';
+    const purpose = `PAYMENT FOR PURCHASE OF ${(goodsDescStr || 'GOODS').toUpperCase()} AGAINST INVOICES ${(invoiceNoJoined || invoiceNo).toUpperCase()}`;
+
+    const items = selectedRows.map((row) => {
       return {
-        description: row.description.trim(),
-        hsn_code: normalizeHsnCode(row.hsnCode.trim()),
-        quantity: Number.isNaN(qtyNum) ? row.quantity : qtyNum,
-        unit: row.unit || 'KGS',
-        amount: amt != null && !Number.isNaN(amt) ? amt : (productLines.length === 1 ? invoiceAmountNum : 0),
+        description: row.goodsDesc || 'Shipment goods',
+        hsn_code: row.hsnCodeText || '',
+        quantity: row.quantityText || '',
+        quantity_and_unit: row.quantityText || '',
+        unit: '',
+        amount: parseAmount(row.amountInput),
+        invoice_no: row.invoiceNo,
+        invoice_date: row.invoiceDateText,
+        shipment_date: row.shipmentDateText,
+        term: row.termText || term,
+        mode_shipment: row.modeShipmentText || modeShipment,
       };
     });
 
-    const goodsDescStr = items.map((i) => i.description).filter(Boolean).join(', ');
-    const hsnStr = items.map((i) => i.hsn_code).filter(Boolean).join(', ');
-    const quantityStr = items.map((i) => `${i.quantity} ${i.unit}`).join(', ');
-    const purpose = `PAYMENT FOR PURCHASE OF ${goodsDescStr.toUpperCase()}`;
+    const allocationsPayload: BankPaymentAllocationRow[] = selectedRows.map((row) => ({
+      shipmentId: row.shipmentId,
+      invoiceNo: row.invoiceNo,
+      allocationType: row.allocationType,
+      amount: Number(parseAmount(row.amountInput).toFixed(2)),
+      currency: String(row.currency || currency).toUpperCase(),
+      pendingAmountSnapshot: Number(row.pendingAmount.toFixed(2)),
+    }));
 
-    const invoiceAmountVal = Number(invoiceAmountNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const shouldPost = window.confirm('Press OK to generate documents and post allocations to shipment payments.\nPress Cancel to generate documents only.');
 
     const payload: Record<string, unknown> = {
       company_choice: companyLabel,
       date: paymentDate.trim() || formatDateForDoc(new Date().toISOString().slice(0, 10)),
-      invoice_no: invoiceNo.trim(),
-      invoice_date: invoiceDate.trim(),
-      shipment_date: shipmentDate.trim(),
+      invoice_no: invoiceNoJoined || invoiceNo.trim(),
+      invoice_date: invoiceDateJoined || invoiceDate.trim(),
+      shipment_date: shipmentDateJoined || shipmentDate.trim(),
       currency: currency.trim(),
       raw_amount: amount.trim(),
       invoice_amount: invoiceAmountVal,
@@ -607,8 +857,10 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       hsn_code: hsnStr,
       term: term.trim(),
       mode_shipment: modeShipment.trim(),
+      payment_mode: payMode,
       document_list: documentListStr,
       items,
+      allocations: allocationsPayload,
     };
 
     setGenerating(true);
@@ -617,9 +869,30 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `BankPayment_${(invoiceNo || 'document').replace(/\s/g, '_')}_${currency || 'USD'}.docx`;
+      const firstInvoice = selectedRows[0]?.invoiceNo || invoiceNo || 'document';
+      const suffix = selectedRows.length > 1 ? '_MULTI' : '';
+      a.download = `BankPayment_${firstInvoice.replace(/\s/g, '_')}${suffix}_${currency || 'USD'}.docx`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+      if (shouldPost && allocationsPayload.length > 0) {
+        const batchId = `BATCH_${Date.now()}_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+        const postResult = await api.bankPaymentDocs.postAllocations({
+          batchId,
+          paymentDate: paymentDate.trim() || new Date().toISOString().slice(0, 10),
+          currency: currency.trim(),
+          raw_amount: amount.trim(),
+          allocations: allocationsPayload,
+          company_choice: companyLabel,
+        });
+        if (postResult?.alreadyPosted) {
+          setWarning(`Documents generated. Batch ${batchId} was already posted earlier, so no duplicate payment entries were added.`);
+        } else {
+          setWarning(`Documents generated and ${postResult?.postedCount || 0} allocation row(s) posted to shipment payments.`);
+        }
+      } else {
+        setWarning('Documents generated. Allocations were not posted to shipment payments.');
+      }
     } catch (e: any) {
       const msg = e?.message || 'Failed to generate document.';
       const isTemplateError = typeof msg === 'string' && /multi\s*error|template\s*error/i.test(msg);
@@ -670,7 +943,9 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
                 const v = e.target.value;
                 setCompanyChoice(v);
                 setSupplierId('');
-                setShipmentId('');
+                setPacketShipmentId('');
+                setAllocationRows([createAllocationRow('1', currency, payMode)]);
+                nextAllocIdRef.current = 2;
                 clearSupplierFields();
                 clearShipmentFields();
               }}
@@ -696,7 +971,9 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
               onChange={(e) => {
                 const v = e.target.value;
                 setSupplierId(v);
-                setShipmentId('');
+                setPacketShipmentId('');
+                setAllocationRows([createAllocationRow('1', currency, payMode)]);
+                nextAllocIdRef.current = 2;
                 clearShipmentFields();
               }}
               title={companyChoice ? 'Select supplier to load invoices' : 'Select company first to enable suppliers'}
@@ -712,28 +989,7 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
             </span>
           </div>
           <div className="md:col-span-2">
-            <label className={labelClass}>Pre-fill from shipment (invoice) *</label>
-            <select
-              className={inputClass}
-              disabled={!supplierId}
-              value={shipmentId}
-              onChange={(e) => setShipmentId(e.target.value)}
-              title={supplierId ? 'Select an invoice to pre-fill fields' : 'Select supplier first to enable invoices'}
-            >
-              <option value="">{supplierId ? 'None' : 'Select supplier first'}</option>
-              {shipmentsForSelect.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.invoiceNumber} – {s.expectedShipmentDate ? formatDateForDoc(s.expectedShipmentDate) : 'No date'}
-                </option>
-              ))}
-            </select>
-            <span className="inline-flex items-center mt-2 text-slate-400" title="Choose an invoice to auto-fill invoice and shipment details. This requires company → supplier selection first.">
-              <Info size={16} />
-              <span className="sr-only">Choose an invoice to auto-fill invoice and shipment details. This requires company → supplier selection first.</span>
-            </span>
-          </div>
-          <div>
-            <label className={labelClass}>Payment mode</label>
+            <label className={labelClass}>Payment Mode For This Remittance</label>
             <div className="flex flex-wrap gap-4 sm:gap-6">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -754,36 +1010,118 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
                 <span className="font-semibold">Balance</span>
               </label>
             </div>
+            <p className="mt-2 text-xs text-slate-500">
+              All allocation rows follow this mode. Mixed Advance + Balance is not allowed.
+            </p>
           </div>
-          {payMode === 'Advance' && (
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="bankAdvise"
-                checked={includeBankAdvise}
-                onChange={(e) => setIncludeBankAdvise(e.target.checked)}
-              />
-              <label htmlFor="bankAdvise" className="font-medium">Include BANK ADVISE</label>
+          <div className="md:col-span-2">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+              <label className={labelClass}>Payment Allocation Rows *</label>
+              <button
+                type="button"
+                onClick={addAllocationRow}
+                disabled={!supplierId}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 font-medium hover:bg-indigo-100 text-sm min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Plus size={16} /> Add allocation row
+              </button>
             </div>
-          )}
+            <div className="space-y-3">
+              {allocationRows.map((row, idx) => {
+                const rowShipment = row.shipmentId ? shipmentsForSelect.find((s) => s.id === row.shipmentId) : null;
+                const hasProforma = !!((rowShipment as any)?.documents?.PI);
+                const rowDocOptions = getDocOptionsForMode(payMode, hasProforma);
+                return (
+                <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                    <div className="md:col-span-4">
+                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Shipment / Invoice</label>
+                      <select
+                        className={inputClass}
+                        disabled={!supplierId}
+                        value={row.shipmentId}
+                        onChange={(e) => updateAllocationShipment(row.id, e.target.value)}
+                      >
+                        <option value="">{supplierId ? 'Select invoice...' : 'Select supplier first'}</option>
+                        {shipmentsForSelect.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.invoiceNumber} - {s.expectedShipmentDate ? formatDateForDoc(s.expectedShipmentDate) : 'No date'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Type</label>
+                      <select
+                        className={inputClass}
+                        value={row.allocationType}
+                        onChange={(e) => setPayMode(e.target.value === 'Advance' ? 'Advance' : 'Balance')}
+                        disabled
+                      >
+                        <option value="Balance">Balance</option>
+                        <option value="Advance">Advance</option>
+                      </select>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Allocation Amount</label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        className={inputClass}
+                        value={row.amountInput}
+                        onChange={(e) => updateAllocationAmount(row.id, e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div className="md:col-span-3">
+                      <p className="text-[11px] font-semibold text-slate-600">Invoice: {row.invoiceAmount.toFixed(2)} {row.currency || currency}</p>
+                      <p className="text-[11px] font-semibold text-slate-600">Paid: {row.alreadyPaid.toFixed(2)} {row.currency || currency}</p>
+                      <p className="text-[11px] font-bold text-amber-700">Pending: {row.pendingAmount.toFixed(2)} {row.currency || currency}</p>
+                    </div>
+                    <div className="md:col-span-1 flex md:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removeAllocationRow(row.id)}
+                        disabled={allocationRows.length <= 1}
+                        className="p-3 md:p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0"
+                        title={allocationRows.length <= 1 ? 'At least one row required' : 'Remove row'}
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    Row {idx + 1}: Invoice {row.invoiceNo || '-'} | Currency {row.currency || currency}
+                  </div>
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
+                      Document List For This Shipment
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      {rowDocOptions.map((doc) => (
+                        <label key={`${row.id}-${doc}`} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={!!row.documentChecklist?.[doc]}
+                            onChange={() => toggleAllocationDoc(row.id, doc)}
+                          />
+                          <span className="text-sm">{doc}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                );
+              })}
+            </div>
+            <div className="mt-2 text-xs text-slate-600 space-y-1">
+              <p>Rule: Total of all allocation rows must exactly match remittance amount.</p>
+              <p>Rule: One remittance can be only one mode: all Advance or all Balance.</p>
+              <p>Total allocated: {allocationRows.reduce((sum, row) => sum + parseAmount(row.amountInput), 0).toFixed(2)} {currency || 'USD'}</p>
+            </div>
+          </div>
         </div>
-        {payMode === 'Balance' && (
-          <div className="mt-6">
-            <label className={labelClass}>Document checklist</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-              {BALANCE_DOCS.map((d) => (
-                <label key={d} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={balanceChecklist[d] ?? false}
-                    onChange={(e) => setBalanceChecklist((prev) => ({ ...prev, [d]: e.target.checked }))}
-                  />
-                  <span className="text-sm">{d}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Remittance & Currency */}
@@ -1057,6 +1395,22 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
         <p className="text-sm text-slate-500 mb-4">
           Select documents to print for this shipment. Only uploaded files will be printed.
         </p>
+        <div className="mb-4">
+          <label className={labelClass}>Shipment For Print Packet</label>
+          <select
+            className={inputClass}
+            disabled={!supplierId}
+            value={packetShipmentId}
+            onChange={(e) => setPacketShipmentId(e.target.value)}
+          >
+            <option value="">{supplierId ? 'Select shipment...' : 'Select supplier first'}</option>
+            {shipmentsForSelect.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.invoiceNumber} - {s.expectedShipmentDate ? formatDateForDoc(s.expectedShipmentDate) : 'No date'}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
           {PRINT_PACKET_DOCS.map((doc) => {
             const availableCount = packetDocAvailability[doc.id]?.length || 0;
@@ -1104,3 +1458,4 @@ export const BankPaymentDocGenerator: React.FC<BankPaymentDocGeneratorProps> = (
 };
 
 export default BankPaymentDocGenerator;
+

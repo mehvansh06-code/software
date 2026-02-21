@@ -157,9 +157,16 @@ function createRouter() {
       setClauses.push('name = ?');
       values.push(name);
     }
+    const roleChanged = role !== undefined && String(role) !== String(existing.role || '');
     if (role !== undefined) {
       setClauses.push('role = ?');
       values.push(role);
+      if (roleChanged) {
+        // Keep role and permissions consistent when edited from User Management.
+        const presetPerms = normalizePermissions(PRESETS[role] || PRESETS.VIEWER || [], PRESETS.VIEWER || []);
+        setClauses.push('permissions = ?');
+        values.push(JSON.stringify(presetPerms));
+      }
     }
     if (allowedDomains !== undefined) {
       setClauses.push('allowedDomains = ?');

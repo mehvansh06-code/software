@@ -22,6 +22,9 @@ interface ExportDashboardProps {
 }
 
 interface CashFlowItem {
+  rowType?: 'INSTALLMENT' | 'LC';
+  installmentId?: string | null;
+  lcId?: string | null;
   shipmentId: string;
   entityName: string;
   invoiceNumber: string;
@@ -32,6 +35,8 @@ interface CashFlowItem {
   status: string;
   direction: 'outgoing' | 'incoming';
   amountInr: number;
+  pendingAmount?: number;
+  company?: 'GFPL' | 'GTEX' | null;
 }
 
 const ExportDashboard: React.FC<ExportDashboardProps> = ({ 
@@ -154,11 +159,11 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
       });
       return map;
     }, [safeShipments]);
-    const cashFlowRows = useMemo(() => {
-      const rows = cashFlowView === 'outgoing' ? upcomingPayables.items : upcomingReceivables.items;
-      if (cashFlowCompany === 'ALL') return rows;
-      return rows.filter((r) => shipmentCompanyById.get(String(r.shipmentId)) === cashFlowCompany);
-    }, [cashFlowView, upcomingPayables.items, upcomingReceivables.items, cashFlowCompany, shipmentCompanyById]);
+  const cashFlowRows = useMemo(() => {
+    const rows = cashFlowView === 'outgoing' ? upcomingPayables.items : upcomingReceivables.items;
+    if (cashFlowCompany === 'ALL') return rows;
+    return rows.filter((r) => (shipmentCompanyById.get(String(r.shipmentId)) || r.company) === cashFlowCompany);
+  }, [cashFlowView, upcomingPayables.items, upcomingReceivables.items, cashFlowCompany, shipmentCompanyById]);
     const cashFlowSummary = useMemo(() => ({
       count: cashFlowRows.length,
       totalInr: cashFlowRows.reduce((sum, r) => sum + (Number(r.amountInr) || 0), 0),
@@ -347,8 +352,8 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
           </div>
 
           <div className="md:hidden space-y-3">
-            {cashFlowRows.map((row) => (
-              <article key={`${cashFlowView}-${row.shipmentId}`} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
+            {cashFlowRows.map((row, idx) => (
+              <article key={`${cashFlowView}-${row.shipmentId}-${row.installmentId || row.dueDate || idx}`} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
                 <div className="flex items-start justify-between gap-3">
                   <p className="text-xs font-black text-slate-900 truncate">{row.entityName}</p>
                   <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
@@ -361,7 +366,7 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
                     <p className="text-[9px] font-black uppercase text-slate-400">Amount</p>
-                    <p className="text-[11px] font-black text-emerald-700">{formatCurrency(row.amount, row.currency)}</p>
+                    <p className="text-[11px] font-black text-emerald-700">{formatCurrency((row.pendingAmount ?? row.amount), row.currency)}</p>
                   </div>
                   <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
                     <p className="text-[9px] font-black uppercase text-slate-400">Due Date</p>
@@ -371,7 +376,7 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
               </article>
             ))}
             {!isCashFlowLoading && cashFlowRows.length === 0 && (
-              <p className="py-6 text-center text-slate-400 text-xs italic">No records due in next 30 days.</p>
+              <p className="py-6 text-center text-slate-400 text-xs italic">No installment-based records due in next 30 days.</p>
             )}
             {isCashFlowLoading && (
               <p className="py-6 text-center text-slate-400 text-xs italic">Loading cash flow...</p>
@@ -384,17 +389,17 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
                 <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-black text-slate-500 uppercase tracking-widest">
                   <th className="py-4 px-5 text-left">{cashFlowView === 'outgoing' ? 'Supplier' : 'Customer'}</th>
                   <th className="py-4 px-5 text-left">Invoice #</th>
-                  <th className="py-4 px-5 text-left">Amount</th>
+                  <th className="py-4 px-5 text-left">Pending Amount</th>
                   <th className="py-4 px-5 text-left">Due Date</th>
                   <th className="py-4 px-5 text-left">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {cashFlowRows.map((row) => (
-                  <tr key={`${cashFlowView}-${row.shipmentId}`} className="hover:bg-slate-50/50 transition-colors">
+                {cashFlowRows.map((row, idx) => (
+                  <tr key={`${cashFlowView}-${row.shipmentId}-${row.installmentId || row.dueDate || idx}`} className="hover:bg-slate-50/50 transition-colors">
                     <td className="py-5 px-5 text-sm font-medium text-slate-700">{row.entityName}</td>
                     <td className="py-5 px-5 text-sm font-medium text-slate-700">#{row.invoiceNumber}</td>
-                    <td className="py-5 px-5 text-sm font-bold text-emerald-700 tabular-nums">{formatCurrency(row.amount, row.currency)}</td>
+                    <td className="py-5 px-5 text-sm font-bold text-emerald-700 tabular-nums">{formatCurrency((row.pendingAmount ?? row.amount), row.currency)}</td>
                     <td className="py-5 px-5 text-sm font-medium text-slate-600">{formatDate(row.dueDate)}</td>
                     <td className="py-5 px-5 text-sm">
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
@@ -407,7 +412,7 @@ const ExportDashboard: React.FC<ExportDashboardProps> = ({
                 ))}
                 {!isCashFlowLoading && cashFlowRows.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="py-16 text-center text-slate-400 text-sm">No records due in next 30 days.</td>
+                    <td colSpan={5} className="py-16 text-center text-slate-400 text-sm">No installment-based records due in next 30 days.</td>
                   </tr>
                 )}
                 {isCashFlowLoading && (

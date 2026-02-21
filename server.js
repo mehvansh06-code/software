@@ -324,7 +324,7 @@ app.use('/api/lcs', lcRoutes(broadcast));
 app.use('/api/domestic-buyers', domesticBuyerRoutes(broadcast));
 app.use('/api/indent-products', indentProductRoutes(broadcast));
 app.use('/api/indent', indentRoutes());
-app.use('/api/bank-payment-docs', bankPaymentDocsRoutes());
+app.use('/api/bank-payment-docs', bankPaymentDocsRoutes(broadcast));
 app.use('/api/users', userRoutes());
 app.use('/api/ocr', ocrRoutes);
 app.use('/api/audit-logs', auditRoutes());

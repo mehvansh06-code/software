@@ -24,6 +24,9 @@ interface DashboardProps {
 }
 
 interface CashFlowItem {
+  rowType?: 'INSTALLMENT' | 'LC';
+  installmentId?: string | null;
+  lcId?: string | null;
   shipmentId: string;
   entityName: string;
   invoiceNumber: string;
@@ -34,6 +37,8 @@ interface CashFlowItem {
   status: string;
   direction: 'outgoing' | 'incoming';
   amountInr: number;
+  pendingAmount?: number;
+  company?: 'GFPL' | 'GTEX' | null;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
@@ -113,7 +118,7 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
   const cashFlowRows = useMemo(() => {
     const rows = cashFlowView === 'outgoing' ? upcomingPayables.items : upcomingReceivables.items;
     if (cashFlowCompany === 'ALL') return rows;
-    return rows.filter((r) => shipmentCompanyById.get(String(r.shipmentId)) === cashFlowCompany);
+    return rows.filter((r) => (shipmentCompanyById.get(String(r.shipmentId)) || r.company) === cashFlowCompany);
   }, [cashFlowView, upcomingPayables.items, upcomingReceivables.items, cashFlowCompany, shipmentCompanyById]);
   const cashFlowSummary = useMemo(() => ({
     count: cashFlowRows.length,
@@ -302,8 +307,8 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
                   </div>
 
                   <div className="md:hidden space-y-3">
-                    {cashFlowRows.map((row) => (
-                      <article key={`${cashFlowView}-${row.shipmentId}`} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
+                    {cashFlowRows.map((row, idx) => (
+                      <article key={`${cashFlowView}-${row.shipmentId}-${row.installmentId || row.dueDate || idx}`} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
                         <div className="flex items-start justify-between gap-3">
                           <p className="text-xs font-black text-slate-900 truncate">{row.entityName}</p>
                           <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
@@ -316,7 +321,7 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
                         <div className="grid grid-cols-2 gap-2">
                           <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
                             <p className="text-[9px] font-black uppercase text-slate-400">Amount</p>
-                            <p className="text-[11px] font-black text-indigo-700">{formatCurrency(row.amount, row.currency)}</p>
+                            <p className="text-[11px] font-black text-indigo-700">{formatCurrency((row.pendingAmount ?? row.amount), row.currency)}</p>
                           </div>
                           <div className="rounded-xl bg-slate-50 border border-slate-100 p-2">
                             <p className="text-[9px] font-black uppercase text-slate-400">Due Date</p>
@@ -326,7 +331,7 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
                       </article>
                     ))}
                     {!isCashFlowLoading && cashFlowRows.length === 0 && (
-                      <p className="py-6 text-center text-slate-400 text-xs italic">No records due in next 30 days.</p>
+                      <p className="py-6 text-center text-slate-400 text-xs italic">No installment-based records due in next 30 days.</p>
                     )}
                     {isCashFlowLoading && (
                       <p className="py-6 text-center text-slate-400 text-xs italic">Loading cash flow...</p>
@@ -339,17 +344,17 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
                         <tr className="text-left text-[9px] font-black text-slate-400 uppercase border-b">
                           <th className="pb-3 pr-4">{cashFlowView === 'outgoing' ? 'Supplier' : 'Customer'}</th>
                           <th className="pb-3 pr-4">Invoice #</th>
-                          <th className="pb-3 pr-4">Amount</th>
+                          <th className="pb-3 pr-4">Pending Amount</th>
                           <th className="pb-3 pr-4">Due Date</th>
                           <th className="pb-3 pr-4">Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {cashFlowRows.map((row) => (
-                          <tr key={`${cashFlowView}-${row.shipmentId}`}>
+                        {cashFlowRows.map((row, idx) => (
+                          <tr key={`${cashFlowView}-${row.shipmentId}-${row.installmentId || row.dueDate || idx}`}>
                             <td className="py-3 pr-4 font-bold text-slate-900">{row.entityName}</td>
                             <td className="py-3 pr-4 text-slate-700">{row.invoiceNumber}</td>
-                            <td className="py-3 pr-4 font-black text-indigo-600">{formatCurrency(row.amount, row.currency)}</td>
+                            <td className="py-3 pr-4 font-black text-indigo-600">{formatCurrency((row.pendingAmount ?? row.amount), row.currency)}</td>
                             <td className="py-3 pr-4 text-slate-700">{formatDate(row.dueDate)}</td>
                             <td className="py-3 pr-4">
                               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
@@ -363,7 +368,7 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
                       </tbody>
                     </table>
                     {!isCashFlowLoading && cashFlowRows.length === 0 && (
-                      <p className="py-6 text-center text-slate-400 text-xs italic">No records due in next 30 days.</p>
+                      <p className="py-6 text-center text-slate-400 text-xs italic">No installment-based records due in next 30 days.</p>
                     )}
                     {isCashFlowLoading && (
                       <p className="py-6 text-center text-slate-400 text-xs italic">Loading cash flow...</p>

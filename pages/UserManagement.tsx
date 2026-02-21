@@ -938,6 +938,9 @@ export default function UserManagement() {
                   <option value="EXECUTIONER">Executioner</option>
                   <option value="MANAGEMENT">Management</option>
                 </select>
+                <p className="mt-2 text-xs text-slate-500">
+                  Changing role will also reset this user&apos;s permissions to that role&apos;s default access.
+                </p>
               </div>
               <div className="flex justify-end gap-3 pt-2">
                 <button

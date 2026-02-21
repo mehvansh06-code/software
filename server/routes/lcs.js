@@ -1,7 +1,131 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const fse = require('fs-extra');
+const multer = require('multer');
 const db = require('../db');
+const { DOCUMENTS_BASE, COMPANY_FOLDER } = require('../config');
 const { validateId, hasPermission } = require('../middleware');
-const { log: auditLog } = require('../services/auditService');
+const { log: auditLog, getUserName } = require('../services/auditService');
+
+const LC_ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.xlsx', '.docx', '.csv', '.txt'];
+const LC_UPLOAD_TMP_DIR = path.join(os.tmpdir(), 'exim-lc-upload-tmp');
+try { fs.mkdirSync(LC_UPLOAD_TMP_DIR, { recursive: true }); } catch (_) {}
+
+const lcMulterDisk = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, LC_UPLOAD_TMP_DIR),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.originalname || 'upload'}`),
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+
+function sanitizeFolderName(str) {
+  if (!str || typeof str !== 'string') return 'Unknown';
+  return str.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'Unknown';
+}
+
+function sanitizeFilename(name) {
+  if (!name || typeof name !== 'string') return null;
+  const base = path.basename(name);
+  if (!base || base.includes('..') || /[\\/]/.test(base)) return null;
+  return base;
+}
+
+function sanitizeForPrefix(name) {
+  return String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').trim();
+}
+
+function getLcDocPrefix(documentType) {
+  if (documentType === 'LC_COPY') return 'LC_COPY_';
+  if (documentType === 'AMENDMENTS') return 'AMENDMENTS_';
+  return '';
+}
+
+function getLcDocumentsBaseFolder(lc) {
+  if (!lc) return null;
+  const companyCode = String(lc.company || '').toUpperCase();
+  const companyFolder = COMPANY_FOLDER[companyCode] || companyCode || 'Unknown';
+  return path.join(DOCUMENTS_BASE, 'LC Documents', sanitizeFolderName(companyFolder));
+}
+
+function getLcDocumentsWriteFolder(lc) {
+  const base = getLcDocumentsBaseFolder(lc);
+  const stable = path.join(base, sanitizeFolderName(lc.id || lc.lcNumber || 'Unknown_LC'));
+  try { fs.mkdirSync(stable, { recursive: true }); } catch (_) {}
+  return stable;
+}
+
+function getLcDocumentsReadFolders(lc) {
+  const base = getLcDocumentsBaseFolder(lc);
+  const stable = path.join(base, sanitizeFolderName(lc.id || lc.lcNumber || 'Unknown_LC'));
+  const legacy = path.join(base, sanitizeFolderName(lc.lcNumber || lc.id || 'Unknown_LC'));
+  const out = [];
+  if (fs.existsSync(stable)) out.push(stable);
+  if (legacy !== stable && fs.existsSync(legacy)) out.push(legacy);
+  if (!out.length) out.push(stable);
+  return out;
+}
+
+function findLcFilePath(lc, filename) {
+  const folders = getLcDocumentsReadFolders(lc);
+  for (const folder of folders) {
+    const full = path.join(folder, filename);
+    if (fs.existsSync(full)) return full;
+  }
+  return null;
+}
+
+function listLcFiles(lc) {
+  const folders = getLcDocumentsReadFolders(lc);
+  const map = new Map();
+  for (const folder of folders) {
+    if (!folder || !fs.existsSync(folder)) continue;
+    const files = fs.readdirSync(folder)
+      .filter((f) => {
+        const full = path.join(folder, f);
+        try { return fs.statSync(full).isFile(); } catch (_) { return false; }
+      });
+    for (const name of files) {
+      if (!map.has(name)) map.set(name, true);
+    }
+  }
+  return Array.from(map.keys()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+function deletePrefixedFilesAcrossLcFolders(lc, prefix) {
+  if (!prefix) return;
+  const folders = getLcDocumentsReadFolders(lc);
+  for (const folder of folders) {
+    if (!folder || !fs.existsSync(folder)) continue;
+    try {
+      const existing = fs.readdirSync(folder).filter((f) => String(f).toUpperCase().startsWith(prefix));
+      existing.forEach((f) => { try { fs.unlinkSync(path.join(folder, f)); } catch (_) {} });
+    } catch (_) {}
+  }
+}
+
+function deleteAllCopiesByNameFromLcFolders(lc, filename) {
+  const folders = getLcDocumentsReadFolders(lc);
+  let deleted = 0;
+  for (const folder of folders) {
+    const full = path.join(folder, filename);
+    if (fs.existsSync(full)) {
+      try {
+        fs.unlinkSync(full);
+        deleted += 1;
+      } catch (_) {}
+    }
+  }
+  return deleted;
+}
+
+function getLcDocumentsFolder(lc) {
+  // Backward-compatible alias used in route handlers.
+  const folder = getLcDocumentsWriteFolder(lc);
+  return folder;
+}
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -82,6 +206,100 @@ function createRouter(broadcast) {
       res.json(result);
     } catch (e) {
       next(e);
+    }
+  });
+
+  router.get('/:id/documents-folder-files', hasPermission('documents.view'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'LC ID');
+    if (!idCheck.valid) return res.status(400).json({ files: [] });
+    try {
+      const lc = db.prepare('SELECT id, lcNumber, company FROM lcs WHERE id = ?').get(idCheck.value);
+      if (!lc) return res.status(404).json({ files: [] });
+      const files = listLcFiles(lc);
+      return res.status(200).json({ files });
+    } catch (e) {
+      return res.status(200).json({ files: [] });
+    }
+  });
+
+  router.get('/:id/files/:filename', hasPermission('documents.view'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'LC ID');
+    if (!idCheck.valid) return res.status(400).json({ error: idCheck.message });
+    const filename = sanitizeFilename(req.params && req.params.filename);
+    if (!filename) return res.status(400).json({ error: 'Invalid filename' });
+    try {
+      const lc = db.prepare('SELECT id, lcNumber, company FROM lcs WHERE id = ?').get(idCheck.value);
+      if (!lc) return res.status(404).json({ error: 'LC not found' });
+      const full = findLcFilePath(lc, filename);
+      if (!full || !fs.existsSync(full)) return res.status(404).json({ error: 'File not found' });
+      return res.download(full, filename);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to download file' });
+    }
+  });
+
+  router.post('/:id/files', hasPermission('documents.upload'), lcMulterDisk.single('file'), async (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'LC ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const documentTypeRaw = String(req.query && req.query.documentType ? req.query.documentType : '').toUpperCase();
+    const documentType = documentTypeRaw === 'LC_COPY' || documentTypeRaw === 'AMENDMENTS' ? documentTypeRaw : '';
+    if (!documentType) return res.status(400).json({ success: false, error: 'Invalid documentType' });
+    try {
+      if (!req.file || !req.file.path) return res.status(400).json({ success: false, error: 'No file uploaded' });
+      const lc = db.prepare('SELECT id, lcNumber, company FROM lcs WHERE id = ?').get(idCheck.value);
+      if (!lc) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(404).json({ success: false, error: 'LC not found' });
+      }
+
+      const folder = getLcDocumentsWriteFolder(lc);
+      const original = sanitizeFilename(req.file.originalname || path.basename(req.file.path) || 'upload');
+      const ext = path.extname(original || '').toLowerCase();
+      if (!LC_ALLOWED_EXTENSIONS.includes(ext)) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(400).json({ success: false, error: `Unsupported file type '${ext || ''}'. Allowed: ${LC_ALLOWED_EXTENSIONS.join(', ')}` });
+      }
+
+      const prefix = getLcDocPrefix(documentType);
+      if (prefix && documentType === 'LC_COPY') {
+        deletePrefixedFilesAcrossLcFolders(lc, prefix);
+      }
+
+      const baseName = sanitizeForPrefix(path.basename(original || 'upload', ext)) || 'upload';
+      const unique = documentType === 'LC_COPY'
+        ? `${prefix}${baseName}${ext}`
+        : `${prefix}${baseName}_${Date.now()}${ext}`;
+      const dest = path.join(folder, unique);
+      await fse.move(req.file.path, dest, { overwrite: true });
+
+      const userId = req.user && req.user.id;
+      const userName = getUserName(db, userId);
+      auditLog(db, userId, 'LC_DOCUMENT_UPLOADED', idCheck.value, { filename: unique, lcNumber: lc.lcNumber, documentType, userName });
+      broadcast();
+      return res.json({ success: true, filename: unique });
+    } catch (e) {
+      try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(500).json({ success: false, error: 'Failed to upload file' });
+    }
+  });
+
+  router.delete('/:id/files/:filename', hasPermission('documents.delete'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'LC ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    const filename = sanitizeFilename(req.params && req.params.filename);
+    if (!filename) return res.status(400).json({ success: false, error: 'Invalid filename' });
+    try {
+      const lc = db.prepare('SELECT id, lcNumber, company FROM lcs WHERE id = ?').get(idCheck.value);
+      if (!lc) return res.status(404).json({ success: false, error: 'LC not found' });
+      const deleted = deleteAllCopiesByNameFromLcFolders(lc, filename);
+      if (!deleted) return res.status(404).json({ success: false, error: 'File not found' });
+      const userId = req.user && req.user.id;
+      const userName = getUserName(db, userId);
+      auditLog(db, userId, 'LC_DOCUMENT_DELETED', idCheck.value, { filename, lcNumber: lc.lcNumber, userName });
+      broadcast();
+      return res.json({ success: true });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: 'Failed to delete file' });
     }
   });
 

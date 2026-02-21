@@ -260,6 +260,28 @@ export interface PaymentLog {
   bankCharges?: number;
 }
 
+export interface BankPaymentAllocationRow {
+  shipmentId: string;
+  invoiceNo: string;
+  allocationType: 'Balance' | 'Advance';
+  amount: number;
+  currency: string;
+  pendingAmountSnapshot: number;
+}
+
+export interface ShipmentInstallment {
+  id: string;
+  shipmentId: string;
+  kind: 'OUTGOING' | 'INCOMING';
+  dueDate: string;
+  plannedAmountFC: number;
+  currency: string;
+  notes?: string | null;
+  sortOrder?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Material {
   id: string;
   name: string;
@@ -350,6 +372,7 @@ export interface Shipment {
   portOfLoading?: string;
   portOfDischarge?: string;
   shippingLine?: string;
+  shipmentMode?: 'SEA' | 'AIR' | 'ROAD' | 'RAIL';
   trackingUrl?: string;
   /** Shipper or custom seal number (e.g. container seal) */
   shipperSealNumber?: string;
@@ -455,6 +478,8 @@ export interface Licence {
   type: LicenceType;
   /** Opening date of the licence */
   issueDate: string;
+  /** EPCG: machinery installation date. Exports for fulfilment are valid only on/after this date. */
+  machineryInstallationDate?: string;
   /** Until when imports under this licence can be cleared (duty-free) */
   importValidityDate?: string;
   /** Export obligation must be fulfilled by this date (promise to government) */
@@ -569,6 +594,7 @@ export const EXPORT_DOCUMENT_CHECKLIST = [
   { id: 'PL', label: 'Packing List', prefix: 'PL_' },
   { id: 'SB', label: 'Shipping Bill', prefix: 'SB_' },
   { id: 'BL', label: 'Bill of Lading', prefix: 'BL_' },
+  { id: 'AWB', label: 'Airway Bill', prefix: 'AWB_' },
   { id: 'LODGE', label: 'Lodgement', prefix: 'LODGE_' },
   { id: 'LODGE_ADV', label: 'Lodgement Advise', prefix: 'LODGE_ADV_' },
   { id: 'EBRC', label: 'E-BRC', prefix: 'EBRC_' },
