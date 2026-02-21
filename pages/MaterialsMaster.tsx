@@ -90,9 +90,9 @@ const MaterialsMaster: React.FC = () => {
         hsnCode: r['HSN Code'] ?? r.hsnCode ?? r.HSN ?? '',
         unit: r.Unit ?? r.unit ?? 'KGS',
         type: r.Type ?? r.type ?? 'RAW_MATERIAL',
-      })).filter((r) => r.name.trim());
+      }));
       if (rows.length === 0) {
-        alert('No rows with Name found. Use the Download template for the correct column format.');
+        alert('No data rows found in the sheet. Use the Download template for the correct column format.');
         return;
       }
       const result = await api.materials.import(rows);

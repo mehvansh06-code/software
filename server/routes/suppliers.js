@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
 const { log: auditLog } = require('../services/auditService');
+const { stringValue } = require('../utils/importValidation');
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -56,14 +57,25 @@ function createRouter(broadcast) {
     let count = 0;
     let skipped = 0;
     try {
+      const validationErrors = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || {};
+        const rowNo = i + 2;
+        if (!stringValue(r.name || r.Name || r['Supplier Name'])) validationErrors.push(`Row ${rowNo}: Name is required.`);
+        if (!stringValue(r.country || r.Country)) validationErrors.push(`Row ${rowNo}: Country is required.`);
+      }
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ success: false, error: `Import validation failed:\n${validationErrors.slice(0, 25).join('\n')}` });
+      }
+
       for (const r of rows) {
         const id = (r.id && /^[a-zA-Z0-9_-]+$/.test(r.id)) ? r.id : 's_' + Math.random().toString(36).slice(2, 11);
         try {
           insert.run(
             id,
-            r.name || '',
+            stringValue(r.name || r.Name || r['Supplier Name']),
             r.address || '',
-            r.country || '',
+            stringValue(r.country || r.Country),
             r.bankName || r.bank_name || '',
             r.accountHolderName || r.accountHolder || r.account_holder_name || '',
             r.accountNumber || r.account_number || null,

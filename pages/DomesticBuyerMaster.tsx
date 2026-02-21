@@ -103,9 +103,9 @@ const DomesticBuyerMaster: React.FC<DomesticBuyerMasterProps> = () => {
           paymentTerms,
           sites: siteName || shippingAddress ? [{ id: 's_' + Math.random().toString(36).slice(2, 11), siteName, shippingAddress }] : [],
         };
-      }).filter((r) => r.name);
+      });
       if (rows.length === 0) {
-        alert('No rows with Customer Name found. Use columns: Customer Name, Billing Address, State, GST No, Mobile, Sales Person Name/Mobile/Email, Payment Terms, Ship Site Name, Shipping Address.');
+        alert('No data rows found in the sheet. Use columns: Customer Name, Billing Address, State, GST No, Mobile, Sales Person Name/Mobile/Email, Payment Terms, Ship Site Name, Shipping Address.');
         return;
       }
       const result = await api.domesticBuyers.import(rows);

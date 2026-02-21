@@ -9,7 +9,36 @@ export enum AppDomain {
   IMPORT = 'IMPORT',
   EXPORT = 'EXPORT',
   LICENCE = 'LICENCE',
-  SALES_INDENT = 'SALES_INDENT'
+  SALES_INDENT = 'SALES_INDENT',
+  INSURANCE = 'INSURANCE'
+}
+
+export type InsuranceType = 'FIRE' | 'MARINE' | 'EMPLOYEE' | 'BURGLARY';
+
+export interface InsuranceCoverageLine {
+  particulars: string;
+  sumAssured: number;
+}
+
+export interface InsurancePolicy {
+  id: string;
+  company: string;
+  brokerName: string;
+  brokerContactNumber: string;
+  brokerEmail: string;
+  insuranceProvider: string;
+  policyNumber: string;
+  amount: number;
+  dateOfOpening: string;
+  dateOfRenewal: string;
+  insuranceType: InsuranceType;
+  location: string;
+  coverage: InsuranceCoverageLine[];
+  totalSumAssured: number;
+  policyCopyFilename?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  version?: number;
 }
 
 // ----- Sales Indent (PI) domain -----
@@ -502,6 +531,29 @@ export interface Licence {
   exportProducts?: LicenceExportProduct[];
   /** Optimistic locking version (server returns on GET/PUT). */
   version?: number;
+}
+
+export interface LicenceBundleMissingItem {
+  category: string;
+  shipmentId: string;
+  shipmentRef: string;
+  requiredDocument: string;
+  reason: string;
+}
+
+export interface LicenceBundleResponse {
+  success: boolean;
+  bundleName: string;
+  zipDownloadUrl: string;
+  serverBundlePath: string;
+  stats: {
+    shipmentsScanned: number;
+    importShipments: number;
+    exportShipments: number;
+    filesIncluded: number;
+    missingCount: number;
+  };
+  missing?: LicenceBundleMissingItem[];
 }
 
 export enum LCStatus {

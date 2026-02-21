@@ -1,12 +1,13 @@
 import React from 'react';
 import { AppDomain, UserRole } from '../types';
-import { Package, Ship, TrendingUp, LogOut, ArrowRight, Grid, ShieldCheck, Award, FileText } from 'lucide-react';
+import { Ship, TrendingUp, LogOut, ArrowRight, Grid, ShieldCheck, Award, FileText, Shield } from 'lucide-react';
 
 const ALL_DOMAINS: { domain: AppDomain; label: string }[] = [
   { domain: AppDomain.IMPORT, label: 'Import' },
   { domain: AppDomain.EXPORT, label: 'Export' },
   { domain: AppDomain.LICENCE, label: 'Licence' },
   { domain: AppDomain.SALES_INDENT, label: 'Sales Indent' },
+  { domain: AppDomain.INSURANCE, label: 'Insurance' },
 ];
 
 interface DomainSelectorProps {
@@ -54,21 +55,26 @@ const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName = ''
             const isExport = domain === AppDomain.EXPORT;
             const isLicence = domain === AppDomain.LICENCE;
             const isSalesIndent = domain === AppDomain.SALES_INDENT;
+            const isInsurance = domain === AppDomain.INSURANCE;
             const cardClass = isImport
               ? 'bg-white shadow-indigo-100 border-indigo-50 hover:border-indigo-200 text-indigo-600'
               : isExport
               ? 'bg-white shadow-amber-100 border-amber-50 hover:border-amber-200 text-amber-600'
               : isLicence
               ? 'bg-white shadow-emerald-100 border-emerald-50 hover:border-emerald-200 text-emerald-600'
+              : isInsurance
+              ? 'bg-white shadow-cyan-100 border-cyan-50 hover:border-cyan-200 text-cyan-700'
               : 'bg-white shadow-rose-100 border-rose-50 hover:border-rose-200 text-rose-600';
-            const iconBg = isImport ? 'bg-indigo-50 group-hover:bg-indigo-600' : isExport ? 'bg-amber-50 group-hover:bg-amber-600' : isLicence ? 'bg-emerald-50 group-hover:bg-emerald-600' : 'bg-rose-50 group-hover:bg-rose-600';
-            const Icon = isImport ? Ship : isExport ? TrendingUp : isLicence ? Award : FileText;
+            const iconBg = isImport ? 'bg-indigo-50 group-hover:bg-indigo-600' : isExport ? 'bg-amber-50 group-hover:bg-amber-600' : isLicence ? 'bg-emerald-50 group-hover:bg-emerald-600' : isInsurance ? 'bg-cyan-50 group-hover:bg-cyan-700' : 'bg-rose-50 group-hover:bg-rose-600';
+            const Icon = isImport ? Ship : isExport ? TrendingUp : isLicence ? Award : isInsurance ? Shield : FileText;
             const desc = isImport
               ? 'Supply chain, supplier audits, shipment logistics, and customs documentation.'
               : isExport
               ? 'Buyer onboarding, export shipments, bank realizations, and compliance.'
               : isLicence
               ? 'Advance & EPCG licences, export obligations, and import utilization.'
+              : isInsurance
+              ? 'Insurance policies, coverage values, policy copies, and renewal alerts.'
               : 'Proforma indents, domestic & export buyers, and document generation.';
             return (
               <button
@@ -81,7 +87,7 @@ const DomainSelector: React.FC<DomainSelectorProps> = ({ onSelect, userName = ''
                 </div>
                 <h2 className="text-xl font-black text-slate-900 mb-3 tracking-tight">{label}</h2>
                 <p className="text-slate-500 font-medium text-sm leading-relaxed mb-6">{desc}</p>
-                <div className={`flex items-center gap-2 font-black text-xs uppercase tracking-widest ${isImport ? 'text-indigo-600' : isExport ? 'text-amber-600' : isLicence ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <div className={`flex items-center gap-2 font-black text-xs uppercase tracking-widest ${isImport ? 'text-indigo-600' : isExport ? 'text-amber-600' : isLicence ? 'text-emerald-600' : isInsurance ? 'text-cyan-700' : 'text-rose-600'}`}>
                   Enter <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" />
                 </div>
                 <div className="absolute top-4 right-4 opacity-5 group-hover:opacity-10 transition-opacity">

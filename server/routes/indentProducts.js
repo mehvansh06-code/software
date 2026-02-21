@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
 const { log: auditLog } = require('../services/auditService');
+const { stringValue, parseFiniteNumber, parseHsnCode } = require('../utils/importValidation');
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -105,20 +106,42 @@ function createRouter(broadcast) {
     let count = 0;
     let skipped = 0;
     try {
+      const validationErrors = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || {};
+        const rowNo = i + 2;
+        if (!stringValue(r.quality || r.Quality)) validationErrors.push(`Row ${rowNo}: Quality is required.`);
+        const hsnRes = parseHsnCode(r.hsnCode || r.hsn_code || r.hsn || '', { allowEmpty: true, allowedLengths: [4, 6, 8], maxLength: 8 });
+        if (!hsnRes.ok) validationErrors.push(`Row ${rowNo}: ${hsnRes.error}`);
+        const inrRes = parseFiniteNumber(r.rateInr ?? r.rate_inr, 'Rate INR', { min: 0, allowBlank: true });
+        const usdRes = parseFiniteNumber(r.rateUsd ?? r.rate_usd, 'Rate USD', { min: 0, allowBlank: true });
+        const gbpRes = parseFiniteNumber(r.rateGbp ?? r.rate_gbp, 'Rate GBP', { min: 0, allowBlank: true });
+        if (!inrRes.ok) validationErrors.push(`Row ${rowNo}: ${inrRes.error}`);
+        if (!usdRes.ok) validationErrors.push(`Row ${rowNo}: ${usdRes.error}`);
+        if (!gbpRes.ok) validationErrors.push(`Row ${rowNo}: ${gbpRes.error}`);
+      }
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ success: false, error: `Import validation failed:\n${validationErrors.slice(0, 25).join('\n')}` });
+      }
+
       for (const r of rows) {
         const id = r.id || 'ip_' + Math.random().toString(36).slice(2, 11);
+        const hsnRes = parseHsnCode(r.hsnCode || r.hsn_code || r.hsn || '', { allowEmpty: true, allowedLengths: [4, 6, 8], maxLength: 8 });
+        const inrRes = parseFiniteNumber(r.rateInr ?? r.rate_inr, 'Rate INR', { min: 0, allowBlank: true });
+        const usdRes = parseFiniteNumber(r.rateUsd ?? r.rate_usd, 'Rate USD', { min: 0, allowBlank: true });
+        const gbpRes = parseFiniteNumber(r.rateGbp ?? r.rate_gbp, 'Rate GBP', { min: 0, allowBlank: true });
         try {
           ins.run(
             id,
-            r.quality || '',
+            stringValue(r.quality || r.Quality),
             r.description || r.desc || '',
             r.designNo || r.design_no || r.design || '',
             r.shadeNo || r.shade_no || r.shade || '',
-            r.hsnCode || r.hsn_code || r.hsn || '',
+            hsnRes.value || '',
             r.unit || 'MTR',
-            r.rateInr ?? r.rate_inr ?? 0,
-            r.rateUsd ?? r.rate_usd ?? 0,
-            r.rateGbp ?? r.rate_gbp ?? 0,
+            inrRes.value ?? 0,
+            usdRes.value ?? 0,
+            gbpRes.value ?? 0,
             1
           );
           count++;

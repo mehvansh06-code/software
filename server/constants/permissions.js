@@ -55,6 +55,11 @@ const PERMISSIONS = {
   INDENT_EXPORT_BUYERS: 'indent.export_buyers',
   // Bank Import Payment Document Generator
   BANK_PAYMENT_DOCS_GENERATE: 'bank_payment_docs.generate',
+  // Insurance
+  INSURANCE_VIEW: 'insurance.view',
+  INSURANCE_CREATE: 'insurance.create',
+  INSURANCE_EDIT: 'insurance.edit',
+  INSURANCE_DELETE: 'insurance.delete',
   // Reports
   REPORTS_VIEW: 'reports.view',
   REPORTS_EXPORT: 'reports.export',
@@ -102,6 +107,8 @@ const CHECKER = [
   PERMISSIONS.INDENT_PRODUCTS,
   PERMISSIONS.INDENT_EXPORT_BUYERS,
   PERMISSIONS.BANK_PAYMENT_DOCS_GENERATE,
+  PERMISSIONS.INSURANCE_CREATE,
+  PERMISSIONS.INSURANCE_EDIT,
   PERMISSIONS.MATERIALS_VIEW,
   PERMISSIONS.MATERIALS_CREATE,
   PERMISSIONS.MATERIALS_EDIT,
@@ -218,6 +225,16 @@ const PERMISSION_GROUPS = [
     id: 'bank_payment_docs',
     label: 'Bank Import Payment Docs',
     permissions: [PERMISSIONS.BANK_PAYMENT_DOCS_GENERATE],
+  },
+  {
+    id: 'insurance',
+    label: 'Insurance',
+    permissions: [
+      PERMISSIONS.INSURANCE_VIEW,
+      PERMISSIONS.INSURANCE_CREATE,
+      PERMISSIONS.INSURANCE_EDIT,
+      PERMISSIONS.INSURANCE_DELETE,
+    ],
   },
   {
     id: 'reports',

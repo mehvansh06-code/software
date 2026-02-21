@@ -11,6 +11,7 @@ const SHIPMENT_INSERT_OR_REPLACE_SQL = db.SHIPMENT_INSERT_OR_REPLACE_SQL;
 const { IMPORT_DOCS_BASE, EXPORT_DOCS_BASE, LOCAL_IMPORT_DOCS, LOCAL_EXPORT_DOCS, COMPANY_FOLDER } = require('../config');
 const { validateId, hasPermission } = require('../middleware');
 const { log: auditLog, getUserName } = require('../services/auditService');
+const { stringValue, parseFiniteNumber, parseHsnCode } = require('../utils/importValidation');
 
 const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.xlsx', '.docx', '.csv', '.txt'];
 
@@ -1294,30 +1295,66 @@ function createRouter(broadcast) {
     const stmt = db.prepare(SHIPMENT_INSERT_OR_REPLACE_SQL);
     let imported = 0;
     try {
-      for (const r of rows) {
+      const validationErrors = [];
+      const normalizedRows = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || {};
+        const rowNo = i + 2;
         let supplierId = null;
         let buyerId = null;
+        const partnerIdRaw = isExport ? (r.buyerId || r['Buyer ID']) : (r.supplierId || r['Supplier ID']);
+        const partnerNameRaw = isExport ? (r.buyerName || r['Buyer Name'] || r.Buyer) : (r.supplierName || r['Supplier Name'] || r.Supplier);
+
         if (isExport) {
-          const bRow = r.buyerId ? { id: r.buyerId } : (r.buyerName ? db.prepare('SELECT id FROM buyers WHERE name = ? LIMIT 1').get(r.buyerName) : null);
+          const buyerIdText = stringValue(partnerIdRaw);
+          const buyerNameText = stringValue(partnerNameRaw);
+          const bRow = buyerIdText
+            ? db.prepare('SELECT id FROM buyers WHERE id = ? LIMIT 1').get(buyerIdText)
+            : (buyerNameText ? db.prepare('SELECT id FROM buyers WHERE name = ? LIMIT 1').get(buyerNameText) : null);
           buyerId = bRow ? bRow.id : null;
-          if (!buyerId) continue; // skip row without valid buyer
+          if (!buyerId) {
+            validationErrors.push(`Row ${rowNo}: Buyer not found. Use a valid Buyer ID or exact Buyer Name.`);
+          }
         } else {
-          const sRow = r.supplierId ? { id: r.supplierId } : (r.supplierName ? db.prepare('SELECT id FROM suppliers WHERE name = ? LIMIT 1').get(r.supplierName) : null);
+          const supplierIdText = stringValue(partnerIdRaw);
+          const supplierNameText = stringValue(partnerNameRaw);
+          const sRow = supplierIdText
+            ? db.prepare('SELECT id FROM suppliers WHERE id = ? LIMIT 1').get(supplierIdText)
+            : (supplierNameText ? db.prepare('SELECT id FROM suppliers WHERE name = ? LIMIT 1').get(supplierNameText) : null);
           supplierId = sRow ? sRow.id : null;
-          if (!supplierId) continue;
+          if (!supplierId) {
+            validationErrors.push(`Row ${rowNo}: Supplier not found. Use a valid Supplier ID or exact Supplier Name.`);
+          }
         }
-        const productName = r.productName || r.ProductName || r.product_name || '';
-        const hsnCode = normalizeHsnCode(r.hsnCode || r.HSNCode || r.hsn_code || '');
-        const quantity = Number(r.quantity) || Number(r.Quantity) || 0;
-        const unit = r.unit || r.Unit || 'KGS';
-        const rate = Number(r.rate) || Number(r.ratePerUnit) || 0;
-        const amount = Number(r.amount) || Number(r.Amount) || (quantity * rate) || 0;
-        const exchangeRate = Number(r.exchangeRate) || Number(r.exchange_rate) || 1;
+
+        const productName = stringValue(r.productName || r['Product Name'] || r.ProductName || r.product_name || '');
+        if (!productName) validationErrors.push(`Row ${rowNo}: Product Name is required.`);
+
+        const invoiceNumber = stringValue(r.invoiceNumber || r['Invoice No'] || r.InvoiceNo || r.invoice_number || '');
+        if (!invoiceNumber) validationErrors.push(`Row ${rowNo}: Invoice No is required.`);
+
+        const hsnResult = parseHsnCode(r.hsnCode || r.HSNCode || r.hsn_code || '', { allowEmpty: true, allowedLengths: [4, 6, 8], maxLength: 8 });
+        if (!hsnResult.ok) validationErrors.push(`Row ${rowNo}: ${hsnResult.error}`);
+
+        const quantityRes = parseFiniteNumber(r.quantity ?? r.Quantity, 'Quantity', { min: 0, allowBlank: true });
+        const rateRes = parseFiniteNumber(r.rate ?? r.ratePerUnit ?? r.Rate, 'Rate', { min: 0, allowBlank: true });
+        const amountRes = parseFiniteNumber(r.amount ?? r.Amount, 'Amount', { min: 0, allowBlank: true });
+        const exchangeRateRes = parseFiniteNumber(r.exchangeRate ?? r.exchange_rate, 'Exchange Rate', { min: 0, allowBlank: true });
+        if (!quantityRes.ok) validationErrors.push(`Row ${rowNo}: ${quantityRes.error}`);
+        if (!rateRes.ok) validationErrors.push(`Row ${rowNo}: ${rateRes.error}`);
+        if (!amountRes.ok) validationErrors.push(`Row ${rowNo}: ${amountRes.error}`);
+        if (!exchangeRateRes.ok) validationErrors.push(`Row ${rowNo}: ${exchangeRateRes.error}`);
+
+        const quantity = quantityRes.ok ? (quantityRes.value != null ? quantityRes.value : 0) : 0;
+        const rate = rateRes.ok ? (rateRes.value != null ? rateRes.value : 0) : 0;
+        const amount = amountRes.ok ? (amountRes.value != null ? amountRes.value : ((quantity * rate) || 0)) : 0;
+        const exchangeRate = exchangeRateRes.ok ? (exchangeRateRes.value != null ? exchangeRateRes.value : 1) : 1;
+        const hsnCode = hsnResult.ok ? hsnResult.value : '';
+
         const shipmentModeRaw = String(r.shipmentMode || r.shipment_mode || r.modeShipment || r.mode_of_shipment || 'SEA').toUpperCase();
         const shipmentMode = ['SEA', 'AIR', 'ROAD', 'RAIL'].includes(shipmentModeRaw) ? shipmentModeRaw : 'SEA';
         const invoiceValueINR = Math.round((amount * exchangeRate) * 100) / 100;
         const id = r.id && /^[a-zA-Z0-9_-]+$/.test(r.id) ? r.id : 'sh_' + Math.random().toString(36).slice(2, 11);
-        const invoiceNumber = r.invoiceNumber || r.InvoiceNo || r.invoice_number || id;
         const company = (r.company === 'GTEX' || r.company === 'GFPL') ? r.company : 'GFPL';
         const expectedShipmentDate = r.expectedShipmentDate || r.ExpectedShipmentDate || r.expected_shipment_date || null;
         const invoiceDate = r.invoiceDate || r.InvoiceDate || r.invoice_date || now.slice(0, 10);
@@ -1333,7 +1370,7 @@ function createRouter(broadcast) {
           amount,
           productType: r.productType || 'RAW_MATERIAL',
         }];
-        const sNorm = clientToCents({
+        normalizedRows.push({
           id,
           supplierId,
           buyerId,
@@ -1359,14 +1396,22 @@ function createRouter(broadcast) {
           documents: {},
           payments: [],
         });
+      }
+
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ success: false, error: `Import validation failed:\n${validationErrors.slice(0, 25).join('\n')}` });
+      }
+
+      for (const sRaw of normalizedRows) {
+        const sNorm = clientToCents(sRaw);
         const documentsFolderPath = ensureShipmentDocumentsFolder(sNorm);
         try {
           stmt.run(getShipmentValues(sNorm, documentsFolderPath));
-          setShipmentItems(id, items);
-          setShipmentHistory(id, history);
+          setShipmentItems(sRaw.id, sRaw.items);
+          setShipmentHistory(sRaw.id, sRaw.history);
           imported++;
         } catch (rowErr) {
-          console.warn('shipment import row skip:', id, rowErr.message);
+          console.warn('shipment import row skip:', sRaw.id, rowErr.message);
         }
       }
       const userId = req.user && req.user.id;

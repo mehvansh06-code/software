@@ -38,7 +38,7 @@ function runPermissionMigration(db) {
     if (!/duplicate column name|already exists/i.test(e.message)) throw e;
   }
 
-  // 2b) Add allowedDomains: JSON array of domain ids (IMPORT, EXPORT, LICENCE, SALES_INDENT). Empty/null = all domains.
+  // 2b) Add allowedDomains: JSON array of domain ids (IMPORT, EXPORT, LICENCE, SALES_INDENT, INSURANCE). Empty/null = all domains.
   try {
     db.exec(`ALTER TABLE users ADD COLUMN allowedDomains TEXT DEFAULT '[]'`);
   } catch (e) {
@@ -69,7 +69,7 @@ function runPermissionMigration(db) {
     const ins = db.prepare(
       'INSERT INTO users (id, username, passwordHash, name, role, permissions, allowedDomains) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
-    const allDomains = JSON.stringify(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT']);
+    const allDomains = JSON.stringify(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT', 'INSURANCE']);
     for (const u of FALLBACK_USERS) {
       const perms = PRESETS[u.role] || PRESETS.VIEWER;
       ins.run(u.id, u.username, FALLBACK_PASSWORD_HASH, u.name, u.role, JSON.stringify(perms), allDomains);
@@ -79,7 +79,8 @@ function runPermissionMigration(db) {
   // 5) Backfill: users with empty permissions get preset by role
   const users = db.prepare('SELECT id, role, permissions, allowedDomains FROM users').all();
   const updatePerms = db.prepare('UPDATE users SET permissions = ? WHERE id = ?');
-  const allDomainsJson = JSON.stringify(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT']);
+  const allDomainsJson = JSON.stringify(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT', 'INSURANCE']);
+  const legacyFullDomains = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
   const updateDomains = db.prepare('UPDATE users SET allowedDomains = ? WHERE id = ?');
   for (const u of users) {
     let perms = [];
@@ -91,6 +92,12 @@ function runPermissionMigration(db) {
     if (!Array.isArray(perms) || perms.length === 0) {
       const preset = PRESETS[u.role] || PRESETS.VIEWER;
       updatePerms.run(JSON.stringify(preset), u.id);
+    } else if (String(u.role || '').toUpperCase() === 'MANAGEMENT') {
+      const preset = Array.isArray(PRESETS.MANAGEMENT) ? PRESETS.MANAGEMENT : [];
+      const merged = Array.from(new Set([...(Array.isArray(perms) ? perms : []), ...preset]));
+      if (merged.length !== perms.length) {
+        updatePerms.run(JSON.stringify(merged), u.id);
+      }
     }
     let domains = [];
     try {
@@ -100,6 +107,11 @@ function runPermissionMigration(db) {
     } catch (_) {}
     if (!Array.isArray(domains) || domains.length === 0) {
       updateDomains.run(allDomainsJson, u.id);
+    } else {
+      const hasLegacyFull = legacyFullDomains.every((d) => domains.includes(d));
+      if (hasLegacyFull && !domains.includes('INSURANCE')) {
+        updateDomains.run(JSON.stringify([...domains, 'INSURANCE']), u.id);
+      }
     }
   }
 }

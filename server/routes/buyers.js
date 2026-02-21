@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
 const { log: auditLog } = require('../services/auditService');
+const { stringValue } = require('../utils/importValidation');
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -30,7 +31,27 @@ function createRouter(broadcast) {
     const consigneesJson = (b.consignees && Array.isArray(b.consignees)) ? JSON.stringify(b.consignees) : null;
     const stmt = db.prepare(`INSERT INTO buyers (id, name, address, country, bankName, accountHolderName, accountNumber, swiftCode, bankAddress, contactPerson, contactDetails, salesPersonName, salesPersonContact, hasConsignee, status, requestedBy, createdAt, consignees_json, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     try {
-      stmt.run(idCheck.value, b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress, b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson, 1);
+      stmt.run(
+        idCheck.value,
+        b.name || '',
+        b.address || '',
+        b.country || '',
+        b.bankName || '',
+        b.accountHolderName || '',
+        b.accountNumber || null,
+        b.swiftCode || '',
+        b.bankAddress || '',
+        b.contactPerson || '',
+        b.contactDetails || '',
+        b.salesPersonName || '',
+        b.salesPersonContact || '',
+        b.hasConsignee ? 1 : 0,
+        b.status || 'PENDING',
+        b.requestedBy || 'Manual',
+        b.createdAt || new Date().toISOString(),
+        consigneesJson,
+        1
+      );
     } catch (e) {
       if (/UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(e.message || '')) {
         return res.status(409).json({ success: false, error: 'Buyer already exists. Reload and edit the latest record.' });
@@ -52,6 +73,17 @@ function createRouter(broadcast) {
     let count = 0;
     let skipped = 0;
     try {
+      const validationErrors = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || {};
+        const rowNo = i + 2;
+        if (!stringValue(r.name || r.Name || r['Buyer Name'])) validationErrors.push(`Row ${rowNo}: Name is required.`);
+        if (!stringValue(r.country || r.Country)) validationErrors.push(`Row ${rowNo}: Country is required.`);
+      }
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ success: false, error: `Import validation failed:\n${validationErrors.slice(0, 25).join('\n')}` });
+      }
+
       for (const r of rows) {
         const id = r.id || 'b_' + Math.random().toString(36).slice(2, 11);
         const consignees = Array.isArray(r.consignees) ? r.consignees : [];
@@ -59,9 +91,9 @@ function createRouter(broadcast) {
         try {
           stmt.run(
             id,
-            r.name || '',
+            stringValue(r.name || r.Name || r['Buyer Name']),
             r.address || '',
-            r.country || '',
+            stringValue(r.country || r.Country),
             r.bankName || r.bank_name || '',
             r.accountHolderName || r.accountHolder || r.account_holder_name || '',
             r.accountNumber || r.account_number || null,
@@ -117,8 +149,8 @@ function createRouter(broadcast) {
       WHERE id=? AND version=?
     `);
     const result = stmt.run(
-      b.name, b.address, b.country, b.bankName, b.accountHolderName, b.accountNumber || null, b.swiftCode, b.bankAddress,
-      b.contactPerson, b.contactDetails, b.salesPersonName, b.salesPersonContact, b.hasConsignee ? 1 : 0, b.status, b.requestedBy, b.createdAt, consigneesJson,
+      b.name || '', b.address || '', b.country || '', b.bankName || '', b.accountHolderName || '', b.accountNumber || null, b.swiftCode || '', b.bankAddress || '',
+      b.contactPerson || '', b.contactDetails || '', b.salesPersonName || '', b.salesPersonContact || '', b.hasConsignee ? 1 : 0, b.status || 'PENDING', b.requestedBy || 'Manual', b.createdAt || new Date().toISOString(), consigneesJson,
       idCheck.value, version
     );
     if (result.changes === 0) {

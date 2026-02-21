@@ -7,7 +7,7 @@ const { log: auditLog } = require('../services/auditService');
 const { endSession } = require('../services/sessionService');
 
 const MANAGE_PERM = PERMISSIONS.USERS_MANAGE_PERMISSIONS;
-const VALID_ALLOWED_DOMAINS = new Set(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT']);
+const VALID_ALLOWED_DOMAINS = new Set(['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT', 'INSURANCE']);
 const VALID_PERMISSIONS = new Set(ALL_PERMISSION_VALUES || []);
 const VALID_ROLES = new Set(['VIEWER', 'CHECKER', 'MANAGEMENT', 'EXECUTIONER']);
 const MAX_ARRAY_ITEMS = 256;

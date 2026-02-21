@@ -146,16 +146,16 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
             <div className="grid grid-cols-1 gap-6">
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Legal Entity Name</label>
-                <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Country</label>
-                  <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.country} onChange={e => setFormData({...formData, country: e.target.value})} />
+                  <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.country} onChange={e => setFormData({...formData, country: e.target.value})} />
                 </div>
                 <div>
                   <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Contact Person Name</label>
-                  <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.contactPerson} onChange={e => setFormData({...formData, contactPerson: e.target.value})} />
+                  <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.contactPerson} onChange={e => setFormData({...formData, contactPerson: e.target.value})} />
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -170,7 +170,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
               </div>
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Buyer Address</label>
-                <textarea required rows={3} className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} />
+                <textarea rows={3} className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} />
               </div>
             </div>
           </div>
@@ -183,7 +183,7 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
             <div className="grid grid-cols-1 gap-6">
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">A/C Holder Name (As per Bank)</label>
-                <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.accountHolderName} onChange={e => setFormData({...formData, accountHolderName: e.target.value})} />
+                <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.accountHolderName} onChange={e => setFormData({...formData, accountHolderName: e.target.value})} />
               </div>
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Account Number</label>
@@ -192,16 +192,16 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Bank Name</label>
-                  <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} />
+                  <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} />
                 </div>
                 <div>
                   <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">SWIFT Code</label>
-                  <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.swiftCode} onChange={e => setFormData({...formData, swiftCode: e.target.value})} />
+                  <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.swiftCode} onChange={e => setFormData({...formData, swiftCode: e.target.value})} />
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Bank Address</label>
-                <textarea required rows={3} className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.bankAddress} onChange={e => setFormData({...formData, bankAddress: e.target.value})} />
+                <textarea rows={3} className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.bankAddress} onChange={e => setFormData({...formData, bankAddress: e.target.value})} />
               </div>
             </div>
           </div>
@@ -214,11 +214,11 @@ const BuyerRequest: React.FC<BuyerRequestProps> = ({ onSubmit, user, initialBuye
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Sales Person Name</label>
-                <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.salesPersonName} onChange={e => setFormData({...formData, salesPersonName: e.target.value})} />
+                <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.salesPersonName} onChange={e => setFormData({...formData, salesPersonName: e.target.value})} />
               </div>
               <div>
                 <label className="block text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">Sales Contact</label>
-                <input required className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.salesPersonContact} onChange={e => setFormData({...formData, salesPersonContact: e.target.value})} />
+                <input className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500" value={formData.salesPersonContact} onChange={e => setFormData({...formData, salesPersonContact: e.target.value})} />
               </div>
             </div>
           </div>

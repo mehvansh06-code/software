@@ -74,9 +74,9 @@ export const IndentProductsMaster: React.FC = () => {
           rateUsd,
           rateGbp,
         };
-      }).filter((r) => r.quality);
+      });
       if (rows.length === 0) {
-        alert('No rows with Quality found. Use columns: Quality, Description, Design No, Shade No, HSN Code, Unit, Base Rate / Rate INR, Rate USD, Rate GBP.');
+        alert('No data rows found in the sheet. Use columns: Quality, Description, Design No, Shade No, HSN Code, Unit, Base Rate / Rate INR, Rate USD, Rate GBP.');
         return;
       }
       const result = await api.indentProducts.import(rows);

@@ -13,7 +13,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const XLSX = require('xlsx');
+const XlsxPopulate = require('xlsx-populate');
 const db = require('./db');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -41,7 +41,12 @@ function cellValueToString(value) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   if (typeof value === 'string') return value.trim();
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (typeof value === 'object' && value && value.result != null) return cellValueToString(value.result);
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map((p) => p?.text || '').join('').trim();
+    if (typeof value.text === 'string') return value.text.trim();
+    if (typeof value.hyperlink === 'string') return String(value.text || value.hyperlink).trim();
+    if (value.result != null) return cellValueToString(value.result);
+  }
   return String(value).trim();
 }
 
@@ -49,7 +54,13 @@ function cellValueToPlain(value) {
   if (value == null) return '';
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (typeof value === 'object' && value && value.result != null) return cellValueToPlain(value.result);
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map((p) => p?.text || '').join('');
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.hyperlink === 'string') return value.text || value.hyperlink;
+    if (value.result != null) return cellValueToPlain(value.result);
+    if (typeof value.formula === 'string') return value.formula;
+  }
   return String(value);
 }
 
@@ -64,26 +75,28 @@ function uniqueHeaders(rawHeaders) {
 }
 
 async function sheetToRows(filePath) {
-  const wb = XLSX.readFile(filePath, { cellDates: true });
-  const firstName = Array.isArray(wb.SheetNames) ? wb.SheetNames[0] : '';
-  if (!firstName) return [];
-  const ws = wb.Sheets[firstName];
+  const wb = await XlsxPopulate.fromFileAsync(filePath);
+  const ws = wb.sheet(0);
   if (!ws) return [];
-  const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
-  if (!Array.isArray(matrix) || matrix.length === 0) return [];
-  const headerRow = Array.isArray(matrix[0]) ? matrix[0] : [];
-  const rawHeaders = headerRow.map((v) => cellValueToString(v));
+  const used = ws.usedRange();
+  if (!used) return [];
+  const maxCols = used.endCell().columnNumber();
+  const maxRows = used.endCell().rowNumber();
+  if (maxCols <= 0 || maxRows <= 0) return [];
+  const rawHeaders = [];
+  for (let col = 1; col <= maxCols; col += 1) {
+    rawHeaders.push(cellValueToString(ws.cell(1, col).value()));
+  }
   const headers = uniqueHeaders(rawHeaders);
 
   const rows = [];
-  for (let rowIndex = 1; rowIndex < matrix.length; rowIndex += 1) {
-    const row = Array.isArray(matrix[rowIndex]) ? matrix[rowIndex] : [];
+  for (let rowIndex = 2; rowIndex <= maxRows; rowIndex += 1) {
     const out = {};
     let hasAny = false;
-    for (let col = 0; col < headers.length; col += 1) {
-      const value = cellValueToPlain(row[col]);
+    for (let col = 1; col <= headers.length; col += 1) {
+      const value = cellValueToPlain(ws.cell(rowIndex, col).value());
       if (value !== '' && value != null) hasAny = true;
-      out[headers[col]] = value;
+      out[headers[col - 1]] = value;
     }
     if (hasAny) rows.push(out);
   }

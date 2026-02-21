@@ -420,9 +420,9 @@ const ShipmentMaster: React.FC<ShipmentMasterProps> = ({ shipments, suppliers, b
           return { buyerId: partnerId, buyerName: partnerName, productName, hsnCode, quantity, unit, rate, amount, exchangeRate, invoiceNumber, company, currency, expectedShipmentDate, invoiceDate };
         }
         return { supplierId: partnerId, supplierName: partnerName, productName, hsnCode, quantity, unit, rate, amount, exchangeRate, invoiceNumber, company, currency, expectedShipmentDate, invoiceDate };
-      }).filter((r) => (isExport ? (r.buyerId || (r as any).buyerName) : (r.supplierId || (r as any).supplierName)) && (r as any).invoiceNumber && (r as any).productName);
+      });
       if (rows.length === 0) {
-        alert(isExport ? 'No rows with Buyer ID/Name, Invoice No and Product Name found. Use the Download template for the correct format.' : 'No rows with Supplier ID/Name, Invoice No and Product Name found. Use the Download template for the correct format.');
+        alert('No data rows found in the sheet. Use the Download template for the correct format.');
         return;
       }
       const result = await api.shipments.import(rows, isExport);

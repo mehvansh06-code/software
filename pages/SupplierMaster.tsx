@@ -21,6 +21,7 @@ import { formatDate } from '../constants';
 import SupplierRequest from './SupplierRequest';
 import { api } from '../api';
 import { downloadAoaAsXlsx, readFirstSheetAsObjects } from '../utils/excel';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface SupplierMasterProps {
   suppliers: Supplier[];
@@ -41,9 +42,11 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { hasPermission } = usePermissions(user);
 
   const canApprove = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
   const canEdit = user.role === UserRole.MANAGEMENT || user.role === UserRole.CHECKER;
+  const canDelete = hasPermission('suppliers.delete');
 
   const handleBulkAction = async (newStatus: SupplierStatus) => {
     if (!selectedIds.length) return;
@@ -113,9 +116,9 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
           requestedBy: 'Import',
           createdAt: new Date().toISOString(),
         };
-      }).filter((r) => r.name && r.country);
+      });
       if (rows.length === 0) {
-        alert('No rows with Name and Country found. Use the Download template for the correct column format.');
+        alert('No data rows found in the sheet. Use the Download template for the correct column format.');
         return;
       }
       const result = await api.suppliers.import(rows);
@@ -143,6 +146,23 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
       headers,
       ['Example Supplier Ltd', '123 Trade St', 'China', 'Bank of China', 'Example Supplier Ltd', '1234567890', 'BKCHCNBJ', 'Beijing', 'Li Wei', '+86 123 456 7890', 'contact@example.com'],
     ]);
+  };
+
+  const handleDelete = async (s: Supplier) => {
+    if (!window.confirm(`Delete supplier "${s.name}"? This cannot be undone.`)) return;
+    try {
+      await api.suppliers.delete(s.id);
+      setViewingSupplier((prev) => (prev?.id === s.id ? null : prev));
+      setEditingSupplier((prev) => (prev?.id === s.id ? null : prev));
+      setSelectedIds((prev) => prev.filter((id) => id !== s.id));
+      if (onRefreshData) {
+        await onRefreshData();
+      } else {
+        window.location.reload();
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete supplier.');
+    }
   };
 
   return (
@@ -261,6 +281,9 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                   {canEdit && (
                     <button onClick={() => setEditingSupplier({ ...s })} className="flex-1 px-3 py-2 rounded-xl border border-indigo-200 text-[12px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100">Edit</button>
                   )}
+                  {canDelete && (
+                    <button onClick={() => void handleDelete(s)} className="flex-1 px-3 py-2 rounded-xl border border-red-200 text-[12px] font-bold text-red-600 bg-red-50 hover:bg-red-100">Delete</button>
+                  )}
                 </div>
               </article>
             ))
@@ -313,6 +336,9 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
                       <button onClick={() => setViewingSupplier(s)} className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-all" title="View details"><Eye size={18} /></button>
                       {canEdit && (
                         <button onClick={() => setEditingSupplier({...s})} className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-all" title="Edit"><Edit3 size={18} /></button>
+                      )}
+                      {canDelete && (
+                        <button onClick={() => void handleDelete(s)} className="p-2 text-slate-400 hover:text-red-600 rounded-lg transition-all" title="Delete"><Trash2 size={18} /></button>
                       )}
                     </div>
                   </td>
@@ -498,6 +524,14 @@ const SupplierMaster: React.FC<SupplierMasterProps> = ({ suppliers, user, onUpda
               >
                 Save Changes
               </button>
+              {canDelete && (
+                <button
+                  onClick={() => void handleDelete(editingSupplier)}
+                  className="w-full bg-red-600 text-white font-bold py-4 rounded-xl mt-2 hover:bg-red-700"
+                >
+                  Delete Supplier
+                </button>
+              )}
             </div>
           </div>
         </div>

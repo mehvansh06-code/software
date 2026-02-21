@@ -108,9 +108,9 @@ const BuyerMaster: React.FC<BuyerMasterProps> = ({ buyers, user, onUpdateItem, o
           createdAt: new Date().toISOString(),
           consignees,
         };
-      }).filter((r) => r.name && r.country);
+      });
       if (rows.length === 0) {
-        alert('No rows with Name and Country found. Use the Download template for the correct column format.');
+        alert('No data rows found in the sheet. Use the Download template for the correct column format.');
         return;
       }
       const result = await api.buyers.import(rows);

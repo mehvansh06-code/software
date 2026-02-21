@@ -53,6 +53,7 @@ const userRoutes = require('./server/routes/users');
 const ocrRoutes = require('./server/routes/ocr');
 const auditRoutes = require('./server/routes/audit');
 const paymentsRoutes = require('./server/routes/payments');
+const insuranceRoutes = require('./server/routes/insurance');
 
 const port = process.env.PORT || 3001;
 const app = express();
@@ -165,7 +166,7 @@ app.use(express.json({ limit: '512kb' }));
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const ADMIN_PASSWORD_HASH = ADMIN_PASSWORD ? bcrypt.hashSync(ADMIN_PASSWORD, 10) : null;
-const DEFAULT_ALLOWED_DOMAINS = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
+const DEFAULT_ALLOWED_DOMAINS = ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT', 'INSURANCE'];
 
 function createSessionAndToken(user) {
   const sessionId = crypto.randomUUID();
@@ -198,7 +199,7 @@ function handleLogin(req, res) {
     if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
       return res.status(401).json({ success: false, error: 'Invalid username or password' });
     }
-    const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [], allowedDomains: ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'] };
+    const user = { id: 'admin', username: ADMIN_USERNAME, name: 'Admin', role: 'MANAGEMENT', permissions: PRESETS.MANAGEMENT || [], allowedDomains: ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT', 'INSURANCE'] };
     const loginSession = createSessionAndToken(user);
     if (!loginSession.success) {
       auditLog(db, user.id, 'LOGIN_BLOCKED_ACTIVE_SESSION', user.id, { username: user.username, reason: loginSession.code });
@@ -291,7 +292,7 @@ app.get('/api/auth/me', (req, res) => {
   } catch (_) {}
   // Not in DB (env admin or legacy): return from token + preset permissions
   const name = req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id;
-  const allowedDomains = req.user.allowedDomains || ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT'];
+  const allowedDomains = req.user.allowedDomains || ['IMPORT', 'EXPORT', 'LICENCE', 'SALES_INDENT', 'INSURANCE'];
   res.json({
     id: req.user.id,
     username: req.user.id === 'admin' && ADMIN_USERNAME ? ADMIN_USERNAME : req.user.id,
@@ -329,6 +330,7 @@ app.use('/api/users', userRoutes());
 app.use('/api/ocr', ocrRoutes);
 app.use('/api/audit-logs', auditRoutes());
 app.use('/api/payments', paymentsRoutes());
+app.use('/api/insurance', insuranceRoutes(broadcast));
 
 // Audit log export: every 10 days, export logs older than AUDIT_ARCHIVE_DAYS to CSV and remove from DB
 const AUDIT_EXPORT_INTERVAL_MS = 10 * 24 * 60 * 60 * 1000;

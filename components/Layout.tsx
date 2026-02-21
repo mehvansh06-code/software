@@ -20,7 +20,8 @@ import {
   FileText,
   Menu,
   X,
-  ClipboardList
+  ClipboardList,
+  Shield
 } from 'lucide-react';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -41,6 +42,7 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
   const isExport = domain === AppDomain.EXPORT;
   const isLicence = domain === AppDomain.LICENCE;
   const isSalesIndent = domain === AppDomain.SALES_INDENT;
+  const isInsurance = domain === AppDomain.INSURANCE;
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStats, setSyncStats] = useState<{ isDirty?: boolean }>({});
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -68,6 +70,8 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
 
   const baseNavItems = isLicence ? [
     { path: '/', label: 'Licence Tracker', icon: Award, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
+  ] : isInsurance ? [
+    { path: '/', label: 'Insurance Policies', icon: Shield, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
   ] : isSalesIndent ? [
     { path: '/', label: 'Indent Generator', icon: FileText, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
     { path: '/domestic-buyers', label: 'Domestic Buyers', icon: Users, roles: [UserRole.MANAGEMENT, UserRole.CHECKER, UserRole.EXECUTIONER] as UserRole[] },
@@ -91,12 +95,12 @@ const Layout: React.FC<LayoutProps> = ({ children, domain, user, setDomain, onLo
   if (hasPermission('system.audit_logs')) extraNavItems.push({ path: '/audit-logs', label: 'Audit Logs', icon: ClipboardList, permission: 'system.audit_logs' });
   const navItems = [...baseNavItems, ...extraNavItems];
 
-  const sidebarClass = isLicence ? 'bg-emerald-900' : isSalesIndent ? 'bg-rose-900' : isImport ? 'bg-indigo-900' : 'bg-amber-900';
-  const logoIconClass = isLicence ? 'text-emerald-900' : isSalesIndent ? 'text-rose-900' : isImport ? 'text-indigo-900' : 'text-amber-900';
-  const hubLabel = isLicence ? 'LIC' : isSalesIndent ? 'IND' : isImport ? 'IMP' : 'EXP';
+  const sidebarClass = isLicence ? 'bg-emerald-900' : isSalesIndent ? 'bg-rose-900' : isInsurance ? 'bg-cyan-900' : isImport ? 'bg-indigo-900' : 'bg-amber-900';
+  const logoIconClass = isLicence ? 'text-emerald-900' : isSalesIndent ? 'text-rose-900' : isInsurance ? 'text-cyan-900' : isImport ? 'text-indigo-900' : 'text-amber-900';
+  const hubLabel = isLicence ? 'LIC' : isSalesIndent ? 'IND' : isInsurance ? 'INS' : isImport ? 'IMP' : 'EXP';
   const titleText = isImport ? 'EXIM' : `Flotex ${hubLabel}`;
-  const activeLinkClass = isLicence ? 'bg-emerald-800 text-white shadow-lg' : isSalesIndent ? 'bg-rose-800 text-white shadow-lg' : isImport ? 'bg-indigo-800 text-white shadow-lg' : 'bg-amber-800 text-white shadow-lg';
-  const userAvatarClass = isLicence ? 'bg-emerald-700' : isSalesIndent ? 'bg-rose-700' : isImport ? 'bg-indigo-700' : 'bg-amber-700';
+  const activeLinkClass = isLicence ? 'bg-emerald-800 text-white shadow-lg' : isSalesIndent ? 'bg-rose-800 text-white shadow-lg' : isInsurance ? 'bg-cyan-800 text-white shadow-lg' : isImport ? 'bg-indigo-800 text-white shadow-lg' : 'bg-amber-800 text-white shadow-lg';
+  const userAvatarClass = isLicence ? 'bg-emerald-700' : isSalesIndent ? 'bg-rose-700' : isInsurance ? 'bg-cyan-700' : isImport ? 'bg-indigo-700' : 'bg-amber-700';
 
   return (
     <div className="flex h-screen bg-slate-50">

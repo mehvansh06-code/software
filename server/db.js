@@ -350,6 +350,32 @@ runMigration(`
     version INTEGER DEFAULT 1
   )
 `, 'indent_products');
+
+runMigration(`
+  CREATE TABLE IF NOT EXISTS insurance_policies (
+    id TEXT PRIMARY KEY,
+    company TEXT NOT NULL,
+    brokerName TEXT,
+    brokerContactNumber TEXT,
+    brokerEmail TEXT,
+    insuranceProvider TEXT,
+    policyNumber TEXT,
+    amount REAL DEFAULT 0,
+    dateOfOpening TEXT,
+    dateOfRenewal TEXT,
+    insuranceType TEXT,
+    location TEXT,
+    coverage_json TEXT,
+    totalSumAssured REAL DEFAULT 0,
+    policyCopyFilename TEXT,
+    createdAt TEXT,
+    updatedAt TEXT,
+    version INTEGER DEFAULT 1
+  )
+`, 'insurance_policies');
+runMigration('CREATE INDEX IF NOT EXISTS idx_insurance_renewal ON insurance_policies(dateOfRenewal)', 'idx_insurance_renewal');
+runMigration('CREATE INDEX IF NOT EXISTS idx_insurance_company ON insurance_policies(company)', 'idx_insurance_company');
+runMigration('ALTER TABLE insurance_policies ADD COLUMN amount REAL DEFAULT 0', 'insurance_policies.amount');
 runMigration('ALTER TABLE domestic_buyers ADD COLUMN version INTEGER DEFAULT 1', 'domestic_buyers.version');
 runMigration('ALTER TABLE indent_products ADD COLUMN version INTEGER DEFAULT 1', 'indent_products.version');
 runMigration('UPDATE domestic_buyers SET version = 1 WHERE version IS NULL', 'domestic_buyers.version_backfill');

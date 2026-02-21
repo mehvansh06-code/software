@@ -31,6 +31,7 @@ const SCREEN_OPTIONS: { value: AppDomain; label: string }[] = [
   { value: AppDomain.EXPORT, label: 'Export' },
   { value: AppDomain.LICENCE, label: 'Licence' },
   { value: AppDomain.SALES_INDENT, label: 'Sales Indent' },
+  { value: AppDomain.INSURANCE, label: 'Insurance' },
 ];
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -650,7 +651,7 @@ export default function UserManagement() {
             </div>
             <div className="px-8 py-4 border-b border-slate-100 bg-slate-50/50">
               <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">Screens this user can access</h3>
-              <p className="text-xs text-slate-500 mb-3">Choose which hubs (Import, Export, Licence, Sales Indent) this user sees after login. Click <strong>Save screens</strong> to apply. The user must log out and log back in (or use Switch Domain) to see the change.</p>
+              <p className="text-xs text-slate-500 mb-3">Choose which hubs (Import, Export, Licence, Sales Indent, Insurance) this user sees after login. Click <strong>Save screens</strong> to apply. The user must log out and log back in (or use Switch Domain) to see the change.</p>
               <div className="flex flex-wrap gap-4 mb-4">
                 {SCREEN_OPTIONS.map((opt) => (
                   <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
@@ -769,7 +770,7 @@ export default function UserManagement() {
               </div>
               <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Screens this user can access *</label>
-                <p className="text-xs text-slate-500 mb-2">Select which domains (Import, Export, Licence, Sales Indent) the user can see after login.</p>
+                <p className="text-xs text-slate-500 mb-2">Select which domains (Import, Export, Licence, Sales Indent, Insurance) the user can see after login.</p>
                 <div className="flex flex-wrap gap-4">
                   {SCREEN_OPTIONS.map((opt) => (
                     <label key={opt.value} className="flex items-center gap-2 cursor-pointer">

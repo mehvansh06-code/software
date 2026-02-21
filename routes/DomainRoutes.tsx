@@ -19,6 +19,7 @@ const IndentProductsMaster = lazy(() => import('../pages/IndentProductsMaster'))
 const UserManagement = lazy(() => import('../pages/UserManagement'));
 const AuditLogs = lazy(() => import('../pages/AuditLogs'));
 const BankPaymentDocGenerator = lazy(() => import('../pages/BankPaymentDocGenerator'));
+const InsurancePolicies = lazy(() => import('../pages/InsurancePolicies'));
 
 export const exportPathMatch = (path: string) =>
   ['/', '/buyers', '/export-shipments', '/export-lcs', '/shipments', '/users', '/audit-logs'].includes(path) ||
@@ -29,6 +30,9 @@ export const licencePathMatch = (path: string) =>
 
 export const salesIndentPathMatch = (path: string) =>
   path === '/' || path === '/domestic-buyers' || path === '/indent-buyers' || path === '/indent-products' || path === '/users' || path === '/audit-logs';
+
+export const insurancePathMatch = (path: string) =>
+  path === '/' || path === '/users' || path === '/audit-logs';
 
 export interface DomainRoutesProps {
   domain: AppDomain;
@@ -103,6 +107,7 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
     if (domain === AppDomain.EXPORT && !exportPathMatch(path)) navigate('/', { replace: true });
     if (domain === AppDomain.LICENCE && !licencePathMatch(path)) navigate('/', { replace: true });
     if (domain === AppDomain.SALES_INDENT && !salesIndentPathMatch(path)) navigate('/', { replace: true });
+    if (domain === AppDomain.INSURANCE && !insurancePathMatch(path)) navigate('/', { replace: true });
   }, [domain, location.pathname, navigate]);
 
   const layoutProps = {
@@ -140,6 +145,13 @@ const DomainRoutes: React.FC<DomainRoutesProps> = (props) => {
           <Route path="/domestic-buyers" element={<Layout {...layoutProps}><DomesticBuyerMaster user={user} /></Layout>} />
           <Route path="/indent-buyers" element={<Layout {...layoutProps}><BuyerMaster buyers={buyers} user={user} onUpdateItem={handleUpdateBuyer} onAddItem={handleAddBuyer} onRefreshData={onRefreshData} /></Layout>} />
           <Route path="/indent-products" element={<Layout {...layoutProps}><IndentProductsMaster /></Layout>} />
+          <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
+          <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </>
+      ) : domain === AppDomain.INSURANCE ? (
+        <>
+          <Route path="/" element={<Layout {...layoutProps}><InsurancePolicies user={user} /></Layout>} />
           <Route path="/users" element={<Layout {...layoutProps}><UserManagement /></Layout>} />
           <Route path="/audit-logs" element={<Layout {...layoutProps}><AuditLogs /></Layout>} />
           <Route path="*" element={<Navigate to="/" replace />} />

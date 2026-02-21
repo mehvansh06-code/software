@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const fse = require('fs-extra');
 const multer = require('multer');
+const archiver = require('archiver');
 const db = require('../db');
 const { DOCUMENTS_BASE, COMPANY_FOLDER } = require('../config');
 const { validateId, hasPermission } = require('../middleware');
@@ -53,6 +54,72 @@ function getLicenceDocumentsFolder(licence) {
   const folder = path.join(base, number);
   try { fs.mkdirSync(folder, { recursive: true }); } catch (_) {}
   return folder;
+}
+
+function isEditorOrAdmin(user) {
+  const role = String(user && user.role ? user.role : '').toUpperCase();
+  return role === 'MANAGEMENT' || role === 'CHECKER';
+}
+
+function listFilesOnly(folder) {
+  if (!folder || !fs.existsSync(folder)) return [];
+  return fs.readdirSync(folder).filter((name) => {
+    const full = path.join(folder, name);
+    try {
+      return fs.statSync(full).isFile();
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+function normalizeDocName(name) {
+  return String(name || '')
+    .replace(/\.[^/.]+$/, '')
+    .replace(/\s+/g, '_')
+    .toUpperCase();
+}
+
+function isBoeDoc(name) {
+  const n = normalizeDocName(name);
+  return /^BOE(_|$)/.test(n) || /^BEO(_|$)/.test(n) || n.includes('BILL_OF_ENTRY');
+}
+
+function isSbDoc(name) {
+  const n = normalizeDocName(name);
+  return /^SB(_|$)/.test(n) || n.includes('SHIPPING_BILL');
+}
+
+function isEbrcDoc(name) {
+  const n = normalizeDocName(name);
+  return /^EBRC(_|$)/.test(n) || /^E[-_]?BRC(_|$)/.test(n) || n.includes('E_BRC') || n.includes('EBRC');
+}
+
+function timestampStamp() {
+  const d = new Date();
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function safeCsv(v) {
+  const s = String(v == null ? '' : v);
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+async function copyFileInto(sourceFile, targetDir) {
+  await fse.ensureDir(targetDir);
+  const sourceName = path.basename(sourceFile);
+  const ext = path.extname(sourceName);
+  const base = path.basename(sourceName, ext);
+  let out = path.join(targetDir, sourceName);
+  let n = 2;
+  while (fs.existsSync(out)) {
+    out = path.join(targetDir, `${base}_${n}${ext}`);
+    n++;
+  }
+  await fse.copy(sourceFile, out, { overwrite: false, errorOnExist: false });
+  return path.basename(out);
 }
 
 function createRouter(broadcast) {
@@ -227,6 +294,205 @@ function createRouter(broadcast) {
       return res.json({ success: true });
     } catch (e) {
       return res.status(500).json({ success: false, error: 'Failed to delete file' });
+    }
+  });
+
+  router.post('/:id/generate-document-bundle', hasPermission('licences.edit'), async (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'Licence ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    if (!isEditorOrAdmin(req.user)) return res.status(403).json({ success: false, error: 'Insufficient permissions for this action.' });
+
+    try {
+      const licenceId = idCheck.value;
+      const lic = db.prepare('SELECT id, number, company FROM licences WHERE id = ?').get(licenceId);
+      if (!lic) return res.status(404).json({ success: false, error: 'Licence not found' });
+
+      const licenceFolder = getLicenceDocumentsFolder(lic);
+      const baseBundleName = sanitizeForPrefix(lic.number || lic.id || 'Licence') || 'Licence';
+      const stamp = timestampStamp();
+      const bundleDirName = `${baseBundleName}_${stamp}`;
+      const bundlesRoot = path.join(licenceFolder, 'bundles');
+      const serverBundlePath = path.join(bundlesRoot, bundleDirName);
+      const contentRoot = path.join(serverBundlePath, 'content');
+      const licenceDocsOut = path.join(contentRoot, 'Licence_Documents');
+      const importRoot = path.join(contentRoot, 'Import_Shipments');
+      const exportRoot = path.join(contentRoot, 'Export_Shipments');
+      await fse.ensureDir(licenceDocsOut);
+      await fse.ensureDir(importRoot);
+      await fse.ensureDir(exportRoot);
+
+      const linkedShipments = db.prepare(`
+        SELECT id, invoiceNumber, supplierId, buyerId, linkedLicenceId, epcgLicenceId, advLicenceId, licence_allocations_json, documentsFolderPath
+        FROM shipments
+      `).all().filter((row) => {
+        const direct = String(row.linkedLicenceId || '') === licenceId || String(row.epcgLicenceId || '') === licenceId || String(row.advLicenceId || '') === licenceId;
+        const allocs = safeParseJson(row.licence_allocations_json, []);
+        const hasAlloc = Array.isArray(allocs) && allocs.some((a) => String(a && a.licenceId ? a.licenceId : '') === licenceId);
+        return direct || hasAlloc;
+      });
+
+      const missing = [];
+      let filesIncluded = 0;
+      let importCount = 0;
+      let exportCount = 0;
+
+      for (const name of listFilesOnly(licenceFolder)) {
+        const src = path.join(licenceFolder, name);
+        await copyFileInto(src, licenceDocsOut);
+        filesIncluded++;
+      }
+
+      for (const row of linkedShipments) {
+        const shipmentRef = sanitizeFolderName(String(row.invoiceNumber || row.id || 'Shipment'));
+        const shipmentId = String(row.id || '');
+        const isImport = !!row.supplierId;
+        const isExport = !!row.buyerId;
+
+        if (isImport) importCount++;
+        if (isExport) exportCount++;
+        if (!isImport && !isExport) continue;
+
+        const folder = row.documentsFolderPath && typeof row.documentsFolderPath === 'string' ? row.documentsFolderPath : null;
+        if (!folder || !fs.existsSync(folder)) {
+          if (isImport) {
+            missing.push({ category: 'IMPORT', shipmentId, shipmentRef, requiredDocument: 'BOE', reason: 'Documents folder not found' });
+          }
+          if (isExport) {
+            missing.push({ category: 'EXPORT', shipmentId, shipmentRef, requiredDocument: 'SB', reason: 'Documents folder not found' });
+            missing.push({ category: 'EXPORT', shipmentId, shipmentRef, requiredDocument: 'EBRC', reason: 'Documents folder not found' });
+          }
+          continue;
+        }
+
+        const files = listFilesOnly(folder);
+        if (isImport) {
+          const boeFiles = files.filter(isBoeDoc);
+          if (boeFiles.length === 0) {
+            missing.push({ category: 'IMPORT', shipmentId, shipmentRef, requiredDocument: 'BOE', reason: 'Bill of Entry file not found' });
+          } else {
+            const target = path.join(importRoot, shipmentRef, 'BOE');
+            for (const f of boeFiles) {
+              await copyFileInto(path.join(folder, f), target);
+              filesIncluded++;
+            }
+          }
+        }
+
+        if (isExport) {
+          const sbFiles = files.filter(isSbDoc);
+          const ebrcFiles = files.filter(isEbrcDoc);
+          if (sbFiles.length === 0) {
+            missing.push({ category: 'EXPORT', shipmentId, shipmentRef, requiredDocument: 'SB', reason: 'Shipping Bill file not found' });
+          } else {
+            const target = path.join(exportRoot, shipmentRef, 'Shipping_Bill');
+            for (const f of sbFiles) {
+              await copyFileInto(path.join(folder, f), target);
+              filesIncluded++;
+            }
+          }
+          if (ebrcFiles.length === 0) {
+            missing.push({ category: 'EXPORT', shipmentId, shipmentRef, requiredDocument: 'EBRC', reason: 'e-BRC file not found' });
+          } else {
+            const target = path.join(exportRoot, shipmentRef, 'EBRC');
+            for (const f of ebrcFiles) {
+              await copyFileInto(path.join(folder, f), target);
+              filesIncluded++;
+            }
+          }
+        }
+      }
+
+      if (linkedShipments.length === 0) {
+        missing.push({ category: 'GENERAL', shipmentId: '', shipmentRef: '', requiredDocument: '-', reason: 'No linked shipments found for this licence' });
+      }
+
+      const reportPath = path.join(contentRoot, 'missing_documents_report.csv');
+      const csvHeader = 'category,shipmentId,shipmentRef,requiredDocument,reason\n';
+      const csvBody = missing.map((m) => [
+        safeCsv(m.category),
+        safeCsv(m.shipmentId),
+        safeCsv(m.shipmentRef),
+        safeCsv(m.requiredDocument),
+        safeCsv(m.reason),
+      ].join(',')).join('\n');
+      await fse.writeFile(reportPath, csvHeader + csvBody + (csvBody ? '\n' : ''), 'utf8');
+
+      const manifest = {
+        licenceId: lic.id,
+        licenceNumber: lic.number || lic.id,
+        generatedAt: new Date().toISOString(),
+        stats: {
+          shipmentsScanned: linkedShipments.length,
+          importShipments: importCount,
+          exportShipments: exportCount,
+          filesIncluded,
+          missingCount: missing.length,
+        },
+      };
+      await fse.writeFile(path.join(contentRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+
+      const zipFilename = `${baseBundleName}.zip`;
+      const zipPath = path.join(serverBundlePath, zipFilename);
+      await new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        output.on('close', resolve);
+        output.on('error', reject);
+        archive.on('error', reject);
+        archive.pipe(output);
+        archive.directory(contentRoot, false);
+        archive.finalize();
+      });
+
+      const userId = req.user && req.user.id;
+      const userName = getUserName(db, userId);
+      auditLog(db, userId, 'LICENCE_DOCUMENT_BUNDLE_GENERATED', licenceId, {
+        licenceNumber: lic.number,
+        bundleName: baseBundleName,
+        bundleFolder: serverBundlePath,
+        filesIncluded,
+        missingCount: missing.length,
+        shipmentsScanned: linkedShipments.length,
+        userName,
+      });
+      broadcast();
+
+      return res.json({
+        success: true,
+        bundleName: baseBundleName,
+        zipDownloadUrl: `/api/licences/${encodeURIComponent(licenceId)}/document-bundles/${encodeURIComponent(zipFilename)}?bundle=${encodeURIComponent(bundleDirName)}`,
+        serverBundlePath,
+        stats: manifest.stats,
+        missing,
+      });
+    } catch (e) {
+      console.error('POST /licences/:id/generate-document-bundle', e);
+      return res.status(500).json({ success: false, error: 'Failed to generate licence document bundle' });
+    }
+  });
+
+  router.get('/:id/document-bundles/:filename', hasPermission('licences.edit'), (req, res) => {
+    const idCheck = validateId(req.params && req.params.id, 'Licence ID');
+    if (!idCheck.valid) return res.status(400).json({ success: false, error: idCheck.message });
+    if (!isEditorOrAdmin(req.user)) return res.status(403).json({ success: false, error: 'Insufficient permissions for this action.' });
+    const filename = sanitizeFilename(req.params && req.params.filename);
+    const bundle = sanitizeFilename(req.query && req.query.bundle ? String(req.query.bundle) : '');
+    if (!filename || !bundle) return res.status(400).json({ success: false, error: 'Invalid bundle reference' });
+    try {
+      const lic = db.prepare('SELECT id, number, company FROM licences WHERE id = ?').get(idCheck.value);
+      if (!lic) return res.status(404).json({ success: false, error: 'Licence not found' });
+      const licenceFolder = getLicenceDocumentsFolder(lic);
+      const bundlesRoot = path.join(licenceFolder, 'bundles');
+      const full = path.join(bundlesRoot, bundle, filename);
+      const resolvedBase = path.resolve(bundlesRoot);
+      const resolvedFull = path.resolve(full);
+      if (resolvedFull !== resolvedBase && !resolvedFull.startsWith(resolvedBase + path.sep)) {
+        return res.status(400).json({ success: false, error: 'Invalid bundle reference' });
+      }
+      if (!fs.existsSync(resolvedFull)) return res.status(404).json({ success: false, error: 'Bundle file not found' });
+      return res.download(resolvedFull, filename);
+    } catch (e) {
+      return res.status(500).json({ success: false, error: 'Failed to download bundle' });
     }
   });
 

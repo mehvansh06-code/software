@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Licence, LicenceType, LicenceImportProduct, LicenceExportProduct, Shipment, User, UserRole, Material } from '../types';
+import { Licence, LicenceType, LicenceImportProduct, LicenceExportProduct, Shipment, User, UserRole, Material, LicenceBundleResponse } from '../types';
 import { Award, ShieldAlert, Calendar, FileCheck, TrendingUp, Plus, Briefcase, Settings, X, Save, ArrowDownLeft, ArrowUpRight, Pencil, Trash2, ArrowLeft, FileDown } from 'lucide-react';
 import { downloadWorkbookAsXlsx } from '../utils/excel';
 import { formatINR, formatDate, formatCurrency } from '../constants';
@@ -224,6 +224,9 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
   const [licenceFiles, setLicenceFiles] = useState<string[]>([]);
   const [uploadingLicenceDocType, setUploadingLicenceDocType] = useState<'LICENCE_COPY' | 'BOND' | 'MIC' | null>(null);
   const [licenceDocError, setLicenceDocError] = useState<string | null>(null);
+  const [bundleBusy, setBundleBusy] = useState(false);
+  const [bundleError, setBundleError] = useState<string | null>(null);
+  const [bundleResult, setBundleResult] = useState<LicenceBundleResponse | null>(null);
 
   useEffect(() => {
     if (showAddLicence) {
@@ -431,6 +434,11 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
     return () => { mounted = false; };
   }, [selectedLicenceResolved?.id]);
 
+  useEffect(() => {
+    setBundleError(null);
+    setBundleResult(null);
+  }, [selectedLicenceResolved?.id]);
+
   const hasShipmentDoc = (shipmentId: string, doc: 'BOE' | 'SB' | 'EBRC') => {
     const files = shipmentDocFiles[String(shipmentId)] || [];
     const strip = (v: string) => String(v || '').replace(/\.[^/.]+$/, '').toUpperCase();
@@ -497,6 +505,36 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
       await refreshLicenceFiles();
     } catch (e: any) {
       setLicenceDocError(String(e?.message || 'Failed to delete document.'));
+    }
+  };
+
+  const handleGenerateBundle = async () => {
+    if (!selectedLicenceResolved?.id) return;
+    setBundleBusy(true);
+    setBundleError(null);
+    try {
+      const out = await api.licences.generateDocumentBundle(selectedLicenceResolved.id);
+      setBundleResult(out as LicenceBundleResponse);
+    } catch (e: any) {
+      setBundleError(String(e?.message || 'Failed to generate document bundle.'));
+    } finally {
+      setBundleBusy(false);
+    }
+  };
+
+  const handleDownloadBundle = async () => {
+    if (!bundleResult?.zipDownloadUrl) return;
+    try {
+      const blob = await api.licences.downloadBundle(bundleResult.zipDownloadUrl);
+      const name = `${bundleResult.bundleName || 'Licence'}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e: any) {
+      setBundleError(String(e?.message || 'Failed to download document bundle.'));
     }
   };
 
@@ -1044,6 +1082,16 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
           {canEditLicence(user) && (
             <button
               type="button"
+              onClick={() => void handleGenerateBundle()}
+              disabled={bundleBusy}
+              className="px-4 py-2 rounded-xl font-bold text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 text-xs uppercase tracking-widest"
+            >
+              <FileDown size={14} /> {bundleBusy ? 'Generating Bundle...' : 'Bundle Documents'}
+            </button>
+          )}
+          {canEditLicence(user) && (
+            <button
+              type="button"
               onClick={() => { setEditLicenceForm({ ...selectedLicenceResolved }); setShowEditLicence(true); }}
               className="px-4 py-2 rounded-xl font-bold text-indigo-600 hover:bg-indigo-50 flex items-center gap-2 text-xs uppercase tracking-widest"
             >
@@ -1250,6 +1298,27 @@ const LicenceTracker: React.FC<LicenceTrackerProps> = ({ licences, shipments, us
                   <p className="text-sm font-bold text-red-800">Cannot save obligations</p>
                   <p className="text-xs text-red-600 mt-0.5">{saveError}</p>
                 </div>
+              </div>
+            )}
+
+            {(bundleError || bundleResult) && canEditLicence(user) && (
+              <div className={`rounded-2xl border p-4 ${bundleError ? 'border-red-200 bg-red-50' : 'border-emerald-200 bg-emerald-50'}`}>
+                {bundleError ? (
+                  <p className="text-xs font-semibold text-red-700">{bundleError}</p>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-bold text-emerald-800 uppercase">Document bundle generated</p>
+                      <button type="button" onClick={() => void handleDownloadBundle()} className="px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-emerald-700 text-[10px] font-black uppercase">
+                        Download ZIP
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-emerald-800">Bundle stored at: <span className="font-semibold">{bundleResult?.serverBundlePath}</span></p>
+                    <p className="text-[11px] text-emerald-800">
+                      Files: <span className="font-semibold">{bundleResult?.stats?.filesIncluded ?? 0}</span> | Missing: <span className="font-semibold">{bundleResult?.stats?.missingCount ?? 0}</span> | Shipments scanned: <span className="font-semibold">{bundleResult?.stats?.shipmentsScanned ?? 0}</span>
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 

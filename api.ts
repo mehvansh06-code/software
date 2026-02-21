@@ -333,6 +333,7 @@ export const api = {
     create: (data: any) => fetchApi('suppliers', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: any) => fetchApi(`suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     import: (rows: any[]) => fetchApi('suppliers/import', { method: 'POST', body: JSON.stringify({ rows }) }),
+    delete: (id: string) => fetchApi(`suppliers/${id}`, { method: 'DELETE' }),
   },
   buyers: {
     list: () => fetchApi('buyers'),
@@ -533,6 +534,26 @@ export const api = {
         }
       });
     },
+    generateDocumentBundle: (id: string): Promise<{ success: boolean; bundleName: string; zipDownloadUrl: string; serverBundlePath: string; stats: { shipmentsScanned: number; importShipments: number; exportShipments: number; filesIncluded: number; missingCount: number }; missing?: Array<{ category: string; shipmentId: string; shipmentRef: string; requiredDocument: string; reason: string }> }> => {
+      if (!id || String(id) === 'undefined') return Promise.reject(new Error('Invalid licence ID'));
+      return fetchApi(`licences/${id}/generate-document-bundle`, { method: 'POST' });
+    },
+    downloadBundle: (zipDownloadUrl: string): Promise<Blob> => {
+      if (!zipDownloadUrl || typeof zipDownloadUrl !== 'string') return Promise.reject(new Error('Invalid bundle download URL'));
+      const safeRelative = zipDownloadUrl.startsWith('/api/') ? zipDownloadUrl : null;
+      const safeAbsolute = /^https?:\/\//i.test(zipDownloadUrl) ? zipDownloadUrl : null;
+      const url = safeRelative ? `${API_ORIGIN}${safeRelative}` : safeAbsolute;
+      if (!url) return Promise.reject(new Error('Invalid bundle download URL'));
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { headers }).then((r) => {
+        if (!r.ok) throw new Error(r.status === 404 ? 'Bundle not found' : 'Bundle download failed');
+        return r.blob();
+      });
+    },
   },
   lcs: {
     list: () => fetchApi('lcs'),
@@ -613,6 +634,56 @@ export const api = {
     update: (id: string, data: any) => fetchApi(`indent-products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => fetchApi(`indent-products/${id}`, { method: 'DELETE' }),
     import: (rows: any[]) => fetchApi('indent-products/import', { method: 'POST', body: JSON.stringify({ rows }) }),
+  },
+  insurance: {
+    list: () => fetchApi('insurance'),
+    expiringAlerts: () => fetchApi('insurance/alerts/expiring'),
+    create: (data: any) => fetchApi('insurance', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: any) => fetchApi(`insurance/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchApi(`insurance/${id}`, { method: 'DELETE' }),
+    uploadFile: (id: string, file: File): Promise<{ success: boolean; filename?: string; error?: string }> => {
+      if (!id || !file) return Promise.reject(new Error('Invalid id or file'));
+      const formData = new FormData();
+      formData.append('file', file);
+      const url = `${API_BASE}/insurance/${id}/files`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { method: 'POST', headers, body: formData }).then(async (r) => {
+        let data: any = {};
+        try {
+          data = await r.json();
+        } catch (_) {
+          data = { error: 'Invalid response' };
+        }
+        if (r.ok) return { success: true, filename: data.filename };
+        return { success: false, error: data.error || 'Upload failed' };
+      });
+    },
+    downloadFile: (id: string, filename: string): Promise<Blob> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/insurance/${id}/files/${encodeURIComponent(filename)}`;
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { headers }).then((r) => {
+        if (!r.ok) throw new Error(r.status === 404 ? 'File not found' : 'Download failed');
+        return r.blob();
+      });
+    },
+    deleteFile: (id: string, filename: string): Promise<void> => {
+      if (!id || !filename) return Promise.reject(new Error('Invalid id or filename'));
+      const url = `${API_BASE}/insurance/${id}/files/${encodeURIComponent(filename)}`;
+      return fetch(url, { method: 'DELETE', headers: getAuthHeaders() }).then((r) => {
+        if (!r.ok) {
+          return r.json().then((j: any) => Promise.reject(new Error(j?.error || 'Delete failed')));
+        }
+      });
+    },
   },
   indent: {
     getCompanies: () => fetchApi('indent/companies'),

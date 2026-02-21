@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { validateId, hasPermission } = require('../middleware');
 const { log: auditLog } = require('../services/auditService');
+const { stringValue, parseHsnCode } = require('../utils/importValidation');
 
 function createRouter(broadcast) {
   const router = express.Router();
@@ -46,14 +47,28 @@ function createRouter(broadcast) {
     let count = 0;
     let skipped = 0;
     try {
+      const validationErrors = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || {};
+        const rowNo = i + 2;
+        const name = stringValue(r.name || r.Name || r['Material Name']);
+        if (!name) validationErrors.push(`Row ${rowNo}: Name is required.`);
+        const hsnRes = parseHsnCode(r.hsnCode || r['HSN Code'] || r.HSN, { allowEmpty: true, allowedLengths: [4, 6, 8], maxLength: 8 });
+        if (!hsnRes.ok) validationErrors.push(`Row ${rowNo}: ${hsnRes.error}`);
+      }
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ success: false, error: `Import validation failed:\n${validationErrors.slice(0, 25).join('\n')}` });
+      }
+
       for (const r of rows) {
         const id = (r.id && /^[a-zA-Z0-9_-]+$/.test(r.id)) ? r.id : 'm_' + Math.random().toString(36).slice(2, 11);
+        const hsnRes = parseHsnCode(r.hsnCode || r['HSN Code'] || r.HSN, { allowEmpty: true, allowedLengths: [4, 6, 8], maxLength: 8 });
         try {
           db.prepare('INSERT INTO materials (id, name, description, hsnCode, unit, type, version) VALUES (?,?,?,?,?,?,?)').run(
             id,
-            r.name || '',
+            stringValue(r.name || r.Name || r['Material Name']),
             r.description || null,
-            r.hsnCode || null,
+            hsnRes.value || null,
             r.unit || 'KGS',
             r.type || null,
             1
