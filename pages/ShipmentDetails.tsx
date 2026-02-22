@@ -91,6 +91,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
     portOfDischarge: '',
     expectedArrivalDate: '',
     expectedShipmentDate: '',
+    dischargeDate: '',
+    freeDays: '',
+    containerReturned: false,
+    containerReturnDate: '',
     shipperSealNumber: '',
     lineSealNumber: ''
   });
@@ -339,6 +343,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       portOfDischarge: shipment.portOfDischarge || '',
       expectedArrivalDate: shipment.expectedArrivalDate || '',
       expectedShipmentDate: shipment.expectedShipmentDate || '',
+      dischargeDate: shipment.dischargeDate || '',
+      freeDays: shipment.freeDays != null ? String(shipment.freeDays) : '',
+      containerReturned: !!shipment.containerReturned,
+      containerReturnDate: shipment.containerReturnDate || '',
       shipperSealNumber: (shipment as any).shipperSealNumber || '',
       lineSealNumber: (shipment as any).lineSealNumber || ''
     });
@@ -607,6 +615,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
 
   const handleSaveLogistics = async () => {
     try {
+      if (!isExport && logisticsData.containerReturned && !logisticsData.containerReturnDate) {
+        const proceed = window.confirm('Container is marked as returned, but return date is empty. Save anyway?');
+        if (!proceed) return;
+      }
       const updated = { ...shipment, ...logisticsData };
       await onUpdate(updated);
       setEditLogistics(false);
@@ -828,6 +840,10 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
       portOfDischarge: shipment.portOfDischarge || '',
       expectedArrivalDate: shipment.expectedArrivalDate || '',
       expectedShipmentDate: shipment.expectedShipmentDate || '',
+      dischargeDate: shipment.dischargeDate || '',
+      freeDays: shipment.freeDays != null ? String(shipment.freeDays) : '',
+      containerReturned: !!shipment.containerReturned,
+      containerReturnDate: shipment.containerReturnDate || '',
       shipperSealNumber: (shipment as any).shipperSealNumber || '',
       lineSealNumber: (shipment as any).lineSealNumber || ''
     });
@@ -1714,6 +1730,52 @@ const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipments, suppliers,
                       <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.expectedArrivalDate} onChange={e => setLogisticsData({...logisticsData, expectedArrivalDate: e.target.value})} />
                     ) : (
                       <p className="text-sm font-bold text-slate-800">{logisticsData.expectedArrivalDate ? formatDate(logisticsData.expectedArrivalDate) : '---'}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Date of Discharge</label>
+                    {editAll ? (
+                      <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.dischargeDate} onChange={e => setLogisticsData({ ...logisticsData, dischargeDate: e.target.value })} />
+                    ) : (
+                      <p className="text-sm font-bold text-slate-800">{logisticsData.dischargeDate ? formatDate(logisticsData.dischargeDate) : '---'}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Free Days</label>
+                    {editAll ? (
+                      <input type="number" min="1" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold" value={logisticsData.freeDays} onChange={e => setLogisticsData({ ...logisticsData, freeDays: e.target.value })} placeholder="e.g. 7" />
+                    ) : (
+                      <p className="text-sm font-bold text-slate-800">{logisticsData.freeDays || '---'}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Container Returned?</label>
+                    {editAll ? (
+                      <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-800">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          checked={!!logisticsData.containerReturned}
+                          onChange={e => setLogisticsData({ ...logisticsData, containerReturned: e.target.checked, containerReturnDate: e.target.checked ? logisticsData.containerReturnDate : '' })}
+                        />
+                        Mark as returned
+                      </label>
+                    ) : (
+                      <p className="text-sm font-bold text-slate-800">{logisticsData.containerReturned ? 'Yes' : 'No'}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Container Return Date</label>
+                    {editAll ? (
+                      <input
+                        type="date"
+                        disabled={!logisticsData.containerReturned}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold disabled:bg-slate-100 disabled:text-slate-400"
+                        value={logisticsData.containerReturnDate}
+                        onChange={e => setLogisticsData({ ...logisticsData, containerReturnDate: e.target.value })}
+                      />
+                    ) : (
+                      <p className="text-sm font-bold text-slate-800">{logisticsData.containerReturnDate ? formatDate(logisticsData.containerReturnDate) : '---'}</p>
                     )}
                   </div>
                </div>

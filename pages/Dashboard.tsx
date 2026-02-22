@@ -107,6 +107,53 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
     return alerts;
   }, [lcs]);
 
+  const demurrageRiskAlerts = useMemo(() => {
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+    const parseIsoDate = (value?: string | null) => {
+      if (!value || typeof value !== 'string') return null;
+      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const d = Number(m[3]);
+      const dt = new Date(y, mo - 1, d);
+      if (Number.isNaN(dt.getTime())) return null;
+      return dt;
+    };
+
+    return (shipments || [])
+      .filter((s) =>
+        !!s.supplierId &&
+        !!s.dischargeDate &&
+        s.freeDays != null &&
+        Number(s.freeDays) > 0 &&
+        s.status !== ShipmentStatus.REACHED_PLANT &&
+        s.status !== ShipmentStatus.REACHED_DESTINATION &&
+        s.containerReturned !== true
+      )
+      .map((s) => {
+        const discharge = parseIsoDate(s.dischargeDate);
+        if (!discharge) return null;
+        const freeDays = Math.max(1, Number(s.freeDays) || 0);
+        const lastFreeDay = new Date(discharge);
+        lastFreeDay.setDate(lastFreeDay.getDate() + (freeDays - 1));
+        const lastFreeDayEnd = new Date(lastFreeDay.getFullYear(), lastFreeDay.getMonth(), lastFreeDay.getDate(), 23, 59, 59, 999);
+        const daysRemaining = Math.floor((lastFreeDayEnd.getTime() - todayStart.getTime()) / (24 * 60 * 60 * 1000));
+        return {
+          id: s.id,
+          invoiceNumber: s.invoiceNumber,
+          containerNumber: s.containerNumber || '---',
+          lastFreeDay: `${lastFreeDay.getFullYear()}-${String(lastFreeDay.getMonth() + 1).padStart(2, '0')}-${String(lastFreeDay.getDate()).padStart(2, '0')}`,
+          daysRemaining,
+          containerReturned: !!s.containerReturned,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row)
+      .sort((a, b) => a.daysRemaining - b.daysRemaining);
+  }, [shipments]);
+
   const activeShipmentsCount = useMemo(() => shipments.filter(s => !!s.supplierId && s.status !== ShipmentStatus.REACHED_PLANT).length, [shipments]);
   const shipmentCompanyById = useMemo(() => {
     const map = new Map<string, 'GFPL' | 'GTEX'>();
@@ -165,6 +212,54 @@ const Dashboard: React.FC<DashboardProps> = ({ shipments, suppliers, lcs }) => {
           </div>
         </section>
       )}
+
+      <section className="bg-white p-6 rounded-[2rem] border border-slate-100">
+        <div className="flex items-center gap-2 mb-4">
+          <BellRing className="text-amber-600" size={20} />
+          <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest">Demurrage Risk Alerts</h2>
+        </div>
+        {demurrageRiskAlerts.length === 0 ? (
+          <p className="text-xs text-slate-500 italic">No active import containers are currently at demurrage or detention risk.</p>
+        ) : (
+          <div className="space-y-3">
+            {demurrageRiskAlerts.map((row) => {
+              const severityClass = row.daysRemaining < 0
+                ? 'bg-red-50 border-red-100 text-red-700'
+                : row.daysRemaining <= 3
+                  ? 'bg-amber-50 border-amber-100 text-amber-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-700';
+              return (
+                <div key={row.id} className={`rounded-2xl border p-4 ${severityClass}`}>
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-center">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-wider opacity-70">Invoice</p>
+                      <p className="text-sm font-black">{row.invoiceNumber || '---'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-wider opacity-70">Container</p>
+                      <p className="text-sm font-bold">{row.containerNumber}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-wider opacity-70">Last Free Day</p>
+                      <p className="text-sm font-bold">{formatDate(row.lastFreeDay)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-wider opacity-70">Days Remaining</p>
+                      <p className="text-sm font-black">{row.daysRemaining}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-wider opacity-70">Returned</p>
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide bg-slate-100 text-slate-700">
+                        {row.containerReturned ? 'Returned' : 'Not Returned'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">

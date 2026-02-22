@@ -92,6 +92,7 @@ function rowToClient(r) {
     rodtep: r.rodtep != null ? fromCents(r.rodtep) : 0,
     freightCharges: r.freightCharges != null ? fromCents(r.freightCharges) : null,
     otherCharges: r.otherCharges != null ? fromCents(r.otherCharges) : null,
+    containerReturned: !!r.containerReturned,
     version: r.version != null ? r.version : 1,
   };
 }
@@ -1450,6 +1451,7 @@ function createRouter(broadcast) {
       UPDATE shipments SET
         status=?, containerNumber=?, blNumber=?, blDate=?, beNumber=?, beDate=?,
         shippingLine=?, shipmentMode=?, portCode=?, portOfLoading=?, portOfDischarge=?,
+        freeDays=?, dischargeDate=?, containerReturned=?, containerReturnDate=?,
         assessedValue=?, dutyBCD=?, dutySWS=?, dutyINT=?, dutyPenalty=?, dutyFine=?, gst=?, trackingUrl=?,
         documents_json=?, history_json=?, payments_json=?, items_json=?,
         isUnderLicence=?, linkedLicenceId=?, epcgLicenceId=?, advLicenceId=?, licenceObligationAmount=?, licenceObligationQuantity=?,
@@ -1473,7 +1475,7 @@ function createRouter(broadcast) {
           setShipmentHistory(id, s.history || []);
         } else {
           const version = s.version;
-          const existingRow = db.prepare('SELECT supplierId, buyerId, currency, amount, fobValueFC, exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, shipmentMode, documents_json, history_json, payments_json, licence_allocations_json, licenceExportLines_json, licenceImportLines_json FROM shipments WHERE id = ?').get(id);
+          const existingRow = db.prepare('SELECT supplierId, buyerId, currency, amount, fobValueFC, exchangeRate, remarks, paymentTerm, fileStatus, consigneeId, lcSettled, shipmentMode, freeDays, dischargeDate, containerReturned, containerReturnDate, documents_json, history_json, payments_json, licence_allocations_json, licenceExportLines_json, licenceImportLines_json FROM shipments WHERE id = ?').get(id);
           const existing = existingRow;
           const existingPayments = safeParseJson(existingRow?.payments_json, []);
           const shipmentCurrency = String(s.currency || existingRow?.currency || 'USD').toUpperCase();
@@ -1514,9 +1516,17 @@ function createRouter(broadcast) {
           const licenceAllocationsJson = s.licenceAllocations !== undefined
             ? (Array.isArray(s.licenceAllocations) && s.licenceAllocations.length > 0 ? JSON.stringify(s.licenceAllocations) : null)
             : (existingRow?.licence_allocations_json ?? null);
+          const parsedFreeDays = (s.freeDays === null || s.freeDays === '' || s.freeDays === undefined)
+            ? null
+            : Number.parseInt(String(s.freeDays), 10);
+          const freeDaysValue = parsedFreeDays != null && Number.isFinite(parsedFreeDays) ? parsedFreeDays : null;
           const result = updateStmt.run(
             s.status, sNorm.containerNumber, sNorm.blNumber, sNorm.blDate, sNorm.beNumber, sNorm.beDate,
             sNorm.shippingLine, (s.shipmentMode !== undefined ? (sNorm.shipmentMode || 'SEA') : (existing?.shipmentMode || 'SEA')), sNorm.portCode, sNorm.portOfLoading, sNorm.portOfDischarge,
+            s.freeDays !== undefined ? freeDaysValue : (existing?.freeDays ?? null),
+            s.dischargeDate !== undefined ? (sNorm.dischargeDate || null) : (existing?.dischargeDate || null),
+            s.containerReturned !== undefined ? (s.containerReturned ? 1 : 0) : (existing?.containerReturned ?? 0),
+            s.containerReturnDate !== undefined ? (sNorm.containerReturnDate || null) : (existing?.containerReturnDate || null),
             sNorm.assessedValue, sNorm.dutyBCD, sNorm.dutySWS, sNorm.dutyINT, (sNorm.dutyPenalty != null ? sNorm.dutyPenalty : null), (sNorm.dutyFine != null ? sNorm.dutyFine : null), sNorm.gst, sNorm.trackingUrl,
             documentsJson, historyJson, paymentsJson, null,
             sNorm.isUnderLicence ? 1 : 0, sNorm.linkedLicenceId || null, sNorm.epcgLicenceId || null, sNorm.advLicenceId || null, sNorm.licenceObligationAmount ?? null, sNorm.licenceObligationQuantity ?? null,

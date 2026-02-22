@@ -108,6 +108,10 @@ db.exec(`
     portCode TEXT,
     portOfLoading TEXT,
     portOfDischarge TEXT,
+    freeDays INTEGER,
+    dischargeDate TEXT,
+    containerReturned INTEGER,
+    containerReturnDate TEXT,
     assessedValue REAL,
     dutyBCD REAL,
     dutySWS REAL,
@@ -212,6 +216,10 @@ runMigration('ALTER TABLE shipments ADD COLUMN lineSealNumber TEXT', 'shipments.
 runMigration('ALTER TABLE shipments ADD COLUMN sbNo TEXT', 'shipments.sbNo');
 runMigration('ALTER TABLE shipments ADD COLUMN sbDate TEXT', 'shipments.sbDate');
 runMigration('ALTER TABLE shipments ADD COLUMN shipmentMode TEXT', 'shipments.shipmentMode');
+runMigration('ALTER TABLE shipments ADD COLUMN freeDays INTEGER', 'shipments.freeDays');
+runMigration('ALTER TABLE shipments ADD COLUMN dischargeDate TEXT', 'shipments.dischargeDate');
+runMigration('ALTER TABLE shipments ADD COLUMN containerReturned INTEGER', 'shipments.containerReturned');
+runMigration('ALTER TABLE shipments ADD COLUMN containerReturnDate TEXT', 'shipments.containerReturnDate');
 runMigration('ALTER TABLE licences ADD COLUMN importValidityDate TEXT', 'licences.importValidityDate');
 runMigration('ALTER TABLE licences ADD COLUMN machineryInstallationDate TEXT', 'licences.machineryInstallationDate');
 runMigration('CREATE INDEX IF NOT EXISTS idx_shipments_lc_reference ON shipments(lcReferenceNumber) WHERE lcReferenceNumber IS NOT NULL', 'idx_shipments_lc_reference');
@@ -456,6 +464,10 @@ function getShipmentValues(s, folderPath) {
     portCode: s.portCode || null,
     portOfLoading: s.portOfLoading || null,
     portOfDischarge: s.portOfDischarge || null,
+    freeDays: s.freeDays ?? null,
+    dischargeDate: s.dischargeDate || null,
+    containerReturned: s.containerReturned ? 1 : 0,
+    containerReturnDate: s.containerReturnDate || null,
     assessedValue: s.assessedValue ?? 0,
     dutyBCD: s.dutyBCD ?? 0,
     dutySWS: s.dutySWS ?? 0,
@@ -500,7 +512,7 @@ const SHIPMENT_INSERT_SQL = `
     status, expectedShipmentDate, createdAt, fobValueFC, fobValueINR, invoiceValueINR,
     isUnderLC, lcNumber, lcAmount, lcDate, linkedLcId, isUnderLicence, linkedLicenceId, epcgLicenceId, advLicenceId,
     licenceObligationAmount, licenceObligationQuantity, containerNumber, blNumber, blDate, beNumber, beDate, shippingLine, shipmentMode,
-    portCode, portOfLoading, portOfDischarge, assessedValue, dutyBCD, dutySWS, dutyINT, dutyPenalty, dutyFine, gst, trackingUrl,
+    portCode, portOfLoading, portOfDischarge, freeDays, dischargeDate, containerReturned, containerReturnDate, assessedValue, dutyBCD, dutySWS, dutyINT, dutyPenalty, dutyFine, gst, trackingUrl,
     incoTerm, paymentDueDate, paymentTerm, expectedArrivalDate, invoiceDate, freightCharges, otherCharges,
     documents_json, history_json, payments_json, items_json, documentsFolderPath, remarks, consigneeId, lcSettled,
     shipperSealNumber, lineSealNumber, sbNo, sbDate, dbk, rodtep, scripNo, licenceImportLines_json, licenceExportLines_json, licence_allocations_json
@@ -509,7 +521,7 @@ const SHIPMENT_INSERT_SQL = `
     :status, :expectedShipmentDate, :createdAt, :fobValueFC, :fobValueINR, :invoiceValueINR,
     :isUnderLC, :lcNumber, :lcAmount, :lcDate, :linkedLcId, :isUnderLicence, :linkedLicenceId, :epcgLicenceId, :advLicenceId,
     :licenceObligationAmount, :licenceObligationQuantity, :containerNumber, :blNumber, :blDate, :beNumber, :beDate, :shippingLine, :shipmentMode,
-    :portCode, :portOfLoading, :portOfDischarge, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :dutyPenalty, :dutyFine, :gst, :trackingUrl,
+    :portCode, :portOfLoading, :portOfDischarge, :freeDays, :dischargeDate, :containerReturned, :containerReturnDate, :assessedValue, :dutyBCD, :dutySWS, :dutyINT, :dutyPenalty, :dutyFine, :gst, :trackingUrl,
     :incoTerm, :paymentDueDate, :paymentTerm, :expectedArrivalDate, :invoiceDate, :freightCharges, :otherCharges,
     :documents_json, :history_json, :payments_json, :items_json, :documentsFolderPath, :remarks, :consigneeId, :lcSettled,
     :shipperSealNumber, :lineSealNumber, :sbNo, :sbDate, :dbk, :rodtep, :scripNo, :licenceImportLines_json, :licenceExportLines_json, :licence_allocations_json

@@ -403,6 +403,14 @@ export interface Shipment {
   shippingLine?: string;
   shipmentMode?: 'SEA' | 'AIR' | 'ROAD' | 'RAIL';
   trackingUrl?: string;
+  /** Import: date container was discharged at port (stored as YYYY-MM-DD). */
+  dischargeDate?: string;
+  /** Import: free days allowed before demurrage/detention applies. */
+  freeDays?: number;
+  /** Import: whether container has been returned (detention-safe). */
+  containerReturned?: boolean;
+  /** Import: date container returned (stored as YYYY-MM-DD). */
+  containerReturnDate?: string;
   /** Shipper or custom seal number (e.g. container seal) */
   shipperSealNumber?: string;
   /** Line seal number */
